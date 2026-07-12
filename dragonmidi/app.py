@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+import queue
+import sys
+import time
+
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+    QApplication,
+)
+
+from .config import ConfigController, EndpointConfig
+from .events import MidiEvent
+from .mapping import MappingEngine
+from .midi_input import MidiInputAdapter, MidoBackend
+from .osc_io import OscClient, OscListener
+from .queue_drain import drain_queue
+from .shutdown import run_shutdown_sequence
+from .signal_monitor import ChannelState, SignalMonitor
+from .status_presenter import compute_status_snapshot
+
+APP_TITLE = "DragonMIDI"
+DISCOVERY_POLL_MS = 2000
+UI_TICK_MS = 30
+
+_DOT_COLOR = {
+    ChannelState.LIVE: "#2ecc71",
+    ChannelState.ERROR: "#e67e22",
+    ChannelState.QUIET: "#7f8c8d",
+}
+
+
+class _IndicatorRow(QWidget):
+    """One status row: a colored dot (live/error/quiet) plus a label.
+
+    @spec UI-STATUS-001
+    """
+
+    def __init__(self, title: str) -> None:
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._dot = QLabel("●")
+        layout.addWidget(self._dot)
+        layout.addWidget(QLabel(title))
+        self._detail = QLabel("")
+        layout.addWidget(self._detail, 1)
+        self.set_state(ChannelState.QUIET, "")
+
+    def set_state(self, state: ChannelState, label: str) -> None:
+        self._dot.setStyleSheet(f"color: {_DOT_COLOR[state]}; font-size: 16px;")
+        self._detail.setText(label)
+
+
+class DragonMidiWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(APP_TITLE)
+
+        self._activity_queue: "queue.Queue[str]" = queue.Queue()
+        self._midi_queue: "queue.Queue[MidiEvent]" = queue.Queue()
+
+        self._mapping = MappingEngine()
+        self._monitor = SignalMonitor()
+        self._config = ConfigController(EndpointConfig(), on_apply=self._on_config_applied)
+
+        self._osc_client = OscClient(host=self._config.applied.host, port=self._config.applied.dragonframe_port)
+        self._osc_listener = OscListener(
+            port=self._config.applied.listen_port,
+            on_activity=lambda: self._activity_queue.put("dragonframe"),
+            on_bind_result=lambda ok: self._monitor.set_error("dragonframe", not ok),
+        )
+
+        self._midi_connected = False
+        self._midi_device_name: str | None = None
+        self._midi = MidiInputAdapter(
+            backend=MidoBackend(),
+            on_activity=lambda: self._activity_queue.put("midi"),
+            on_event=self._midi_queue.put,
+            on_connection_change=self._on_midi_connection_change,
+            on_error=lambda active: self._monitor.set_error("midi", active),
+            on_reset_mapping=self._mapping.reset,
+        )
+
+        self._build_ui()
+
+        self._osc_listener.start()
+
+        self._discovery_timer = QTimer(self)
+        self._discovery_timer.timeout.connect(self._midi.poll_discovery)
+        self._discovery_timer.start(DISCOVERY_POLL_MS)
+
+        self._ui_timer = QTimer(self)
+        self._ui_timer.timeout.connect(self._on_tick)
+        self._ui_timer.start(UI_TICK_MS)
+
+    def _build_ui(self) -> None:
+        central = QWidget()
+        layout = QVBoxLayout(central)
+
+        self._midi_row = _IndicatorRow("MIDI signal")
+        self._dragonframe_row = _IndicatorRow("Dragonframe signal")
+        layout.addWidget(self._midi_row)
+        layout.addWidget(self._dragonframe_row)
+
+        form = QGridLayout()
+        form.addWidget(QLabel("Sending to"), 0, 0)
+        self._host_edit = QLineEdit(self._config.applied.host)
+        self._df_port_edit = QLineEdit(str(self._config.applied.dragonframe_port))
+        form.addWidget(self._host_edit, 0, 1)
+        form.addWidget(self._df_port_edit, 0, 2)
+        form.addWidget(QLabel("Listen port"), 1, 0)
+        self._listen_port_edit = QLineEdit(str(self._config.applied.listen_port))
+        form.addWidget(self._listen_port_edit, 1, 1)
+        apply_button = QPushButton("Apply")
+        apply_button.clicked.connect(self._on_apply_clicked)
+        form.addWidget(apply_button, 1, 2)
+        layout.addLayout(form)
+
+        self.setCentralWidget(central)
+
+    def _on_midi_connection_change(self, connected: bool, device_name: str | None) -> None:
+        self._midi_connected = connected
+        self._midi_device_name = device_name
+
+    def _on_apply_clicked(self) -> None:
+        try:
+            self._config.edit(
+                host=self._host_edit.text().strip(),
+                dragonframe_port=int(self._df_port_edit.text()),
+                listen_port=int(self._listen_port_edit.text()),
+            )
+            self._config.apply()
+        except ValueError:
+            pass  # invalid input (bad int, or equal ports): edits stay pending, nothing applied
+
+    def _on_config_applied(self, config: EndpointConfig, listen_port_changed: bool) -> None:
+        self._osc_client.configure(config.host, config.dragonframe_port)
+        if listen_port_changed:
+            self._osc_listener.rebind(config.listen_port)
+
+    def _on_tick(self) -> None:
+        drain_queue(self._activity_queue, self._monitor.mark_activity)
+        drain_queue(self._midi_queue, self._process_midi_event)
+
+        snapshot = compute_status_snapshot(
+            self._monitor,
+            midi_connected=self._midi_connected,
+            midi_device_name=self._midi_device_name,
+            listen_port=self._config.applied.listen_port,
+        )
+        self._midi_row.set_state(snapshot.midi.state, snapshot.midi.label)
+        self._dragonframe_row.set_state(snapshot.dragonframe.state, snapshot.dragonframe.label)
+
+    def _process_midi_event(self, event: MidiEvent) -> None:
+        message = self._mapping.process(event, now=time.monotonic())
+        if message is not None:
+            self._osc_client.send(message.address, *message.args)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override signature
+        run_shutdown_sequence(
+            [
+                self._midi.disconnect,
+                self._osc_listener.stop,
+                self._osc_client.close,
+            ]
+        )
+        super().closeEvent(event)
+
+
+def run() -> None:
+    app = QApplication(sys.argv)
+    window = DragonMidiWindow()
+    window.show()
+    sys.exit(app.exec())

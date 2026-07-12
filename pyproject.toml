@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dragonmidi"
+version = "0.1.0"
+description = "MIDI-to-OSC bridge from a KORG nanoKONTROL Studio to Dragonframe"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "mido==1.3.3",
+  "python-rtmidi==1.5.8",
+  "PySide6==6.7.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.2",
+  "hypothesis==6.111.1",
+]
+
+[project.scripts]
+dragonmidi = "dragonmidi.app:run"
+
+[tool.setuptools]
+packages = ["dragonmidi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
