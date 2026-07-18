@@ -56,8 +56,8 @@ These three values are machine-specific network configuration, not part of the o
 ## Open Questions & Future Decisions
 
 ### Resolved
-1. ✅ Send-path exceptions, listener bind failure surfacing, port-collision validation, datagram size validation, and pre-bind datagram loss are all resolved above (decided together with the user during the Phase 2 LLD edge-case review).
-2. ✅ Error-flag clearing lifecycle and listener rebind-on-Apply are resolved above (decided together with the user during the Phase 4 cross-spec edge audit).
+1. Send-path exceptions, listener bind failure surfacing, port-collision validation, datagram size validation, and pre-bind datagram loss — see Decisions & Alternatives above.
+2. Error-flag clearing lifecycle and listener rebind-on-Apply — see Decisions & Alternatives above.
 
 ### Deferred
 1. Should the Listener verify the sender's source address matches the configured Dragonframe host, to avoid a false-positive "Dragonframe signal" from some unrelated traffic hitting the same port? Cheap to add; currently deferred as unnecessary complexity until it causes a real false positive.

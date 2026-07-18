@@ -60,14 +60,14 @@ The `korg_scene` type is recognized from the specific 13-byte Native Mode Scene-
 | Liveness vs. parse success | Liveness timestamp updates on any raw MIDI message, before normalization | Only update on successfully normalized/mapped events | Liveness should mean "device is talking," independent of whether the message parses |
 | Reconnect state hygiene | Clear the mapping engine's previous-value map on every fresh connect | Leave state untouched across reconnects | Prevents stale pre-disconnect state from causing spurious or missed edges after reconnect |
 | Error-flag lifecycle | Clear the MIDI error flag at the start of every fresh connect attempt, before the handshake runs | Clear only on explicit user action; leave set until app restart | A stale error flag from a prior connection shouldn't outlive that connection; each attempt should be judged on its own outcome |
-| Connection status vs. liveness/error | Exposed as a separate piece of state (device open + name) from the Signal Monitor's live/error/quiet | Fold connection status into the same 3-state model | The two questions ("is a controller present" vs. "is it healthy right now") are genuinely independent and can disagree (connected device, failed handshake) |
+| Connection status vs. liveness/error | Exposed as a separate piece of state (device open + name) from the Signal Monitor's live/error/quiet | Fold connection status into the same 3-state model | "Is a controller present" and "is it healthy right now" are independent questions and can disagree (connected device, failed handshake) |
 
 ## Open Questions & Future Decisions
 
 ### Resolved
-1. ✅ Duplicate matching ports, mid-handshake output-port loss, exit-SysEx partial failure, connect/disconnect concurrency, liveness-vs-parse-success, pitchbend/aftertouch/program normalization scope, and reconnect state hygiene are all resolved above (decided together with the user during the Phase 2 LLD edge-case review).
-2. ✅ Failed Native Mode handshake surfaces as a distinct *error* state on the Status UI's MIDI indicator (3-state: live / quiet / error), resolved jointly with `osc-io.md`'s listener-bind-failure question — see `app-ui.md`.
-3. ✅ Error-flag clearing lifecycle (cleared at the start of each connect attempt) and connection-status/device-name being an independent axis from the liveness/error dot are resolved above (decided together with the user during the Phase 4 cross-spec edge audit).
+1. Duplicate matching ports, mid-handshake output-port loss, exit-SysEx partial failure, connect/disconnect concurrency, liveness-vs-parse-success, pitchbend/aftertouch/program normalization scope, and reconnect state hygiene — see Decisions & Alternatives above.
+2. Failed Native Mode handshake surfaces as a distinct *error* state on the Status UI's MIDI indicator (3-state: live / quiet / error), jointly with `osc-io.md`'s listener-bind-failure state — see `app-ui.md`.
+3. Error-flag clearing lifecycle (cleared at the start of each connect attempt) and connection-status/device-name being an independent axis from the liveness/error dot — see Decisions & Alternatives above.
 
 ### Deferred
 1. Exact poll interval for device discovery (proposed 2s) is a tunable constant, not yet load-bearing on any spec.

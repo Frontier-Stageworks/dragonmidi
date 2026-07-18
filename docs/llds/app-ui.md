@@ -4,7 +4,7 @@
 
 This is the glue-and-presentation layer: it starts the MIDI Input Adapter and OSC Transport, bridges their background-thread activity into Qt's main thread, tracks recency-based liveness for both channels, and renders the two-indicator status window described in the HLD. It deliberately owns nothing about MIDI/OSC protocol details or mapping semantics — those are `midi-input.md`, `osc-io.md`, and `static-mapping.md`'s territory.
 
-**Module split (decided during Phase 5 test design):** to keep this layer testable without a running Qt application, its logic is split into plain-Python modules with no Qt dependency, plus a thin Qt shell that wires them to real widgets/timers:
+**Module split:** to keep this layer testable without a running Qt application, its logic is split into plain-Python modules with no Qt dependency, plus a thin Qt shell that wires them to real widgets/timers:
 
 - `dragonmidi/signal_monitor.py` — the Signal Monitor (below).
 - `dragonmidi/status_presenter.py` — pure functions computing each indicator's display state (dot + label) from Signal Monitor reads and connection status; this is where the "single read per tick" and "dot/label independence" invariants live as testable code, not just prose.
@@ -70,15 +70,15 @@ This is the glue-and-presentation layer: it starts the MIDI Input Adapter and OS
 | Shutdown robustness | Per-step try/except + overall timeout | Single try/except around the whole sequence | One hanging/failing step (e.g. bad port during Native Mode release) must not block the rest of cleanup or hang app quit indefinitely |
 | Live host/port edits | Explicit Apply action, no live-as-you-type rebind | Rebind immediately on every keystroke/change | Matches the prototype's existing pattern; avoids rebinding on invalid or partial text |
 | Dot/label consistency | One Signal Monitor read per tick feeds both | Independent reads for dot and label | Guarantees by construction that the two can never show different ticks' state |
-| Dot state vs. connection-status label | Two independent axes; may disagree (e.g. connected device name + error dot) | Fold connection status into the 3-state model as a 4th state | The two questions ("is a controller present" vs. "is it healthy") are genuinely independent; collapsing them would lose information the user needs (device present but broken vs. no device at all) |
+| Dot state vs. connection-status label | Two independent axes; may disagree (e.g. connected device name + error dot) | Fold connection status into the 3-state model as a 4th state | "Is a controller present" and "is it healthy" are independent questions; collapsing them loses the distinction between device-present-but-broken and no-device-at-all |
 | Listen-port Apply behavior | Triggers listener socket close+rebind (`osc-io.md`) | Require app restart for listen-port changes | Apply already exists as the change mechanism; a field that visibly does nothing on Apply would be a worse experience than a working rebind |
 
 ## Open Questions & Future Decisions
 
 ### Resolved
-1. ✅ Indicator state model (3-state), `last_activity` initialization, clock source, liveness boundary, queue drain strategy, shutdown robustness, live host/port edit behavior, and dot/label consistency are all resolved above (decided together with the user during the Phase 2 LLD edge-case review).
-2. ✅ Native Mode handshake failure (from `midi-input.md`) and listener bind failure (from `osc-io.md`) both surface via the shared 3-state indicator's *error* state, resolved together as one design rather than two separate bolt-ons.
-3. ✅ Connection-status label vs. indicator dot being independent axes (and validly disagreeing), and Apply-triggered listener rebind on listen-port change, are resolved above (decided together with the user during the Phase 4 cross-spec edge audit).
+1. Indicator state model (3-state), `last_activity` initialization, clock source, liveness boundary, queue drain strategy, shutdown robustness, live host/port edit behavior, and dot/label consistency — see Decisions & Alternatives above.
+2. Native Mode handshake failure (`midi-input.md`) and listener bind failure (`osc-io.md`) both surface via the shared 3-state indicator's *error* state, as one design rather than two separate mechanisms.
+3. Connection-status label and indicator dot are independent axes that may validly disagree; Apply-triggered listener rebind on listen-port change — see Decisions & Alternatives above.
 
 ### Deferred
 1. Should the Dragonframe host, Dragonframe port, and local listen port persist across app launches (like the prototype's JSON state file), or always reset to their defaults? A minimal persisted-settings file is small in scope but is the first piece of "state the app remembers," which is adjacent to the deferred configuration phase.
