@@ -1,5 +1,7 @@
 # Dragonframe Gamepad Integration — Research Notes
 
+**Status: explored, not pursued.** This research led to a Virtual Gamepad Adapter design (macOS via `IOHIDUserDeviceCreate`) that was empirically found to require the same Apple DriverKit entitlement approval as the newer `HIDVirtualDevice` API — confirmed by directly testing both the current and legacy API entry points against a real macOS instance, both returning `NULL`. Given that approval-bottleneck and no viable maintained fallback (`foohid` is archived and self-described as unsafe), the project instead extends the existing OSC path with direct axis-name addressing (`gotoPosition`/`stepPosition`, discovered via `getAllPosition`) — see `docs/high-level-design.md § Delivery Phasing`. This document is retained as a record of what was investigated and why it wasn't pursued, not as an active plan.
+
 ## Question
 
 Can Dragonframe's motion-control axes be jogged (continuous, real-time position control) over OSC? If not, what does Dragonframe actually support for real-time jogging, and can DragonMIDI hook into it?

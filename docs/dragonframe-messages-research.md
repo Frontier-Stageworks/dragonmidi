@@ -20,7 +20,7 @@ Dragonframe's OSC input surface is made of **two separate mechanisms**, plus a s
 
 ### 1. Fixed named commands ("Messages" list, OSC Preferences screen)
 
-Confirmed directly from the OSC Preferences screenshot (Preferences → Open Sound Control, item B: "OSC messages that Dragonframe will respond to"). The visible list shows exactly:
+The manual's OSC Preferences screenshot (Preferences → Open Sound Control, item B: "OSC messages that Dragonframe will respond to") was cropped at 7 visible entries, flagged at the time as possibly incomplete since the list widget is scrollable. **Confirmed incomplete** — the full list, copied directly from a running Dragonframe instance's own Messages list, is:
 
 ```
 Shoot: /dragonframe/shoot [framecount]
@@ -30,11 +30,20 @@ Play: /dragonframe/play
 Live: /dragonframe/live
 Mute: /dragonframe/mute
 Black: /dragonframe/black
+Loop: /dragonframe/loop
+Short Play: /dragonframe/shortPlay
+Live Toggle: /dragonframe/liveToggle [bool]
+Auto Toggle: /dragonframe/autoToggle
+Opacity Down: /dragonframe/opacityDown
+Opacity Up: /dragonframe/opacityUp
+Step Forward: /dragonframe/stepForward
+Step Backward: /dragonframe/stepBackward
+Save: /dragonframe/save
 ```
 
-**Caveat:** the "Messages" box in the screenshot is a scrollable list widget, and the screenshot is cropped right at the "Black:" line. It is not 100% certain there isn't an 8th+ command scrolled below the visible area. This should be checked directly in a running copy of Dragonframe (Preferences → Open Sound Control) for full certainty.
+This is the authoritative source (a live Dragonframe instance) and supersedes the manual-derived partial list.
 
-### 2. Encoder / axis addressing (documented in prose, "Using an OSC Encoder" section)
+### 2. Encoder / axis addressing (documented in prose, "Using an OSC Encoder" section, and confirmed against the live Messages list)
 
 A separate mechanism, configured per-axis in the Arc Motion Control workspace, not shown in the "Messages" list above:
 
@@ -46,13 +55,19 @@ Response: /dragonframe/encoder/{channel},f (value)
 Message:  /dragonframe/encoderReset/{channel}           -- reset the stored value for a channel
 
 Message:  /dragonframe/axis/{axisname}/gotoPosition,f (position)   -- move axis to absolute position
-Message:  /dragonframe/axis/{axisname}/stepPosition,f (position)   -- move axis by relative amount
+Message:  /dragonframe/axis/{axisname}/stepPosition,f (delta)      -- move axis by relative amount
 Message:  /dragonframe/axis/{axisname}/getPosition                 -- get current position
 Response: /dragonframe/axis/{axisname}/getPosition,f (position)
 
 Message:  /dragonframe/axis/getAllPosition                          -- get all axis positions
-Response: /dragonframe/axis/{axisname},f (position)   -- one response message per axis
+Response: /dragonframe/axis/{axisname},f (position)   -- one response message per axis, name embedded in the address
+
+Message:  /dragonframe/axis/{axisname}/setLimits [minEnabled] [min] [maxEnabled] [max]   -- set the axis's soft limits
+Message:  /dragonframe/axis/{axisname}/setZero     -- set the axis's zero position
+Message:  /dragonframe/axis/{axisname}/setHome      -- set the axis's home position
 ```
+
+Note: there is no documented `getLimits` — an axis's configured min/max range cannot be discovered over OSC, only set (`setLimits`) or implicitly observed via streamed position values. This matters for anything that needs to scale an external control's 0-1 range into the axis's real range: that scaling has to be configured on the client side (DragonMIDI), not discovered from Dragonframe.
 
 ### 3. OSC output (separate from input entirely)
 
@@ -65,20 +80,21 @@ Response: /dragonframe/axis/{axisname},f (position)   -- one response message pe
   ```
   /composition/selectedclip/transport/position "a" [frameTimeMillis]
   ```
-  Available variables: `[frame]` (frame number, int), `[frameTime]` (frame time in double), `[frameTimeMillis]` (frame time in milliseconds, int), `[exposure]` (exposure number, starting at 1, int), `[exposureName]` (exposure name, e.g. "X1", "X2"), `[production]` (production name), `[scene]` (scene name).
+  Available variables: `[frame]` (frame number, int), `[frameTime]` (frame time, double), `[frameTimeMillis]` (frame time in milliseconds, int), `[exposure]` (exposure number, starting at 1, int), `[exposureName]` (exposure name, e.g. "X1", "X2"), `[production]` (production name), `[scene]` (scene name), `[take]` (take name), `[stereoIndex]` (stereo position), `[imageFileName]` (file name, present with shoot/delete events).
 
 ## What DragonMIDI's opinionated map actually uses
 
 From `docs/llds/static-mapping.md`:
 
-- All 7 fixed named commands (mechanism 1): shoot, shootVideoAssist, delete, play, live, mute, black.
+- 7 of the 16 fixed named commands (mechanism 1): shoot, shootVideoAssist, delete, play, live, mute, black. Not yet used: loop, shortPlay, liveToggle, autoToggle, opacityDown, opacityUp, stepForward, stepBackward, save.
 - The encoder/encoderReset half of mechanism 2: faders/knobs → `/dragonframe/encoder/{1-16}`, Mute/Solo → `/dragonframe/encoderReset/{1-16}`, jog wheel → `/dragonframe/encoder/17` (relative).
 
 ## What's not covered
 
-1. **Direct axis-name addressing** (`gotoPosition` / `stepPosition` / `getPosition` / `getAllPosition`) — not used anywhere in the opinionated map. Faders/knobs route through numbered encoder channels instead, which the user assigns to axes inside Dragonframe's Arc workspace. (The old `DragonMIDI-vibed` prototype supported these as a generic action type in its mapping editor, but its own shipped default preset didn't use them either.)
-2. **Arbitrary custom OSC paths** — the old prototype's mapping editor had a "custom path" escape hatch reaching any OSC address; DragonMIDI has no mapping editor in this phase, so there is no way to reach any address outside the fixed table.
-3. **OSC output configuration** (mechanism 3) is Dragonframe-side only — DragonMIDI's OSC Listener (`docs/llds/osc-io.md`) only uses the *presence* of any output traffic as a liveness signal; it does not configure, request, or interpret Dragonframe's output event templates or motor-position stream.
+1. **Direct axis-name addressing** (`gotoPosition` / `stepPosition` / `getPosition` / `getAllPosition` / `setLimits` / `setZero` / `setHome`) — not used anywhere in the current opinionated map. Faders/knobs route through numbered encoder channels instead, which the user assigns to axes inside Dragonframe's Arc workspace. (The old `DragonMIDI-vibed` prototype supported `gotoPosition`/`stepPosition` as a generic action type in its mapping editor, but its own shipped default preset didn't use them either.) **This is the mechanism the mapping-editor work now being built targets directly** — see `docs/high-level-design.md § Delivery Phasing`.
+2. **9 of the 16 fixed named commands** (loop, shortPlay, liveToggle, autoToggle, opacityDown, opacityUp, stepForward, stepBackward, save) — real, available commands not yet wired to any control.
+3. **Arbitrary custom OSC paths** — the old prototype's mapping editor had a "custom path" escape hatch reaching any OSC address; not yet restored.
+4. **OSC output configuration** (mechanism 3) is Dragonframe-side only — DragonMIDI's OSC Listener (`docs/llds/osc-io.md`) currently only uses the *presence* of any output traffic as a liveness signal. Parsing the `getAllPosition` response specifically (to discover axis names) is now a requirement, not just a non-goal — see the HLD.
 
 ## Per-project setup: does an encoder channel need configuring in Dragonframe?
 
@@ -108,7 +124,7 @@ Per the manual, this exports "the configuration information (**limits, channel**
 
 ## Conclusion
 
-DragonMIDI's opinionated map is a complete implementation of Dragonframe's fixed named-command list (mechanism 1) and a partial, encoder-only implementation of the encoder/axis mechanism (mechanism 2). It is **not** the complete set of OSC actions Dragonframe supports — direct axis addressing and arbitrary custom paths are both real Dragonframe capabilities left out by this phase's "opinionated, no editor" scope, not by oversight.
+DragonMIDI's opinionated map covers 7 of 16 fixed named commands and only the encoder half of the encoder/axis mechanism. It is **not** the complete set of OSC actions Dragonframe supports. Direct axis-name addressing (`gotoPosition`/`stepPosition`) — previously left out by the "opinionated, no editor" scope — is now the mechanism the mapping-editor work targets directly, since it addresses an axis by name without requiring the user to separately configure an OSC encoder channel inside Dragonframe.
 
 ## References
 
