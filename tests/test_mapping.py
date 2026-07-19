@@ -1,6 +1,6 @@
 """Tests for the Static Mapping Engine (docs/specs/static-mapping.md).
 
-@spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-004, MAP-TABLE-005
+@spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-005
 @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
 @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
 @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
@@ -12,14 +12,13 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.events import MidiEvent
-from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, MappingEngine, decode_sign_magnitude
+from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, MappingEngine
 
 FADER_CCS = list(range(0, 8))  # CC 0-7 -> encoder 1-8
 KNOB_CCS = list(range(16, 24))  # CC 16-23 -> encoder 9-16
 MUTE_CCS = list(range(48, 56))  # CC 48-55 -> encoderReset 1-8
 SOLO_CCS = list(range(32, 40))  # CC 32-39 -> encoderReset 9-16
 BUTTON_CCS_TO_ADDRESS = {
-    47: "/dragonframe/encoderReset/17",  # Return to Zero
     45: "/dragonframe/shoot",  # Transport Record
     41: "/dragonframe/play",
     42: "/dragonframe/live",  # Stop
@@ -31,8 +30,7 @@ BUTTON_CCS_TO_ADDRESS = {
     58: "/dragonframe/stepBackward",  # Previous Track
     59: "/dragonframe/stepForward",  # Next Track
 }
-JOG_CC = 110
-UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 60]  # Record/Select/Set Marker
+UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 60, 47, 110]  # Record/Select/Set Marker/Return to Zero/Jog wheel
 
 
 def cc_event(number: int, value: int, channel: int = CHANNEL) -> MidiEvent:
@@ -185,50 +183,6 @@ def test_button_holding_at_max_only_fires_once_not_on_every_message(cc: int) -> 
     second = engine.process(cc_event(cc, 127), now=1.0)  # same value repeated, well past debounce
     assert first is not None
     assert second is None  # no new transition occurred; previous was already >= threshold
-
-
-# --- MAP-TABLE-004: jog wheel sign-magnitude decode (full-domain property) ---
-
-@given(raw=st.integers(min_value=1, max_value=63))
-# @spec MAP-TABLE-004
-def test_decode_sign_magnitude_positive_branch_is_the_identity(raw: int) -> None:
-    # The KORG protocol fact this pins down: 1-63 *is* the positive magnitude,
-    # not some other scale - combined with the symmetry test below (negative branch
-    # is the negation of this) and the bounded/zero test, these three independently
-    # cover the whole function without any one of them re-deriving its full formula.
-    assert decode_sign_magnitude(raw) == raw
-
-
-@given(raw=st.integers(min_value=0, max_value=127))
-# @spec MAP-TABLE-004
-def test_decode_sign_magnitude_is_bounded_and_zero_only_at_rest_values(raw: int) -> None:
-    delta = decode_sign_magnitude(raw)
-    assert -63 <= delta <= 63
-    assert (delta == 0) == (raw in (0, 64))
-
-
-@given(raw=st.integers(min_value=65, max_value=127))
-# @spec MAP-TABLE-004
-def test_decode_sign_magnitude_symmetry(raw: int) -> None:
-    # 65..127 mirrors 1..63 in magnitude, opposite sign - a real cross-check, not
-    # a re-statement of the formula, since it relates two disjoint input ranges.
-    mirrored = raw - 64
-    assert decode_sign_magnitude(raw) == -decode_sign_magnitude(mirrored)
-
-
-@given(raw=st.integers(min_value=0, max_value=127))
-# @spec MAP-TABLE-004
-def test_jog_wheel_event_produces_matching_encoder17_delta(raw: int) -> None:
-    engine = MappingEngine()
-    event = cc_event(JOG_CC, raw)
-    result = engine.process(event, now=0.0)
-    delta = decode_sign_magnitude(raw)
-    if delta == 0:
-        assert result is None
-    else:
-        assert result is not None
-        assert result.address == "/dragonframe/encoder/17"
-        assert result.args == (float(delta),)
 
 
 # --- MAP-TABLE-005 / MAP-STATE-001: unmapped controls produce nothing and hold no state ---
@@ -427,7 +381,7 @@ def test_set_axis_target_succeeds_for_fader_keys(number: int) -> None:
     engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)  # must not raise
 
 
-@given(number=st.sampled_from(KNOB_CCS + MUTE_CCS + SOLO_CCS + list(BUTTON_CCS_TO_ADDRESS) + [JOG_CC]))
+@given(number=st.sampled_from(KNOB_CCS + MUTE_CCS + SOLO_CCS + list(BUTTON_CCS_TO_ADDRESS)))
 # @spec MAP-AXIS-004
 def test_set_axis_target_rejects_non_fader_keys(number: int) -> None:
     engine = MappingEngine()

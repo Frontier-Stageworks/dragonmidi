@@ -6,7 +6,7 @@ This component is the one place MIDI meaning becomes Dragonframe meaning. Each m
 
 Unlike the original static-table design, entries are now editable (add/edit/remove, enable/disable, MIDI-learn) and persisted through a Preset Store, per `docs/high-level-design.md`. The table ships pre-loaded with the nanoKONTROL Studio's opinionated default map (mirroring `DragonMIDI-vibed/mappings.md`), so a user who never opens the mapping view sees identical behavior to a fixed table.
 
-**Phase scope** (per `docs/high-level-design.md § Delivery Phasing`): this LLD describes the target design. **App Delivery Phase 1** implements the "OSC axis (direct)" target type, as the **default** for the 8 faders, plus **bank derivation** — knobs and the Mute/Solo buttons automatically follow their bank's fader assignment rather than being independently configurable (see Bank Derivation below). Transport/marker/track buttons, Record/Select, and the jog wheel are unaffected and keep their existing targets. The general editor (MIDI-learn, add/remove, presets, independently retargeting a knob/button/jog wheel) is **App Delivery Phase 2**.
+**Phase scope** (per `docs/high-level-design.md § Delivery Phasing`): this LLD describes the target design. **App Delivery Phase 1** implements the "OSC axis (direct)" target type, as the **default** for the 8 faders, plus **bank derivation** — knobs and the Mute/Solo buttons automatically follow their bank's fader assignment rather than being independently configurable (see Bank Derivation below). Transport/marker/track buttons and Record/Select are unaffected and keep their existing targets. The jog wheel and Return to Zero are unmapped (see the Opinionated Default Map below) — the jog wheel is not a motion-control input in this project. The general editor (MIDI-learn, add/remove, presets, independently retargeting a knob/button) is **App Delivery Phase 2**.
 
 ## The Opinionated Default Map
 
@@ -18,8 +18,6 @@ All controls are on MIDI channel 16 (zero-indexed 15), matching the nanoKONTROL 
 | Knobs 1–8 | CC 16–23 | Continuous absolute | Bank-derived — see Bank Derivation below. `/dragonframe/encoder/9`–`16` when that bank has no axis assigned. |
 | Mute 1–8 | CC 48–55 | Press edge | Bank-derived — see Bank Derivation below. `/dragonframe/encoderReset/1`–`8` when that bank has no axis assigned. |
 | Solo 1–8 | CC 32–39 | Press edge | Bank-derived — see Bank Derivation below. `/dragonframe/encoderReset/9`–`16` when that bank has no axis assigned. |
-| Jog wheel | CC 110, sign-magnitude relative | Relative delta | `/dragonframe/encoder/17`, signed float delta |
-| Return to Zero | CC 47 | Press edge | `/dragonframe/encoderReset/17` |
 | Transport Record | CC 45 | Press edge | `/dragonframe/shoot`, int `1` |
 | Play | CC 41 | Press edge | `/dragonframe/play` |
 | Stop | CC 42 | Press edge | `/dragonframe/live` |
@@ -31,7 +29,7 @@ All controls are on MIDI channel 16 (zero-indexed 15), matching the nanoKONTROL 
 | Previous Track | CC 58 | Press edge | `/dragonframe/stepBackward` |
 | Next Track | CC 59 | Press edge | `/dragonframe/stepForward` |
 | Scene button | Native Mode SysEx (`korg_scene`) | Press edge | `/dragonframe/black` |
-| Record 1–8, Select 1–8, Set Marker | various CCs | — | Not mapped by default; silently produce no OSC |
+| Record 1–8, Select 1–8, Set Marker, Return to Zero, Jog wheel | various CCs | — | Not mapped by default; silently produce no OSC |
 
 ## Target Types
 
@@ -55,7 +53,7 @@ The 8 channel strips are grouped into **banks**. Bank N = Fader N, Knob N, Mute 
 
 - **Only Fader N's target is directly configurable** — the OSC axis (direct) picker described above and in `docs/llds/app-ui.md`. Knob N, Mute N, and Solo N have no independent target selection; their effective target is derived from Fader N's current state, recomputed on every event they produce, not fixed at the moment Fader N's axis was chosen.
 - **Fader N has a real axis name assigned:**
-  - Knob N sends `/dragonframe/axis/{axisname}/stepPosition,f (delta)` on every distinct value, where `delta = raw_value - 64` (signed, over the MIDI CC 0–127 range; `64` is treated as the knob's center/"12 o'clock" position). No debounce, no user-configurable scale — the raw signed offset is sent directly, the same "no separate scale" precedent already set by the jog wheel's relative delta.
+  - Knob N sends `/dragonframe/axis/{axisname}/stepPosition,f (delta)` on every distinct value, where `delta = raw_value - 64` (signed, over the MIDI CC 0–127 range; `64` is treated as the knob's center/"12 o'clock" position). No debounce, no user-configurable scale — the raw signed offset is sent directly.
   - Mute N sends `/dragonframe/axis/{axisname}/setZero` on press.
   - Solo N sends `/dragonframe/axis/{axisname}/setHome` on press.
 - **Fader N has no axis assigned** (default state, or explicitly switched to OSC encoder): Knob N, Mute N, and Solo N fall back to their table-listed static defaults (`/dragonframe/encoder/{9-16}`, `/dragonframe/encoderReset/{1-8}`, `/dragonframe/encoderReset/{9-16}`) — unchanged from today's behavior.
@@ -79,18 +77,16 @@ The 8 channel strips are grouped into **banks**. Bank N = Fader N, Knob N, Mute 
 
 - **Continuous absolute** (faders, knobs): every distinct MIDI value produces an OSC send, whether the target is an OSC encoder channel, a fader's direct-axis `gotoPosition`, or a knob's bank-derived `stepPosition`. No debounce — Dragonframe needs frequent updates to drive smooth axis motion.
 - **Press edge** (buttons, resets, transport, Scene): fires once when the source transitions into "pressed" (velocity/value crossing above 0, or note-on) — reused edge-detection logic from the prototype's `_evaluate`. Debounced at 80ms to absorb switch bounce, matching the prototype's default.
-- **Relative delta** (jog wheel): decodes KORG sign-magnitude relative values into a signed delta, scaled by a fixed constant, and forwarded as `/dragonframe/encoder/17` — reused decode logic from the prototype's `relative_sign_magnitude` handling. (Extending this trigger to also support a direct-axis `stepPosition` target is App Delivery Phase 2, not Phase 1.)
 
 ## State
 
 The engine keeps a small per-control "previous normalized value" map, needed for both press-edge detection and continuous-value dedup (skip a resend of the identical value, regardless of whether the target is an OSC encoder channel or a direct axis). This is the only state it holds; it does not know about MIDI connection status or OSC delivery success.
 
-- **Match invariant (CC-sourced controls only):** for every table entry whose MIDI source is a CC message (faders, knobs, Mute, Solo, transport, Return to Zero, jog wheel), channel is part of the match condition exactly like the CC number — a message on any channel other than 16 fails to match and is dropped through the same "no match" path as any other non-matching event. **This invariant explicitly excludes the Scene button.** The Scene button's event carries a `channel` field decoded from its Native Mode SysEx payload (the controller's own configured global-channel ID, set during the Native Mode handshake — see `midi-input.md`), which is unrelated to "MIDI channel 16" and may legitimately be any value 0–15. The Scene button entry matches on event `type == "korg_scene"` alone, with no channel check — applying the channel-16 filter to it would silently break the Scene→Black mapping on any controller not configured to global channel 16.
+- **Match invariant (CC-sourced controls only):** for every table entry whose MIDI source is a CC message (faders, knobs, Mute, Solo, transport), channel is part of the match condition exactly like the CC number — a message on any channel other than 16 fails to match and is dropped through the same "no match" path as any other non-matching event. **This invariant explicitly excludes the Scene button.** The Scene button's event carries a `channel` field decoded from its Native Mode SysEx payload (the controller's own configured global-channel ID, set during the Native Mode handshake — see `midi-input.md`), which is unrelated to "MIDI channel 16" and may legitimately be any value 0–15. The Scene button entry matches on event `type == "korg_scene"` alone, with no channel check — applying the channel-16 filter to it would silently break the Scene→Black mapping on any controller not configured to global channel 16.
 - **State scope:** the previous-value map only has entries for controls that appear in the table. Unmapped/disabled controls never reach stateful evaluation at all, so no state is ever allocated for them.
 - **Initial state:** every mapped control starts as "not pressed" / below threshold. A physical control already held down at app launch will not fire its first press-edge until it is released and pressed again — an accepted limitation, not specially handled.
 - **Debounce semantics:** a second press-edge arriving inside the 80ms debounce window is dropped, not queued or deferred, matching the prototype's `last_sent`-gate behavior.
 - **Reconnect hygiene:** the entire previous-value map is cleared whenever the MIDI Input Adapter completes a fresh connect (see `midi-input.md`), so no state survives a disconnect/reconnect cycle.
-- **Jog wheel decode totality:** the sign-magnitude decode (`0`/`64` → delta 0, `1–63` → positive, `65–127` → negative via `raw − 64`) is already total over the full 0–127 input range — there is no invalid byte value to handle as a special case.
 
 ## Decisions & Alternatives
 
@@ -116,26 +112,26 @@ The engine keeps a small per-control "previous normalized value" map, needed for
 | Fader default target | OSC axis (direct), no name selected | OSC encoder (the original default) | Axis addressing is the primary interaction model for this project; OSC encoder remains available as a manual fallback, not the default |
 | Fader-in-axis-mode, no name chosen | Send nothing | Fall back to the opinionated encoder target until configured | An axis name has no meaningful placeholder default; falling back would silently substitute a different target type than what's displayed |
 | Bank derivation ownership | Engine-level: only the fader is configurable, Knob/Mute/Solo derive automatically | Give Knob/Mute/Solo their own independent target pickers | Matches "select the bank once" — configuring one control per bank instead of four |
-| Knob's derived `stepPosition` scale | Raw signed MIDI delta (`raw_value - 64`), no configurable sensitivity | User-specified scale, like the fader's min/max | Matches the jog wheel's existing unscaled-relative-delta precedent; avoids adding a config field before real usage shows it's needed |
+| Knob's derived `stepPosition` scale | Raw signed MIDI delta (`raw_value - 64`), no configurable sensitivity | User-specified scale, like the fader's min/max | Simplest option; avoids adding a config field before real usage shows it's needed |
 | Bank membership | Fader + Knob + Mute + Solo; Record/Select excluded | Include Record/Select with an invented per-axis action | No matching per-axis OSC action exists for them; matches the established "no forced unrelated mapping" pattern (Set Marker, above) |
 | Mute/Solo derived actions | Mute → `setZero`, Solo → `setHome` | Leave Mute/Solo as static encoder resets, only Fader/Knob become axis-aware | Gives every control in the bank a real, distinct per-axis action rather than an arbitrary subset |
+| Jog wheel and Return to Zero | Unmapped — the jog wheel is not used for motion-control input in this project | Keep the jog wheel driving `/dragonframe/encoder/17` (relative) and Return to Zero resetting it | The jog wheel controlling an axis was never wanted; Return to Zero only ever existed to reset that same channel, so it has nothing left to reset |
 
 ## Open Questions & Future Decisions
 
 ### Resolved
-1. Channel matching, unmapped-control diagnostics (silent), debounce-collision handling (drop), stuck-control initial state (accepted gap), previous-value map scope (mapped controls only), reconnect state hygiene (cleared on connect), and jog-wheel decode totality — see Decisions & Alternatives above.
+1. Channel matching, unmapped-control diagnostics (silent), debounce-collision handling (drop), stuck-control initial state (accepted gap), previous-value map scope (mapped controls only), and reconnect state hygiene (cleared on connect) — see Decisions & Alternatives above.
 2. Editable map storage, direct axis-name addressing as the continuous-jog mechanism, user-specified axis scaling, and the Manual-function precondition — see Decisions & Alternatives above.
 3. Axis name entry (picker-only), min/max validation (none needed), and stale axis reference handling (accepted gap) — see Decisions & Alternatives above.
 4. Cross-spec edge audit (Phase 4): the picker-only restriction is selection-time-only, not a continuously re-enforced invariant (clarified above, consistent with the accepted-gap decision); Rescan is the mechanism for picking up newly added axes; an empty picker during the startup discovery window is acceptable, not a bug; and target-type switching discards the previous target's configuration — see the bullets above and Decisions & Alternatives.
 5. The picker-only axis-selection UI, how the mapping view surfaces "never discovered yet" vs. "discovered, zero axes," and the discard-on-target-switch behavior are implemented in `docs/llds/app-ui.md`'s Mapping View section (`UI-MAP-003` through `UI-MAP-008`).
 6. Fader default target (OSC axis, not encoder), fader-in-axis-mode-with-no-name send behavior (nothing, no fallback), bank derivation ownership and membership, and the knob's derived `stepPosition` scale — see Decisions & Alternatives above.
+7. The jog wheel and Return to Zero are unmapped — see Decisions & Alternatives above.
 
 ### Deferred
-1. The jog wheel's relative-delta scale constant needs a concrete default value; the prototype leaves this to per-mapping configuration. A fixed default should be chosen empirically once hardware is available to test against, and does not block the LLD.
-2. Extending direct-axis addressing to the jog wheel (`stepPosition`, relative) — the jog wheel is not part of any bank and is unaffected by this change; still App Delivery Phase 2.
-3. Whether DragonMIDI should ever detect a non-responsive axis (e.g., by comparing sent `gotoPosition` values against subsequent position broadcasts, to warn the user their axis might be `Function: Normal` with no hardware attached) — not in scope for Phase 1's minimal implementation.
-4. Exact preset persistence format (JSON schema, file location) — a code-level decision, not yet made.
-5. Whether `gotoPosition`/`stepPosition` work against an axis with real, genuinely-connected motion-control hardware (`Function: Normal`, a physical device actually attached) is untested — only the "`Function: Normal`, no device attached" case has been confirmed (`docs/dragonframe-messages-research.md`). If direct addressing does not work against real connected hardware, OSC encoder channels may be more than a manual fallback for rigs using real motors, not merely a legacy option.
+1. Whether DragonMIDI should ever detect a non-responsive axis (e.g., by comparing sent `gotoPosition` values against subsequent position broadcasts, to warn the user their axis might be `Function: Normal` with no hardware attached) — not in scope for Phase 1's minimal implementation.
+2. Exact preset persistence format (JSON schema, file location) — a code-level decision, not yet made.
+3. Whether `gotoPosition`/`stepPosition` work against an axis with real, genuinely-connected motion-control hardware (`Function: Normal`, a physical device actually attached) is untested — only the "`Function: Normal`, no device attached" case has been confirmed (`docs/dragonframe-messages-research.md`). If direct addressing does not work against real connected hardware, OSC encoder channels may be more than a manual fallback for rigs using real motors, not merely a legacy option.
 
 ## References
 

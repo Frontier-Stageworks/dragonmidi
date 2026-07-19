@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine, bank_fader_key, bank_member_kind
-
-_BANK_DERIVED_ACTION = {"knob": "stepPosition", "mute": "setZero", "solo": "setHome"}
+from .mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine, bank_fader_key
 
 _Key = tuple[str, "int | None"]
 
@@ -14,11 +12,7 @@ def _numbered(prefix: str, start_cc: int, count: int) -> dict[_Key, str]:
 
 
 CONTROL_NAMES: dict[_Key, str] = {
-    **_numbered("Fader", 0, 8),
-    **_numbered("Knob", 16, 8),
-    **_numbered("Mute", 48, 8),
-    **_numbered("Solo", 32, 8),
-    ("cc", 47): "Return to Zero",
+    **_numbered("Fader Channel", 0, 8),
     ("cc", 45): "Transport Record",
     ("cc", 41): "Play",
     ("cc", 42): "Stop",
@@ -29,11 +23,10 @@ CONTROL_NAMES: dict[_Key, str] = {
     ("cc", 62): "Next Marker",
     ("cc", 58): "Previous Track",
     ("cc", 59): "Next Track",
-    ("cc", 110): "Jog Wheel",
     ("korg_scene", None): "Scene",
 }
 
-_TRIGGER_LABELS = {"absolute": "Absolute", "press": "Press", "relative": "Relative"}
+_TRIGGER_LABELS = {"absolute": "Absolute", "press": "Press"}
 
 
 def midi_source_label(key: _Key) -> str:
@@ -55,15 +48,6 @@ def _target_label(key: _Key, engine: MappingEngine) -> tuple[str, str]:
                 bounds = f"{_format_bound(axis.min_value)}-{_format_bound(axis.max_value)}"
                 return "OSC axis", f"{axis.axis_name} ({bounds})"
             return "OSC axis", ""
-    else:
-        fader_key = bank_fader_key(key)
-        if fader_key is not None and engine.is_axis_mode(fader_key):
-            axis = engine.axis_target(fader_key)
-            if axis is not None:
-                kind = bank_member_kind(key)
-                action = _BANK_DERIVED_ACTION[kind]
-                target_type = "OSC axis" if kind == "knob" else "OSC action"
-                return target_type, f"{action} → {axis.axis_name}"
     entry = OPINIONATED_MAP[key]
     if entry.address.startswith("/dragonframe/encoderReset/"):
         return "OSC encoder", f"Reset encoder {entry.address.rsplit('/', 1)[-1]}"
@@ -84,12 +68,16 @@ class RowView:
 
 
 def build_rows(engine: MappingEngine) -> list[RowView]:
-    """One row per opinionated-map entry, in table order.
+    """One row per opinionated-map entry, in table order - except Knob/Mute/Solo
+    entries, which are bank-derived and folded into their bank's Fader Channel
+    row rather than shown as their own rows (their OSC dispatch is unaffected).
 
     @spec UI-MAP-001, UI-MAP-002
     """
     rows = []
     for key, entry in OPINIONATED_MAP.items():
+        if bank_fader_key(key) is not None:
+            continue  # Knob/Mute/Solo: folded into the Fader Channel row, not its own row
         target_type, target = _target_label(key, engine)
         rows.append(
             RowView(

@@ -1,14 +1,14 @@
 """Tests for the Mapping View's pure-Python logic (docs/specs/app-ui.md § Mapping View).
 
 @spec UI-MAP-001, UI-MAP-002, UI-MAP-004, UI-MAP-005, UI-MAP-007, UI-MAP-008
-@spec UI-MAP-011, UI-MAP-012
+@spec UI-MAP-011
 """
 from __future__ import annotations
 
 from hypothesis import given
 from hypothesis import strategies as st
 
-from dragonmidi.mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine
+from dragonmidi.mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine, bank_fader_key
 from dragonmidi.mapping_view_model import (
     AxisPickerState,
     axis_picker_state,
@@ -20,12 +20,22 @@ from dragonmidi.mapping_view_model import (
 FADER_CCS = list(range(0, 8))
 
 
-# --- UI-MAP-001: one row per opinionated entry, in table order ---
+# --- UI-MAP-001: one row per opinionated entry, in table order, except bank members ---
 
-def test_build_rows_returns_one_row_per_opinionated_entry_in_table_order() -> None:
+def test_build_rows_returns_one_row_per_non_bank_member_entry_in_table_order() -> None:
     engine = MappingEngine()
     rows = build_rows(engine)
-    assert [row.key for row in rows] == list(OPINIONATED_MAP.keys())
+    expected_keys = [key for key in OPINIONATED_MAP if bank_fader_key(key) is None]
+    assert [row.key for row in rows] == expected_keys
+
+
+def test_build_rows_excludes_knob_mute_solo_rows() -> None:
+    engine = MappingEngine()
+    rows = build_rows(engine)
+    row_keys = {row.key for row in rows}
+    for key in OPINIONATED_MAP:
+        if bank_fader_key(key) is not None:
+            assert key not in row_keys
 
 
 # --- UI-MAP-002: only fader rows are editable ---
@@ -97,78 +107,6 @@ def test_fader_row_reverts_to_osc_encoder_after_clear_axis_target(number: int) -
     row = rows[key]
     assert row.target_type == "OSC encoder"
     assert row.target == f"Encoder {number + 1}"
-
-
-# --- Non-fader row target rendering: OSC action / OSC encoder (reset) ---
-
-@given(number=st.sampled_from(FADER_CCS))
-def test_knob_row_shows_osc_encoder_target(number: int) -> None:
-    engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("cc", number + 16)]
-    assert row.target_type == "OSC encoder"
-    assert row.target == f"Encoder {number + 9}"
-
-
-@given(number=st.sampled_from(FADER_CCS))
-def test_mute_row_shows_encoder_reset_target(number: int) -> None:
-    engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("cc", number + 48)]
-    assert row.target_type == "OSC encoder"
-    assert row.target == f"Reset encoder {number + 1}"
-
-
-# --- Bank-derived rows (UI-MAP-012) ---
-
-@given(number=st.sampled_from(FADER_CCS))
-# @spec UI-MAP-012
-def test_knob_row_shows_derived_step_position_when_bank_fader_has_axis(number: int) -> None:
-    engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("cc", number + 16)]
-    assert row.target_type == "OSC axis"
-    assert row.target == "stepPosition → PAN"
-
-
-@given(number=st.sampled_from(FADER_CCS))
-# @spec UI-MAP-012
-def test_mute_row_shows_derived_setzero_when_bank_fader_has_axis(number: int) -> None:
-    engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("cc", number + 48)]
-    assert row.target_type == "OSC action"
-    assert row.target == "setZero → PAN"
-
-
-@given(number=st.sampled_from(FADER_CCS))
-# @spec UI-MAP-012
-def test_solo_row_shows_derived_sethome_when_bank_fader_has_axis(number: int) -> None:
-    engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("cc", number + 32)]
-    assert row.target_type == "OSC action"
-    assert row.target == "setHome → PAN"
-
-
-@given(assigned_fader=st.sampled_from(FADER_CCS))
-# @spec UI-MAP-012
-def test_only_the_assigned_banks_knob_mute_solo_change(assigned_fader: int) -> None:
-    engine = MappingEngine()
-    engine.set_axis_target(("cc", assigned_fader), "PAN", 0.0, 100.0)
-    rows = {row.key: row for row in build_rows(engine)}
-    for other in FADER_CCS:
-        if other == assigned_fader:
-            continue
-        assert rows[("cc", other + 16)].target_type == "OSC encoder"
-        assert rows[("cc", other + 16)].target == f"Encoder {other + 9}"
-        assert rows[("cc", other + 48)].target_type == "OSC encoder"
-        assert rows[("cc", other + 48)].target == f"Reset encoder {other + 1}"
-        assert rows[("cc", other + 32)].target_type == "OSC encoder"
-        assert rows[("cc", other + 32)].target == f"Reset encoder {other + 9}"
 
 
 def test_play_row_shows_osc_action_target() -> None:

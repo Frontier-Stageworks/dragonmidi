@@ -32,35 +32,9 @@ def bank_fader_key(key: _Key) -> "_Key | None":
     return None
 
 
-def bank_member_kind(key: _Key) -> "str | None":
-    """Returns `'knob'`, `'mute'`, or `'solo'` for a bank member key, else `None`."""
-    kind, number = key
-    if kind != "cc" or number is None:
-        return None
-    if _KNOB_BANK_OFFSET <= number < _KNOB_BANK_OFFSET + 8:
-        return "knob"
-    if _MUTE_BANK_OFFSET <= number < _MUTE_BANK_OFFSET + 8:
-        return "mute"
-    if _SOLO_BANK_OFFSET <= number < _SOLO_BANK_OFFSET + 8:
-        return "solo"
-    return None
-
-
-def decode_sign_magnitude(raw: int) -> int:
-    """KORG sign-magnitude relative decode: 0/64 -> 0, 1-63 -> +, 65-127 -> -.
-
-    @spec MAP-TABLE-004
-    """
-    if raw in (0, 64):
-        return 0
-    if 1 <= raw <= 63:
-        return raw
-    return -(raw - 64)
-
-
 @dataclass(frozen=True)
 class _MapEntry:
-    kind: str  # "absolute" | "press" | "relative"
+    kind: str  # "absolute" | "press"
     address: str
     args: tuple = ()
 
@@ -93,7 +67,6 @@ OPINIONATED_MAP: dict[_Key, _MapEntry] = {
     **_knob_entries(),
     **_mute_entries(),
     **_solo_entries(),
-    ("cc", 47): _MapEntry("press", "/dragonframe/encoderReset/17"),  # Return to Zero
     ("cc", 45): _MapEntry("press", "/dragonframe/shoot", args=(1,)),  # Transport Record
     ("cc", 41): _MapEntry("press", "/dragonframe/play"),
     ("cc", 42): _MapEntry("press", "/dragonframe/live"),
@@ -104,7 +77,6 @@ OPINIONATED_MAP: dict[_Key, _MapEntry] = {
     ("cc", 62): _MapEntry("press", "/dragonframe/stepForward"),  # Next Marker
     ("cc", 58): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Track
     ("cc", 59): _MapEntry("press", "/dragonframe/stepForward"),  # Next Track
-    ("cc", 110): _MapEntry("relative", "/dragonframe/encoder/17"),  # jog wheel
     ("korg_scene", None): _MapEntry("press", "/dragonframe/black"),
 }
 
@@ -112,7 +84,7 @@ OPINIONATED_MAP: dict[_Key, _MapEntry] = {
 class MappingEngine:
     """Opinionated, hard-coded MIDI-event -> Dragonframe-OSC translator.
 
-    @spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-004, MAP-TABLE-005
+    @spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-005
     @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
     @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
     @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
@@ -226,12 +198,6 @@ class MappingEngine:
             if previous is not None and previous == event.normalized:
                 return None
             return OscMessage(entry.address, (float(event.normalized),))
-
-        if entry.kind == "relative":
-            delta = decode_sign_magnitude(event.raw_value)
-            if delta == 0:
-                return None
-            return OscMessage(entry.address, (float(delta),))
 
         # kind == "press"
         return self._process_press(key, event, now, entry.address, entry.args)

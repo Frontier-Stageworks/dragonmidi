@@ -1,6 +1,6 @@
 # DragonMIDI
 
-DragonMIDI lets you control [Dragonframe](https://www.dragonframe.com/) (stop-motion capture software) with a **KORG nanoKONTROL Studio** MIDI controller. Plug in the controller, launch DragonMIDI, and its faders, knobs, jog wheel, and transport buttons act as physical controls for Dragonframe — playback, shooting, and moving motorized rig axes — instead of reaching for the mouse and keyboard every time.
+DragonMIDI lets you control [Dragonframe](https://www.dragonframe.com/) (stop-motion capture software) with a **KORG nanoKONTROL Studio** MIDI controller. Plug in the controller, launch DragonMIDI, and its faders, knobs, and transport buttons act as physical controls for Dragonframe — playback, shooting, and moving motorized rig axes — instead of reaching for the mouse and keyboard every time.
 
 ## Quick start
 
@@ -20,10 +20,9 @@ DragonMIDI ships with a ready-to-use set of defaults — no setup required to st
 |---|---|
 | Faders 1-8 | Drive a motion-control axis directly — pick which one in the Mapping table (see [Controlling a motor axis](#controlling-a-motor-axis) below) |
 | Knobs 1-8 | Fine-tune nudge for the axis its own fader is driving (see below); drives an OSC encoder channel instead if that fader has no axis picked |
-| Jog wheel | Drives a motion-control axis, relative movement, via Dragonframe's "OSC encoder" setup |
 | Mute 1-8 | Sends that axis to its zero position, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
 | Solo 1-8 | Sends that axis to its home position, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
-| Return to Zero | Resets the jog wheel's encoder channel |
+| Jog wheel / Return to Zero | Not assigned — the jog wheel isn't used for motion-control input in this project |
 | Play | Play back your shot frames |
 | Stop | Return to the live camera view |
 | Transport Record (●) | Shoot one frame |
@@ -106,13 +105,13 @@ One-time setup, per machine:
 2. Enable **OSC Input** on UDP port `7010`.
 3. Enable **OSC Output**, sending to `127.0.0.1` port `7011`.
 
-That's it for the transport/shoot/marker buttons to work. Encoder channels (the jog wheel always, and a fader/knob/Mute/Solo bank whenever that fader is left on OSC encoder mode instead of picking an axis) need one more step: open Dragonframe's **Arc Motion Control** workspace and, for each axis, set its **OSC encoder channel** to match the control driving it (Fader 1 → channel 1, Knob 1 → channel 9, and so on — see the table above), plus the scale/absolute-vs-relative setting for that axis.
+That's it for the transport/shoot/marker buttons to work. A fader/knob/Mute/Solo bank left on OSC encoder mode instead of picking an axis needs one more step: open Dragonframe's **Arc Motion Control** workspace and, for each axis, set its **OSC encoder channel** to match the control driving it (Fader 1 → channel 1, Knob 1 → channel 9, and so on — see the table above), plus the scale/absolute-vs-relative setting for that axis.
 
 Once you've configured a rig's axes once, you can reuse that setup in future projects: in the Arc Motion Control workspace, use **Export | Arc Axis Setup (ARCX)** to save it, then **Import | Arc Axis Setup (ARCX)** in a new project instead of redoing it by hand.
 
 ## Current limitations
 
-- Only faders have their own axis picker. Knobs and Mute/Solo automatically follow whichever axis their bank's fader is set to (nudge / zero / home) — they can't be pointed at a *different* axis independently. The jog wheel always uses an OSC encoder channel.
+- Only faders have their own axis picker. Knobs and Mute/Solo automatically follow whichever axis their bank's fader is set to (nudge / zero / home) — they can't be pointed at a *different* axis independently. The jog wheel and Return to Zero aren't mapped to anything.
 - No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
 - Only the KORG nanoKONTROL Studio is supported.
 
