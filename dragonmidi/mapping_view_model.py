@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine, bank_fader_key
+from .mapping import FADER_KEYS, JOG_WHEEL_CC, OPINIONATED_MAP, MappingEngine, bank_fader_key
 
 _Key = tuple[str, "int | None"]
+
+# @spec UI-MAP-012
+JOG_WHEEL_ROW_KEY: _Key = ("cc", JOG_WHEEL_CC)
+JOG_WHEEL_ARC_ROW_KEY: _Key = ("jog_wheel_keystroke", None)
 
 
 def _numbered(prefix: str, start_cc: int, count: int) -> dict[_Key, str]:
@@ -67,12 +71,45 @@ class RowView:
     editable: bool
 
 
+def _jog_wheel_rows() -> list[RowView]:
+    """The jog wheel isn't an OPINIONATED_MAP entry - its dispatch is special-cased
+    in MappingEngine.process()/process_keystroke() (docs/llds/static-mapping.md
+    § Jog Wheel Frame Stepping). It has two independent, fixed outputs, so it's
+    shown as two read-only rows rather than stretching one row to hold two
+    targets or adding a column that's empty for every other control.
+
+    @spec UI-MAP-012
+    """
+    midi_source = midi_source_label(JOG_WHEEL_ROW_KEY)
+    return [
+        RowView(
+            key=JOG_WHEEL_ROW_KEY,
+            name="Jog Wheel",
+            midi_source=midi_source,
+            trigger="Directional",
+            target_type="OSC action",
+            target="stepForward / stepBackward",
+            editable=False,
+        ),
+        RowView(
+            key=JOG_WHEEL_ARC_ROW_KEY,
+            name="Jog Wheel (Arc)",
+            midi_source=midi_source,
+            trigger="Directional",
+            target_type="Keystroke",
+            target="Option+Shift+Right / Option+Shift+Left",
+            editable=False,
+        ),
+    ]
+
+
 def build_rows(engine: MappingEngine) -> list[RowView]:
     """One row per opinionated-map entry, in table order - except Knob/Mute/Solo
     entries, which are bank-derived and folded into their bank's Fader Channel
-    row rather than shown as their own rows (their OSC dispatch is unaffected).
+    row rather than shown as their own rows (their OSC dispatch is unaffected) -
+    plus two further rows for the jog wheel, appended last (UI-MAP-012).
 
-    @spec UI-MAP-001, UI-MAP-002
+    @spec UI-MAP-001, UI-MAP-002, UI-MAP-012
     """
     rows = []
     for key, entry in OPINIONATED_MAP.items():
@@ -90,6 +127,7 @@ def build_rows(engine: MappingEngine) -> list[RowView]:
                 editable=key in FADER_KEYS,
             )
         )
+    rows.extend(_jog_wheel_rows())
     return rows
 
 

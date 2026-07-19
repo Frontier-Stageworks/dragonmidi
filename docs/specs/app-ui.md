@@ -30,6 +30,7 @@ Traces to `docs/llds/app-ui.md`.
 - [x] **UI-MAP-009**: When the user activates "Rescan axes," the system shall call `OscListener.rescan()` and shall not modify any row's already-configured target as a result of the call itself.
 - [x] **UI-MAP-010**: The Mapping View shall hold no persisted state; on next application launch, all fader rows shall reflect the default OSC axis (direct) mode with no name selected (`MAP-AXIS-008`), not any OSC axis target or OSC encoder mode configured in a prior session.
 - [x] **UI-MAP-011**: On initial render, the system shall show each fader row's Target-type control as "OSC axis" with its axis-name picker visible and no name selected, rather than "OSC encoder" (`MAP-AXIS-008`, see `docs/specs/static-mapping.md`).
+- [x] **UI-MAP-012**: In addition to the opinionated-map-derived rows (`UI-MAP-001`), the system shall render two further rows for the jog wheel, since it is not itself an opinionated-map entry (`docs/specs/static-mapping.md § Jog Wheel Frame Stepping`): a row named "Jog Wheel" with Target type "OSC action" and Target "stepForward / stepBackward", and a row named "Jog Wheel (Arc)" with Target type "Keystroke" and Target "Option+Shift+Right / Option+Shift+Left"; both rows shall show MIDI source "CC110, ch16" and trigger "Directional", and neither shall be editable.
 
 ## Threading and Shutdown
 

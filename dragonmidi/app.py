@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from .config import ConfigController, EndpointConfig
 from .events import MidiEvent
+from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
 from .mapping import MappingEngine
 from .mapping_widgets import MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
@@ -42,6 +43,7 @@ class DragonMidiWindow(QMainWindow):
         self._midi_queue: "queue.Queue[MidiEvent]" = queue.Queue()
 
         self._mapping = MappingEngine()
+        self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._monitor = SignalMonitor()
         self._config = ConfigController(EndpointConfig(), on_apply=self._on_config_applied)
 
@@ -150,6 +152,9 @@ class DragonMidiWindow(QMainWindow):
         message = self._mapping.process(event, now=time.monotonic(), axis_positions=self._axis_discovery.axes)
         if message is not None:
             self._osc_client.send(message.address, *message.args)
+        combo = self._mapping.process_keystroke(event)
+        if combo is not None:
+            self._keystroke_output.send(combo)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override signature
         run_shutdown_sequence(

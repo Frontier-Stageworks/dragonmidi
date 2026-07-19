@@ -22,7 +22,8 @@ DragonMIDI ships with a ready-to-use set of defaults — no setup required to st
 | Knobs 1-8 | Fine-tune nudge for the axis its own fader is driving (see below); drives an OSC encoder channel instead if that fader has no axis picked |
 | Mute 1-8 | Marks the axis's *current* position as its zero reference, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
 | Solo 1-8 | Marks the axis's *current* position as its home reference, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
-| Jog wheel / Return to Zero | Not assigned — the jog wheel isn't used for motion-control input in this project |
+| Jog wheel | Step through the timeline frame-by-frame — turn clockwise to step forward, counterclockwise to step backward, one frame per detent. Also steps frames inside the Arc Motion Control workspace (see note below), where the main timeline step doesn't reach |
+| Return to Zero | Not assigned — no matching Dragonframe action |
 | Play | Play back your shot frames |
 | Stop | Return to the live camera view |
 | Transport Record (●) | Shoot one frame |
@@ -33,6 +34,12 @@ DragonMIDI ships with a ready-to-use set of defaults — no setup required to st
 | Scene button | Black out the display |
 
 You don't need to memorize this — the app's window shows this same table live, alongside each control's current assignment.
+
+**About the jog wheel and Arc Motion Control:** Dragonframe has no network command for stepping frames inside the Arc Motion Control workspace — the only way to do it is the `Option+Shift+Right`/`Option+Shift+Left` ("Step Moco Forward"/"Step Moco Back") keyboard shortcut. DragonMIDI reaches this by sending that exact keystroke to your computer, not by talking to Dragonframe directly, so two things follow:
+
+- **Dragonframe must be the frontmost app** for the keystroke to land there — DragonMIDI doesn't check this for you, so turning the jog wheel while some other app is focused sends the keystroke to that app instead.
+- **On macOS, you'll need to grant DragonMIDI Accessibility access** (System Settings → Privacy & Security → Accessibility) the first time this runs — without it, the keystroke is silently not sent (the main-timeline stepping still works either way, since that goes over OSC).
+- If you've remapped "Step Moco Forward"/"Step Moco Back" to a different shortcut in Dragonframe's own Hot Keys preferences, DragonMIDI still sends the *default* combo above — it has no way to read your custom binding.
 
 ## The status window
 
@@ -113,7 +120,7 @@ Once you've configured a rig's axes once, you can reuse that setup in future pro
 
 ## Current limitations
 
-- Only faders have their own axis picker. Knobs and Mute/Solo automatically follow whichever axis their bank's fader is set to (nudge / zero / home) — they can't be pointed at a *different* axis independently. The jog wheel and Return to Zero aren't mapped to anything.
+- Only faders have their own axis picker. Knobs and Mute/Solo automatically follow whichever axis their bank's fader is set to (nudge / zero / home) — they can't be pointed at a *different* axis independently. Return to Zero isn't mapped to anything.
 - No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
 - Only the KORG nanoKONTROL Studio is supported.
 

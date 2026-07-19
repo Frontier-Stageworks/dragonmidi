@@ -1,7 +1,7 @@
 """Tests for the Mapping View's pure-Python logic (docs/specs/app-ui.md § Mapping View).
 
 @spec UI-MAP-001, UI-MAP-002, UI-MAP-004, UI-MAP-005, UI-MAP-007, UI-MAP-008
-@spec UI-MAP-011
+@spec UI-MAP-011, UI-MAP-012
 """
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from hypothesis import strategies as st
 
 from dragonmidi.mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine, bank_fader_key
 from dragonmidi.mapping_view_model import (
+    JOG_WHEEL_ARC_ROW_KEY,
+    JOG_WHEEL_ROW_KEY,
     AxisPickerState,
     axis_picker_state,
     build_rows,
@@ -26,7 +28,11 @@ def test_build_rows_returns_one_row_per_non_bank_member_entry_in_table_order() -
     engine = MappingEngine()
     rows = build_rows(engine)
     expected_keys = [key for key in OPINIONATED_MAP if bank_fader_key(key) is None]
-    assert [row.key for row in rows] == expected_keys
+    row_keys = [row.key for row in rows]
+    # The two jog wheel rows (UI-MAP-012) are appended after every opinionated-map
+    # row, since the jog wheel isn't itself an OPINIONATED_MAP entry.
+    assert row_keys[: len(expected_keys)] == expected_keys
+    assert row_keys[len(expected_keys) :] == [JOG_WHEEL_ROW_KEY, JOG_WHEEL_ARC_ROW_KEY]
 
 
 def test_build_rows_excludes_knob_mute_solo_rows() -> None:
@@ -124,6 +130,39 @@ def test_scene_row_shows_osc_action_target_with_no_cc_number() -> None:
     assert row.target_type == "OSC action"
     assert row.target == "/dragonframe/black"
     assert row.midi_source == "Native Mode Scene"
+
+
+# --- UI-MAP-012: jog wheel's two additional, non-editable rows ---
+
+def test_build_rows_includes_both_jog_wheel_rows() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    assert JOG_WHEEL_ROW_KEY in rows
+    assert JOG_WHEEL_ARC_ROW_KEY in rows
+
+
+def test_jog_wheel_osc_row_content() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[JOG_WHEEL_ROW_KEY]
+    assert row.name == "Jog Wheel"
+    assert row.midi_source == "CC110, ch16"
+    assert row.trigger == "Directional"
+    assert row.target_type == "OSC action"
+    assert row.target == "stepForward / stepBackward"
+    assert row.editable is False
+
+
+def test_jog_wheel_arc_keystroke_row_content() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[JOG_WHEEL_ARC_ROW_KEY]
+    assert row.name == "Jog Wheel (Arc)"
+    assert row.midi_source == "CC110, ch16"
+    assert row.trigger == "Directional"
+    assert row.target_type == "Keystroke"
+    assert row.target == "Option+Shift+Right / Option+Shift+Left"
+    assert row.editable is False
 
 
 # --- MIDI source labels ---

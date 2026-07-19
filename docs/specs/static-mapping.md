@@ -7,7 +7,7 @@ Traces to `docs/llds/static-mapping.md`.
 - [x] **MAP-TABLE-001**: For every table entry whose MIDI source is a CC message, the system shall map it to its corresponding Dragonframe OSC message only when the event's MIDI channel is 16 (zero-indexed 15); an otherwise-matching CC control on any other channel shall not match any table entry. This invariant does not apply to the Scene button (`korg_scene` type), which matches on type alone — its `channel` field is the controller's own configured Native Mode global-channel ID (see `MIDI-NATIVE-001`), not a stand-in for MIDI channel 16, and may legitimately be any value 0–15.
 - [x] **MAP-TABLE-002**: While a fader (CC 0–7) whose target is in OSC encoder mode, or a knob (CC 16–23) whose bank has no axis assigned, changes value, the system shall send its mapped `/dragonframe/encoder/<n>` OSC message (float 0.0–1.0) on every distinct value received, with no debounce. (A fader in OSC axis (direct) mode instead follows `MAP-AXIS-001`/`MAP-AXIS-009`; a knob whose bank has an axis assigned instead follows `MAP-BANK-001`.)
 - [x] **MAP-TABLE-003**: When a mapped button-type control (Transport Record, Play, Stop, Rewind, Fast Forward, Cycle, Previous Marker, Next Marker, Previous Track, Next Track, or the Native Mode Scene button) transitions to pressed, the system shall send that control's mapped one-shot Dragonframe OSC message exactly once per transition. Mute 1–8 and Solo 1–8 follow this same one-shot-per-transition timing, but their message depends on their bank's fader state — see `MAP-BANK-002`/`MAP-BANK-003` (bank has an axis) and `MAP-BANK-004` (bank has no axis, encoder-reset fallback).
-- [x] **MAP-TABLE-005**: If a MIDI event does not correspond to any entry in the opinionated table (including Record 1–8, Select 1–8, Set Marker, Return to Zero, and the jog wheel), then the system shall produce no OSC output and no log entry for it.
+- [x] **MAP-TABLE-005**: If a MIDI event does not correspond to any entry in the opinionated table (including Record 1–8, Select 1–8, Set Marker, and Return to Zero), then the system shall produce no OSC output and no log entry for it.
 
 ## OSC Axis (Direct) Target
 
@@ -32,6 +32,24 @@ Traces to `docs/llds/static-mapping.md`.
 - [x] **MAP-BANK-007**: When Bank N's fader transitions between OSC encoder mode and OSC axis (direct) mode (`MAP-AXIS-010`) in either direction, the system shall discard Knob N's dedup state; selecting a different axis name while the fader remains in OSC axis (direct) mode shall not discard it.
 - [x] **MAP-BANK-008**: While Bank N's fader has a real axis name assigned, Knob N's derived `stepPosition` send (`MAP-BANK-001`) shall be clamped such that the tracked axis position it accumulates onto never moves outside the fader's configured `min`/`max` range (using the lower and higher of the two configured values as the effective bounds, regardless of which was named `min` and which `max`). If the requested delta would carry the tracked position beyond a bound, the system shall send only the reduced delta needed to reach that bound exactly; if the tracked position is already at that bound in the requested direction, the system shall send nothing.
 - [x] **MAP-BANK-009**: When computing the current tracked position for the clamping in `MAP-BANK-008`, the system shall prefer Dragonframe's most recently reported live position for that axis name (`OSC-DISCOVER-005`, `docs/specs/osc-io.md`) over its own internally-accumulated estimate; the internal estimate shall be consulted only when no live position reading exists yet for that axis name. Absent both a live reading and a prior internal estimate, the tracked position shall be assumed to start at the fader's configured lower bound.
+
+## Jog Wheel Frame Stepping
+
+- [x] **MAP-JOG-001**: While the jog wheel (CC 110, MIDI channel 16) reports a sign-magnitude relative value in the clockwise range (`1`–`63`), the system shall send `/dragonframe/stepForward` exactly once per received message, regardless of the value's magnitude.
+- [x] **MAP-JOG-002**: While the jog wheel (CC 110, MIDI channel 16) reports a sign-magnitude relative value in the counterclockwise range (`65`–`127`), the system shall send `/dragonframe/stepBackward` exactly once per received message, regardless of the value's magnitude.
+- [x] **MAP-JOG-003**: When the jog wheel reports a sign-magnitude relative value of `0` or `64`, the system shall produce no OSC output.
+- [x] **MAP-JOG-004**: The system shall not apply `MAP-DEBOUNCE-001`'s debounce window, nor any dedup-on-repeated-value logic, to jog wheel messages; each message qualifying under `MAP-JOG-001` or `MAP-JOG-002` shall produce its OSC send independent of any prior message's raw value, including a repeated identical value.
+- [x] **MAP-JOG-005**: The system shall allocate no per-control state (previous-value, pressed-state, or last-fired) for the jog wheel entry.
+
+## Jog Wheel Keystroke Output (Arc Motion Control)
+
+- [x] **MAP-JOGKEY-001**: While the jog wheel (CC 110, MIDI channel 16) reports a sign-magnitude relative value in the clockwise range (`1`–`63`), the system's `process_keystroke()` shall return `KeyCombo(frozenset({"alt", "shift"}), "right")`.
+- [x] **MAP-JOGKEY-002**: While the jog wheel (CC 110, MIDI channel 16) reports a sign-magnitude relative value in the counterclockwise range (`65`–`127`), the system's `process_keystroke()` shall return `KeyCombo(frozenset({"alt", "shift"}), "left")`.
+- [x] **MAP-JOGKEY-003**: When the jog wheel reports a sign-magnitude relative value of `0` or `64`, or the event does not match the jog wheel, `process_keystroke()` shall return `None`.
+- [x] **MAP-JOGKEY-004**: The system shall evaluate `process_keystroke()` for a jog wheel event independent of `process()`'s OSC output for that same event — both shall be evaluated, with neither suppressing the other based on which one would have an effect in Dragonframe's current workspace.
+- [x] **MAP-JOGKEY-005**: `process_keystroke()` shall not apply debounce or dedup logic to jog wheel messages, matching `MAP-JOG-004`.
+- [x] **MAP-JOGKEY-006**: `process_keystroke()` shall respect the same MIDI-channel-16 match invariant as `process()` (`MAP-TABLE-001`) for the jog wheel's CC-sourced event.
+- [x] **MAP-JOGKEY-007**: `process_keystroke()` shall allocate no per-control tracked state; calls to it shall not affect `tracked_controls()` or any state consulted or mutated by `process()`.
 
 ## Debounce and State
 

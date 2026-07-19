@@ -6,13 +6,16 @@
 @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
 @spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
 @spec MAP-BANK-008, MAP-BANK-009
+@spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
+@spec MAP-JOGKEY-001, MAP-JOGKEY-002, MAP-JOGKEY-003, MAP-JOGKEY-004, MAP-JOGKEY-005
+@spec MAP-JOGKEY-006, MAP-JOGKEY-007
 """
 from __future__ import annotations
 
 from hypothesis import given
 from hypothesis import strategies as st
 
-from dragonmidi.events import MidiEvent
+from dragonmidi.events import KeyCombo, MidiEvent
 from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, MappingEngine
 
 FADER_CCS = list(range(0, 8))  # CC 0-7 -> encoder 1-8
@@ -31,7 +34,8 @@ BUTTON_CCS_TO_ADDRESS = {
     58: "/dragonframe/stepBackward",  # Previous Track
     59: "/dragonframe/stepForward",  # Next Track
 }
-UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 60, 47, 110]  # Record/Select/Set Marker/Return to Zero/Jog wheel
+UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 60, 47]  # Record/Select/Set Marker/Return to Zero
+JOG_CC = 110
 
 
 def cc_event(number: int, value: int, channel: int = CHANNEL) -> MidiEvent:
@@ -785,3 +789,153 @@ def test_knob_clamp_falls_back_to_internal_estimate_when_no_live_reading_for_thi
         cc_event(knob_number, 0), now=0.001, axis_positions={"OTHER_AXIS": 999.0}
     )
     assert result is None
+
+
+# --- Jog Wheel Frame Stepping (MAP-JOG-001 through MAP-JOG-005) ---
+
+
+@given(raw=st.integers(min_value=1, max_value=63))
+# @spec MAP-JOG-001
+def test_jog_clockwise_sends_step_forward(raw: int) -> None:
+    engine = MappingEngine()
+    result = engine.process(cc_event(JOG_CC, raw), now=0.0)
+    assert result is not None
+    assert result.address == "/dragonframe/stepForward"
+
+
+@given(raw=st.integers(min_value=65, max_value=127))
+# @spec MAP-JOG-002
+def test_jog_counterclockwise_sends_step_backward(raw: int) -> None:
+    engine = MappingEngine()
+    result = engine.process(cc_event(JOG_CC, raw), now=0.0)
+    assert result is not None
+    assert result.address == "/dragonframe/stepBackward"
+
+
+@given(raw=st.sampled_from([0, 64]))
+# @spec MAP-JOG-003
+def test_jog_zero_or_center_value_sends_nothing(raw: int) -> None:
+    engine = MappingEngine()
+    assert engine.process(cc_event(JOG_CC, raw), now=0.0) is None
+
+
+@given(raw=st.integers(min_value=1, max_value=63) | st.integers(min_value=65, max_value=127))
+# @spec MAP-JOG-004
+def test_jog_repeated_identical_value_fires_every_time_no_dedup(raw: int) -> None:
+    # Unlike a continuous-absolute control (MAP-TABLE-002), which dedupes a repeated
+    # identical value, each jog wheel message is its own physical detent and must fire
+    # independently even if the raw value happens to repeat.
+    engine = MappingEngine()
+    first = engine.process(cc_event(JOG_CC, raw), now=0.0)
+    second = engine.process(cc_event(JOG_CC, raw), now=0.001)
+    assert first is not None
+    assert second is not None
+    assert first.address == second.address
+
+
+@given(raw=st.integers(min_value=1, max_value=63) | st.integers(min_value=65, max_value=127))
+# @spec MAP-JOG-004
+def test_jog_fires_regardless_of_elapsed_time_no_debounce(raw: int) -> None:
+    # No 80ms debounce window applies, unlike button-type entries (MAP-DEBOUNCE-001):
+    # two messages at the same instant both fire.
+    engine = MappingEngine()
+    first = engine.process(cc_event(JOG_CC, raw), now=0.0)
+    second = engine.process(cc_event(JOG_CC, raw), now=0.0)
+    assert first is not None
+    assert second is not None
+
+
+@given(
+    raw=st.integers(min_value=1, max_value=63) | st.integers(min_value=65, max_value=127),
+    channel=st.integers(min_value=0, max_value=15).filter(lambda c: c != CHANNEL),
+)
+# @spec MAP-TABLE-001
+def test_jog_respects_the_channel_16_invariant(raw: int, channel: int) -> None:
+    engine = MappingEngine()
+    result = engine.process(cc_event(JOG_CC, raw, channel=channel), now=0.0)
+    assert result is None
+
+
+@given(raw=st.integers(min_value=0, max_value=127))
+# @spec MAP-JOG-005
+def test_jog_allocates_no_tracked_state(raw: int) -> None:
+    engine = MappingEngine()
+    engine.process(cc_event(JOG_CC, raw), now=0.0)
+    assert ("cc", JOG_CC) not in engine.tracked_controls()
+
+
+# --- Jog Wheel Keystroke Output for Arc Motion Control (MAP-JOGKEY-001 through 007) ---
+
+STEP_MOCO_FORWARD = KeyCombo(frozenset({"alt", "shift"}), "right")
+STEP_MOCO_BACKWARD = KeyCombo(frozenset({"alt", "shift"}), "left")
+
+
+@given(raw=st.integers(min_value=1, max_value=63))
+# @spec MAP-JOGKEY-001
+def test_jog_keystroke_clockwise_returns_step_moco_forward(raw: int) -> None:
+    engine = MappingEngine()
+    assert engine.process_keystroke(cc_event(JOG_CC, raw)) == STEP_MOCO_FORWARD
+
+
+@given(raw=st.integers(min_value=65, max_value=127))
+# @spec MAP-JOGKEY-002
+def test_jog_keystroke_counterclockwise_returns_step_moco_backward(raw: int) -> None:
+    engine = MappingEngine()
+    assert engine.process_keystroke(cc_event(JOG_CC, raw)) == STEP_MOCO_BACKWARD
+
+
+@given(raw=st.sampled_from([0, 64]))
+# @spec MAP-JOGKEY-003
+def test_jog_keystroke_zero_or_center_value_returns_none(raw: int) -> None:
+    engine = MappingEngine()
+    assert engine.process_keystroke(cc_event(JOG_CC, raw)) is None
+
+
+@given(
+    number=st.sampled_from(FADER_CCS + KNOB_CCS + MUTE_CCS + SOLO_CCS + list(BUTTON_CCS_TO_ADDRESS)),
+    value=st.integers(min_value=0, max_value=127),
+)
+# @spec MAP-JOGKEY-003
+def test_jog_keystroke_non_jog_wheel_control_returns_none(number: int, value: int) -> None:
+    engine = MappingEngine()
+    assert engine.process_keystroke(cc_event(number, value)) is None
+
+
+@given(raw=st.integers(min_value=1, max_value=63) | st.integers(min_value=65, max_value=127))
+# @spec MAP-JOGKEY-004
+def test_jog_keystroke_and_osc_both_produced_for_the_same_event(raw: int) -> None:
+    engine = MappingEngine()
+    event = cc_event(JOG_CC, raw)
+    osc_result = engine.process(event, now=0.0)
+    keystroke_result = engine.process_keystroke(event)
+    assert osc_result is not None
+    assert keystroke_result is not None
+
+
+@given(raw=st.integers(min_value=1, max_value=63) | st.integers(min_value=65, max_value=127))
+# @spec MAP-JOGKEY-005
+def test_jog_keystroke_repeated_identical_value_fires_every_time_no_dedup(raw: int) -> None:
+    engine = MappingEngine()
+    first = engine.process_keystroke(cc_event(JOG_CC, raw))
+    second = engine.process_keystroke(cc_event(JOG_CC, raw))
+    assert first is not None
+    assert second is not None
+    assert first == second
+
+
+@given(
+    raw=st.integers(min_value=1, max_value=63) | st.integers(min_value=65, max_value=127),
+    channel=st.integers(min_value=0, max_value=15).filter(lambda c: c != CHANNEL),
+)
+# @spec MAP-JOGKEY-006
+def test_jog_keystroke_respects_the_channel_16_invariant(raw: int, channel: int) -> None:
+    engine = MappingEngine()
+    assert engine.process_keystroke(cc_event(JOG_CC, raw, channel=channel)) is None
+
+
+@given(raw=st.integers(min_value=0, max_value=127))
+# @spec MAP-JOGKEY-007
+def test_jog_keystroke_allocates_no_tracked_state(raw: int) -> None:
+    engine = MappingEngine()
+    engine.process_keystroke(cc_event(JOG_CC, raw))
+    assert ("cc", JOG_CC) not in engine.tracked_controls()

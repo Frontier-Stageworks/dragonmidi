@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .events import MidiEvent, OscMessage
+from .events import KeyCombo, MidiEvent, OscMessage
 
 CHANNEL = 15  # zero-indexed MIDI channel 16, the nanoKONTROL Studio's Native Mode channel
 DEBOUNCE_SECONDS = 0.080
@@ -11,6 +11,14 @@ _Key = tuple[str, "int | None"]
 
 # @spec MAP-AXIS-004
 FADER_KEYS: frozenset[_Key] = frozenset(("cc", i) for i in range(8))
+
+# @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003
+JOG_WHEEL_CC = 110
+_JOG_WHEEL_KEY: _Key = ("cc", JOG_WHEEL_CC)
+
+# @spec MAP-JOGKEY-001, MAP-JOGKEY-002
+_STEP_MOCO_FORWARD = KeyCombo(frozenset({"alt", "shift"}), "right")
+_STEP_MOCO_BACKWARD = KeyCombo(frozenset({"alt", "shift"}), "left")
 
 # Bank membership: Bank N = Fader N, Knob N, Mute N, Solo N (Record N/Select N excluded, no
 # matching per-axis OSC action exists for them - @spec MAP-BANK-006).
@@ -90,6 +98,9 @@ class MappingEngine:
     @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
     @spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
     @spec MAP-BANK-008
+    @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
+    @spec MAP-JOGKEY-001, MAP-JOGKEY-002, MAP-JOGKEY-003, MAP-JOGKEY-004, MAP-JOGKEY-005
+    @spec MAP-JOGKEY-006, MAP-JOGKEY-007
     """
 
     def __init__(self) -> None:
@@ -193,6 +204,9 @@ class MappingEngine:
                 return None
             key = (event.type, event.number)
 
+            if key == _JOG_WHEEL_KEY:
+                return self._process_jog(event)
+
             if key in FADER_KEYS and self.is_axis_mode(key):
                 axis_target = self._axis_targets.get(key)
                 if axis_target is not None:
@@ -294,3 +308,36 @@ class MappingEngine:
             return self._process_press(key, event, now, f"{axis_path}/setZero")
         # Solo
         return self._process_press(key, event, now, f"{axis_path}/setHome")
+
+    def _process_jog(self, event: MidiEvent) -> OscMessage | None:
+        """Decodes the jog wheel's KORG sign-magnitude relative value: 1-63 is clockwise,
+        65-127 is counterclockwise, 0/64 is no movement. Direction only - magnitude is
+        ignored, one message is one step, with no debounce, dedup, or tracked state.
+
+        @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
+        """
+        raw = event.raw_value
+        if raw == 0 or raw == 64:
+            return None
+        if raw < 64:
+            return OscMessage("/dragonframe/stepForward", ())
+        return OscMessage("/dragonframe/stepBackward", ())
+
+    def process_keystroke(self, event: MidiEvent) -> KeyCombo | None:
+        """Second, independent output path alongside `process()`, for entries whose
+        Dragonframe function has no OSC equivalent. Currently only the jog wheel
+        produces anything - it drives Arc Motion Control's "Step Moco Forward"/"Step
+        Moco Back" via their default Hot Key, since Dragonframe exposes no OSC message
+        for that action. Evaluated independently of `process()`'s OSC output for the
+        same event; neither suppresses the other. Stateless - allocates and consults
+        no per-control state.
+
+        @spec MAP-JOGKEY-001, MAP-JOGKEY-002, MAP-JOGKEY-003, MAP-JOGKEY-004
+        @spec MAP-JOGKEY-005, MAP-JOGKEY-006, MAP-JOGKEY-007
+        """
+        if event.type != "cc" or event.number != JOG_WHEEL_CC or event.channel != CHANNEL:
+            return None
+        raw = event.raw_value
+        if raw == 0 or raw == 64:
+            return None
+        return _STEP_MOCO_FORWARD if raw < 64 else _STEP_MOCO_BACKWARD

@@ -23,3 +23,14 @@ class MidiEvent:
 class OscMessage:
     address: str
     args: tuple
+
+
+@dataclass(frozen=True)
+class KeyCombo:
+    """A synthesized OS-level keystroke: modifiers held down, then `key` tapped.
+
+    @spec KEY-SEND-001
+    """
+
+    modifiers: frozenset[str]
+    key: str
