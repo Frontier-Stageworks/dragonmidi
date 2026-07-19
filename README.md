@@ -20,8 +20,8 @@ DragonMIDI ships with a ready-to-use set of defaults — no setup required to st
 |---|---|
 | Faders 1-8 | Drive a motion-control axis directly — pick which one in the Mapping table (see [Controlling a motor axis](#controlling-a-motor-axis) below) |
 | Knobs 1-8 | Fine-tune nudge for the axis its own fader is driving (see below); drives an OSC encoder channel instead if that fader has no axis picked |
-| Mute 1-8 | Sends that axis to its zero position, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
-| Solo 1-8 | Sends that axis to its home position, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
+| Mute 1-8 | Marks the axis's *current* position as its zero reference, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
+| Solo 1-8 | Marks the axis's *current* position as its home reference, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
 | Jog wheel / Return to Zero | Not assigned — the jog wheel isn't used for motion-control input in this project |
 | Play | Play back your shot frames |
 | Stop | Return to the live camera view |
@@ -55,8 +55,8 @@ Each fader, together with the knob, Mute button, and Solo button directly above/
 |---|---|
 | Fader | Drives the axis to an absolute position across the fader's travel |
 | Knob | Nudges that axis — turn right of center to move one way, left of center the other, centered (12 o'clock) does nothing. Useful for fine-tuning a position the fader got you close to. |
-| Mute | Sends the axis to its zero position |
-| Solo | Sends the axis to its home position |
+| Mute | Marks the axis's current position as its zero reference — it does **not** move the axis anywhere |
+| Solo | Marks the axis's current position as its home reference — it does **not** move the axis anywhere |
 
 Faders start out already in this mode with no axis picked yet — until you pick one, that fader (and its bank) produces no output. To assign one:
 
@@ -70,6 +70,8 @@ Faders start out already in this mode with no axis picked yet — until you pick
 If you'd rather use the older encoder-channel approach for a given fader instead (see [Configuring Dragonframe](#configuring-dragonframe) below), switch that fader's **Target type** to **OSC encoder** — its bank's knob and Mute/Solo fall back to their encoder-channel/reset behavior too.
 
 **Important:** for the fader to actually move the axis, that axis's **Function** must be set to **Manual** in Dragonframe's Arc Motion Control workspace (axis settings). If it's left on `Function: Normal` without a real motor attached, Dragonframe will silently accept the commands without moving anything — this is a Dragonframe-side setting DragonMIDI can't detect or fix for you.
+
+**Watch out for accidental Mute/Solo presses:** Dragonframe has no OSC command to move an axis to a stored zero/home position — `setZero`/`setHome` are the only related commands, and they *recalibrate* the reference point to wherever the axis currently is. Bumping Mute or Solo mid-shoot won't move anything, but it will quietly redefine that axis's zero or home to its current position.
 
 Bank assignments reset back to the defaults every time you restart DragonMIDI — they aren't saved between sessions yet.
 
