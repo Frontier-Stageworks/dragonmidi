@@ -9,7 +9,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.events import MidiEvent
-from dragonmidi.mapping import CHANNEL, MappingEngine, decode_sign_magnitude
+from dragonmidi.mapping import CHANNEL, FADER_KEYS, MappingEngine, decode_sign_magnitude
 
 FADER_CCS = list(range(0, 8))  # CC 0-7 -> encoder 1-8
 KNOB_CCS = list(range(16, 24))  # CC 16-23 -> encoder 9-16
@@ -292,3 +292,153 @@ def test_reset_clears_tracked_state_so_a_prior_press_no_longer_blocks_debounce()
     engine.process(cc_event(41, 0), now=100.0)
     result = engine.process(cc_event(41, 127), now=100.0)
     assert result is not None
+
+
+# --- MAP-AXIS-001: gotoPosition scaling formula, continuous, no debounce ---
+
+@given(
+    number=st.sampled_from(FADER_CCS),
+    axis_name=st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=1, max_size=8),
+    min_value=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    max_value=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    raw_value=st.integers(min_value=1, max_value=127),
+)
+# @spec MAP-AXIS-001
+def test_axis_target_sends_gotoposition_scaled_into_min_max(
+    number: int, axis_name: str, min_value: float, max_value: float, raw_value: int
+) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), axis_name, min_value, max_value)
+    result = engine.process(cc_event(number, raw_value), now=0.0)
+    assert result is not None
+    assert result.address == f"/dragonframe/axis/{axis_name}/gotoPosition"
+    normalized = raw_value / 127.0
+    expected_position = min_value + normalized * (max_value - min_value)
+    assert result.args == (expected_position,)
+
+
+@given(number=st.sampled_from(FADER_CCS), value=st.integers(min_value=0, max_value=127))
+# @spec MAP-AXIS-001
+def test_axis_target_repeating_identical_value_sends_only_once(number: int, value: int) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    first = engine.process(cc_event(number, value), now=0.0)
+    second = engine.process(cc_event(number, value), now=0.001)
+    assert first is not None
+    assert second is None  # identical value is not "distinct" - no debounce needed to explain this
+
+
+@given(
+    number=st.sampled_from(FADER_CCS),
+    values=st.lists(st.integers(min_value=0, max_value=127), min_size=2, max_size=8, unique=True),
+)
+# @spec MAP-AXIS-001
+def test_axis_target_sends_every_distinct_value_with_no_debounce(number: int, values: list[int]) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    # Fire all distinct values at the same instant; a debounce window would drop some of these.
+    results = [engine.process(cc_event(number, v), now=0.0) for v in values]
+    assert all(r is not None for r in results)
+
+
+@given(number=st.sampled_from(FADER_CCS), channel=st.integers(min_value=0, max_value=15).filter(lambda c: c != CHANNEL))
+# @spec MAP-AXIS-001
+def test_axis_target_still_respects_the_channel_16_invariant(number: int, channel: int) -> None:
+    # An axis-targeted fader is still a CC-sourced control; MAP-TABLE-001's channel
+    # invariant must keep applying regardless of target type.
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    result = engine.process(cc_event(number, 100, channel=channel), now=0.0)
+    assert result is None
+
+
+# --- MAP-AXIS-002: no min/max validation, any real pair accepted ---
+
+@given(
+    number=st.sampled_from(FADER_CCS),
+    min_value=st.floats(allow_nan=False, allow_infinity=False, min_value=-1e6, max_value=1e6),
+    max_value=st.floats(allow_nan=False, allow_infinity=False, min_value=-1e6, max_value=1e6),
+)
+# @spec MAP-AXIS-002
+def test_set_axis_target_accepts_any_real_min_max_pair(number: int, min_value: float, max_value: float) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", min_value, max_value)  # must not raise, even if min > max
+
+
+@given(number=st.sampled_from(FADER_CCS), constant=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False))
+# @spec MAP-AXIS-002
+def test_min_equal_max_produces_constant_output(number: int, constant: float) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", constant, constant)
+    result_low = engine.process(cc_event(number, 0), now=0.0)
+    result_high = engine.process(cc_event(number, 127), now=0.001)
+    assert result_low is not None and result_low.args == (constant,)
+    assert result_high is not None and result_high.args == (constant,)
+
+
+@given(number=st.sampled_from(FADER_CCS), raw_value=st.integers(min_value=1, max_value=126))
+# @spec MAP-AXIS-002
+def test_inverted_min_max_produces_reversed_mapping(number: int, raw_value: int) -> None:
+    # min > max is a legitimate "reversed" mapping: a higher fader value should
+    # produce a *lower* position, not be rejected.
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 100.0, 0.0)
+    result = engine.process(cc_event(number, raw_value), now=0.0)
+    assert result is not None
+    normalized = raw_value / 127.0
+    assert result.args == (100.0 + normalized * (0.0 - 100.0),)
+
+
+# --- MAP-AXIS-003 / MAP-AXIS-006: picker-only at selection time, but no re-validation afterward ---
+
+# @spec MAP-AXIS-006
+def test_axis_target_fires_even_for_a_name_no_longer_considered_discovered() -> None:
+    # The engine itself has no notion of a "discovered axes" list at all - that's the
+    # OSC Listener's responsibility (docs/llds/osc-io.md). Restricting selection to
+    # discovered names is a UI-level gate; the engine must keep sending regardless of
+    # whether that name is still considered valid by anything else.
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), "NO_LONGER_DISCOVERED", 0.0, 100.0)
+    result = engine.process(cc_event(0, 64), now=0.0)
+    assert result is not None
+    assert result.address == "/dragonframe/axis/NO_LONGER_DISCOVERED/gotoPosition"
+
+
+# --- MAP-AXIS-004: fader-only restriction ---
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec MAP-AXIS-004
+def test_set_axis_target_succeeds_for_fader_keys(number: int) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)  # must not raise
+
+
+@given(number=st.sampled_from(KNOB_CCS + MUTE_CCS + SOLO_CCS + list(BUTTON_CCS_TO_ADDRESS) + [JOG_CC]))
+# @spec MAP-AXIS-004
+def test_set_axis_target_rejects_non_fader_keys(number: int) -> None:
+    engine = MappingEngine()
+    try:
+        engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    except ValueError:
+        return
+    raise AssertionError(f"expected ValueError for non-fader key ('cc', {number})")
+
+
+def test_fader_keys_constant_matches_the_documented_fader_cc_range() -> None:
+    assert FADER_KEYS == {("cc", i) for i in FADER_CCS}
+
+
+# --- Target-switch behavior: switching discards prior dedup state for that key ---
+
+def test_setting_an_axis_target_discards_prior_encoder_dedup_state() -> None:
+    engine = MappingEngine()
+    # Establish previous-value state via the default OSC-encoder target first.
+    engine.process(cc_event(0, 64), now=0.0)
+    assert ("cc", 0) in engine.tracked_controls()
+
+    engine.set_axis_target(("cc", 0), "PAN", 0.0, 100.0)
+    # The same raw value that would have been deduped under the old target must fire
+    # again under the new target, proving the switch discarded the prior dedup state.
+    result = engine.process(cc_event(0, 64), now=0.001)
+    assert result is not None
+    assert result.address == "/dragonframe/axis/PAN/gotoPosition"

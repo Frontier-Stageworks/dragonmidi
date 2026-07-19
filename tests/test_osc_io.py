@@ -3,6 +3,8 @@
 @spec OSC-CLIENT-001, OSC-CLIENT-002
 @spec OSC-LISTEN-001, OSC-LISTEN-002, OSC-LISTEN-003, OSC-LISTEN-005, OSC-LISTEN-006
 @spec OSC-CONFIG-001, OSC-CONFIG-002
+@spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003, OSC-DISCOVER-004
+@spec OSC-DISCOVER-005, OSC-DISCOVER-006, OSC-DISCOVER-007, OSC-DISCOVER-008
 """
 from __future__ import annotations
 
@@ -18,11 +20,14 @@ from dragonmidi.osc_io import (
     DEFAULT_DRAGONFRAME_HOST,
     DEFAULT_DRAGONFRAME_PORT,
     DEFAULT_LISTEN_PORT,
+    AxisDiscovery,
     OscClient,
     OscListener,
+    decode_osc_packet,
     encode_osc_message,
     validate_ports,
 )
+from tests.support import FakeClock
 
 ADDRESS_ALPHABET = st.characters(min_codepoint=32, max_codepoint=126, blacklist_characters="\x00")
 address_strategy = st.text(alphabet=ADDRESS_ALPHABET, min_size=0, max_size=24).map(lambda s: "/" + s)
@@ -243,3 +248,267 @@ def test_validate_ports_allows_distinct_ports(dragonframe_port: int, listen_port
     if dragonframe_port == listen_port:
         return
     validate_ports(dragonframe_port=dragonframe_port, listen_port=listen_port)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Axis discovery: decode_osc_packet (bundle-aware decoding)
+# ---------------------------------------------------------------------------
+
+def _build_bundle(entries: list[bytes]) -> bytes:
+    """Hand-build an OSC 1.0 #bundle wrapping already-encoded message bytes.
+
+    Deliberately independent of decode_osc_packet's own implementation - this
+    is a second, from-scratch encoder used only to construct test fixtures.
+    """
+    body = bytearray(b"#bundle\x00")
+    body += b"\x00" * 8  # arbitrary time tag, ignored by the decoder
+    for message in entries:
+        body += struct.pack(">i", len(message))
+        body += message
+    return bytes(body)
+
+
+@given(address=address_strategy, args=st.lists(arg_strategy, max_size=3))
+# @spec OSC-DISCOVER-004
+def test_decode_osc_packet_handles_a_bare_single_message(address: str, args: list) -> None:
+    packet = encode_osc_message(address, *args)
+    messages = decode_osc_packet(packet)
+    assert messages == [(address, tuple(args))]
+
+
+def test_decode_osc_packet_unwraps_a_bundle_with_one_message() -> None:
+    inner = encode_osc_message("/dragonframe/axis/PAN", 12.5)
+    bundle = _build_bundle([inner])
+    messages = decode_osc_packet(bundle)
+    assert messages == [("/dragonframe/axis/PAN", (12.5,))]
+
+
+@given(
+    names=st.lists(
+        st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=1, max_size=6),
+        min_size=2,
+        max_size=6,
+    )
+)
+# @spec OSC-DISCOVER-004
+def test_decode_osc_packet_unwraps_a_bundle_with_multiple_messages_in_order(names: list[str]) -> None:
+    inner_messages = [encode_osc_message(f"/dragonframe/axis/{name}", 0.0) for name in names]
+    bundle = _build_bundle(inner_messages)
+    messages = decode_osc_packet(bundle)
+    assert messages == [(f"/dragonframe/axis/{name}", (0.0,)) for name in names]
+
+
+def test_decode_osc_packet_recurses_into_a_nested_bundle() -> None:
+    inner_message = encode_osc_message("/dragonframe/axis/PAN", 1.0)
+    inner_bundle = _build_bundle([inner_message])
+    outer_bundle = _build_bundle([inner_bundle])
+    messages = decode_osc_packet(outer_bundle)
+    assert messages == [("/dragonframe/axis/PAN", (1.0,))]
+
+
+# ---------------------------------------------------------------------------
+# Axis discovery: AxisDiscovery state machine
+# ---------------------------------------------------------------------------
+
+def _axis_response_datagram(name: str, position: float) -> bytes:
+    return _build_bundle([encode_osc_message(f"/dragonframe/axis/{name}", position)])
+
+
+# @spec OSC-DISCOVER-006
+def test_axis_discovery_starts_never_queried() -> None:
+    discovery = AxisDiscovery()
+    assert discovery.axes is None
+
+
+# @spec OSC-DISCOVER-005
+def test_axis_discovery_records_axis_from_a_bundled_response() -> None:
+    discovery = AxisDiscovery()
+    discovery.handle_datagram(_axis_response_datagram("PAN", 42.0))
+    assert discovery.axes == {"PAN": 42.0}
+
+
+# @spec OSC-DISCOVER-005
+def test_axis_discovery_overwrites_duplicate_entries_for_the_same_name() -> None:
+    discovery = AxisDiscovery()
+    discovery.handle_datagram(_axis_response_datagram("PAN", 1.0))
+    discovery.handle_datagram(_axis_response_datagram("PAN", 2.0))
+    assert discovery.axes == {"PAN": 2.0}
+
+
+# @spec OSC-DISCOVER-005
+def test_axis_discovery_tracks_multiple_distinct_axes() -> None:
+    discovery = AxisDiscovery()
+    discovery.handle_datagram(_axis_response_datagram("PAN", 1.0))
+    discovery.handle_datagram(_axis_response_datagram("TILT", 2.0))
+    assert discovery.axes == {"PAN": 1.0, "TILT": 2.0}
+
+
+# @spec OSC-DISCOVER-005
+def test_axis_discovery_ignores_the_getallposition_query_echo() -> None:
+    discovery = AxisDiscovery()
+    query_echo = encode_osc_message("/dragonframe/axis/getAllPosition")
+    discovery.handle_datagram(query_echo)
+    assert discovery.axes is None  # not recorded as an axis literally named "getAllPosition"
+
+
+# @spec OSC-DISCOVER-007
+def test_axis_discovery_malformed_datagram_does_not_raise() -> None:
+    discovery = AxisDiscovery()
+    discovery.handle_datagram(b"\xff\xfe not a valid osc packet at all")  # must not raise
+    assert discovery.axes is None  # state unchanged by the failed decode
+
+
+# @spec OSC-DISCOVER-008
+def test_axis_discovery_timeout_transitions_never_queried_to_empty(fake_clock: FakeClock) -> None:
+    discovery = AxisDiscovery(clock=fake_clock, timeout=2.0)
+    discovery.mark_query_sent()
+    fake_clock.advance(1.999)
+    discovery.check_timeout()
+    assert discovery.axes is None  # not yet timed out
+
+    fake_clock.advance(0.002)  # now past 2.0s total
+    discovery.check_timeout()
+    assert discovery.axes == {}  # timed out with nothing reported -> "queried, zero axes"
+
+
+# @spec OSC-DISCOVER-008
+def test_axis_discovery_response_before_timeout_prevents_the_empty_transition(fake_clock: FakeClock) -> None:
+    discovery = AxisDiscovery(clock=fake_clock, timeout=2.0)
+    discovery.mark_query_sent()
+    fake_clock.advance(1.0)
+    discovery.handle_datagram(_axis_response_datagram("PAN", 0.0))
+    fake_clock.advance(2.0)  # well past the original timeout
+    discovery.check_timeout()
+    assert discovery.axes == {"PAN": 0.0}  # never got overwritten to {}
+
+
+# @spec OSC-DISCOVER-008
+def test_axis_discovery_response_after_timeout_is_still_recorded(fake_clock: FakeClock) -> None:
+    discovery = AxisDiscovery(clock=fake_clock, timeout=2.0)
+    discovery.mark_query_sent()
+    fake_clock.advance(3.0)
+    discovery.check_timeout()
+    assert discovery.axes == {}
+    discovery.handle_datagram(_axis_response_datagram("PAN", 5.0))
+    assert discovery.axes == {"PAN": 5.0}  # a late response still updates the store normally
+
+
+# ---------------------------------------------------------------------------
+# Axis discovery: OscListener integration (real loopback sockets)
+# ---------------------------------------------------------------------------
+
+class _FakeDragonframe:
+    """A real UDP socket that replies to whatever address sent it a datagram -
+    mirroring Dragonframe's own observed getAllPosition reply behavior."""
+
+    def __init__(self, port: int, axis_name: str = "PAN", position: float = 7.0) -> None:
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.bind(("127.0.0.1", port))
+        self._axis_name = axis_name
+        self._position = position
+        self._running = True
+        self.query_count = 0
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while self._running:
+            self._socket.settimeout(0.2)
+            try:
+                data, addr = self._socket.recvfrom(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            self.query_count += 1
+            reply = _axis_response_datagram(self._axis_name, self._position)
+            self._socket.sendto(reply, addr)
+
+    def stop(self) -> None:
+        self._running = False
+        self._thread.join(timeout=1.0)
+        self._socket.close()
+
+
+# @spec OSC-DISCOVER-001, OSC-DISCOVER-002
+def test_listener_sends_discovery_query_from_its_own_socket_on_start(free_udp_port: int) -> None:
+    dragonframe_port = free_udp_port + 1 if free_udp_port < 65000 else free_udp_port - 1
+    fake_df = _FakeDragonframe(dragonframe_port)
+    discovery = AxisDiscovery()
+    listener = OscListener(
+        port=free_udp_port,
+        on_activity=lambda: None,
+        axis_discovery=discovery,
+        dragonframe_host="127.0.0.1",
+        dragonframe_port=dragonframe_port,
+    )
+    listener.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while discovery.axes is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        # The fake only replies to the sender's address - receiving anything here
+        # proves the query was sent from the same socket this listener is bound to.
+        assert discovery.axes == {"PAN": 7.0}
+    finally:
+        listener.stop()
+        fake_df.stop()
+
+
+# @spec OSC-DISCOVER-002
+def test_listener_resends_discovery_query_on_rebind(free_udp_port: int) -> None:
+    dragonframe_port = free_udp_port + 1 if free_udp_port < 65000 else free_udp_port - 1
+    other_port = free_udp_port + 2 if free_udp_port < 65000 else free_udp_port - 2
+    fake_df = _FakeDragonframe(dragonframe_port)
+    discovery = AxisDiscovery()
+    listener = OscListener(
+        port=free_udp_port,
+        on_activity=lambda: None,
+        axis_discovery=discovery,
+        dragonframe_host="127.0.0.1",
+        dragonframe_port=dragonframe_port,
+    )
+    listener.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while fake_df.query_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert fake_df.query_count == 1
+
+        listener.rebind(other_port)
+        deadline = time.monotonic() + 2.0
+        while fake_df.query_count < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert fake_df.query_count == 2  # rebind triggered a second automatic query
+    finally:
+        listener.stop()
+        fake_df.stop()
+
+
+# @spec OSC-DISCOVER-003
+def test_rescan_sends_an_independent_query(free_udp_port: int) -> None:
+    dragonframe_port = free_udp_port + 1 if free_udp_port < 65000 else free_udp_port - 1
+    fake_df = _FakeDragonframe(dragonframe_port)
+    discovery = AxisDiscovery()
+    listener = OscListener(
+        port=free_udp_port,
+        on_activity=lambda: None,
+        axis_discovery=discovery,
+        dragonframe_host="127.0.0.1",
+        dragonframe_port=dragonframe_port,
+    )
+    listener.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while fake_df.query_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert fake_df.query_count == 1
+
+        listener.rescan()
+        deadline = time.monotonic() + 2.0
+        while fake_df.query_count < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert fake_df.query_count == 2
+    finally:
+        listener.stop()
+        fake_df.stop()
