@@ -194,7 +194,7 @@ class OscListener:
     every received datagram through the given AxisDiscovery.
 
     @spec OSC-LISTEN-001, OSC-LISTEN-002, OSC-LISTEN-003, OSC-LISTEN-005, OSC-LISTEN-006
-    @spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003
+    @spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003, OSC-DISCOVER-009
     """
 
     def __init__(
@@ -238,6 +238,18 @@ class OscListener:
 
         @spec OSC-DISCOVER-003
         """
+        self._send_discovery_query()
+
+    def update_dragonframe_target(self, host: str, port: int) -> None:
+        """Update the Dragonframe host/port the discovery query is sent to, and
+        immediately re-query against the new target. Without this, a Dragonframe
+        host/port change applied via the Status UI would leave discovery silently
+        querying the old target indefinitely.
+
+        @spec OSC-DISCOVER-009
+        """
+        self._dragonframe_host = host
+        self._dragonframe_port = port
         self._send_discovery_query()
 
     def _send_discovery_query(self) -> None:

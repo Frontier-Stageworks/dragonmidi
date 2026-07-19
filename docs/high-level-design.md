@@ -109,7 +109,7 @@ flowchart LR
 
 Each indicator is 3-state, not a plain lit/dim toggle: **live** (recent traffic), **error** (Native Mode handshake failure, or listener bind failure — distinct from ordinary quiet), **quiet** (no recent traffic, no error). Host/ports are lightly editable behind an explicit Apply action.
 
-**Mapping view** (opened from the status window):
+**Mapping view** (a section of the same window, below the status/config area):
 
 ```
 +-----------------------------------------------------------------------+

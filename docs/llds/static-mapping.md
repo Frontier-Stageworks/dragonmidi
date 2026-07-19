@@ -23,11 +23,15 @@ All controls are on MIDI channel 16 (zero-indexed 15), matching the nanoKONTROL 
 | Transport Record | CC 45 | Press edge | `/dragonframe/shoot`, int `1` |
 | Play | CC 41 | Press edge | `/dragonframe/play` |
 | Stop | CC 42 | Press edge | `/dragonframe/live` |
-| Fast Forward | CC 44 | Press edge | `/dragonframe/shootVideoAssist` |
-| Cycle | CC 46 | Press edge | `/dragonframe/mute` |
-| Set Marker | CC 60 | Press edge | `/dragonframe/delete` |
+| Rewind (`<<`) | CC 43 | Press edge | `/dragonframe/stepBackward` |
+| Fast Forward (`>>`) | CC 44 | Press edge | `/dragonframe/stepForward` |
+| Cycle | CC 46 | Press edge | `/dragonframe/loop` |
+| Previous Marker | CC 61 | Press edge | `/dragonframe/stepBackward` |
+| Next Marker | CC 62 | Press edge | `/dragonframe/stepForward` |
+| Previous Track | CC 58 | Press edge | `/dragonframe/stepBackward` |
+| Next Track | CC 59 | Press edge | `/dragonframe/stepForward` |
 | Scene button | Native Mode SysEx (`korg_scene`) | Press edge | `/dragonframe/black` |
-| Record 1–8, Select 1–8, Rewind, Prev/Next Marker, Prev/Next Track | various CCs | — | Not mapped by default; silently produce no OSC |
+| Record 1–8, Select 1–8, Set Marker | various CCs | — | Not mapped by default; silently produce no OSC |
 
 ## Target Types
 
@@ -48,7 +52,8 @@ Each entry has exactly one target, chosen by the user (or left at its default):
 - **Rescan to pick up newly added axes.** If the user adds an axis in Dragonframe after DragonMIDI has already discovered its axis list (or after switching to a different project), the on-demand "Rescan"/refresh action (`OSC-DISCOVER-003`, `docs/llds/osc-io.md`) re-queries `getAllPosition` and updates the discoverable list without requiring a DragonMIDI restart.
 - **No validation on min/max ordering.** `min + normalized_value * (max - min)` is a well-defined linear interpolation for any real `min`/`max` pair, including `min > max` (a legitimate reversed/inverted mapping) or `min == max` (a constant output regardless of fader position, which can be a deliberate way to always send one fixed value). Neither is rejected.
 - **Stale axis references are an accepted, undetected gap.** If the mapped axis name stops being reported by Dragonframe (the axis was deleted, or a different project with different axes was loaded), the engine keeps sending `gotoPosition` to that name regardless — Dragonframe presumably ignores it silently. DragonMIDI does not compare a mapping's target name against the current discovered list to warn about this, matching the project's general pattern of accepting rare, self-evident gaps rather than building detection machinery for them. Rescanning (above) helps a user find new axes; it does not retroactively validate mappings made against axes that have since disappeared.
-- **Switching a mapping entry's target type discards the previous target's configuration.** Retargeting a fader from, say, an OSC encoder channel to an OSC axis (direct) replaces the entry's target-specific fields entirely — the old encoder channel number is not preserved for a later switch-back. This matches "one target per entry, not multiple" cleanly and avoids stale, hidden configuration silently persisting in a mapping entry (and potentially a saved preset). This is a decision for whoever implements the Mapping View UI (still a pending cascade into `docs/llds/app-ui.md`), recorded here so it's settled before that LLD is written.
+- **Switching a mapping entry's target type discards the previous target's configuration.** Retargeting a fader from, say, an OSC encoder channel to an OSC axis (direct) replaces the entry's target-specific fields entirely — the old encoder channel number is not preserved for a later switch-back. This matches "one target per entry, not multiple" cleanly and avoids stale, hidden configuration silently persisting in a mapping entry (and potentially a saved preset). Implemented in the Mapping View UI (`docs/llds/app-ui.md`'s `UI-MAP-003`).
+- **Reverting from OSC axis back to OSC encoder is a full clear, not a swap.** `MappingEngine.clear_axis_target(key)` removes the fader's axis-target entry (and its dedup state) entirely; `process()` then falls back to the opinionated `OPINIONATED_MAP` lookup for that key on the very next event, same as if the axis target had never been set. There is no hidden "remembered" encoder-channel override to restore — a fader always reverts to its one opinionated encoder target, symmetric with the discard-on-switch behavior above.
 
 ## Trigger Semantics
 
@@ -79,12 +84,15 @@ The engine keeps a small per-control "previous normalized value" map, needed for
 | Min/max validation | None — any real min/max pair is accepted | Reject `min > max` or `min == max` | The linear interpolation formula is well-defined either way; both are legitimate (reversed mapping, constant output) |
 | Stale axis reference handling | Accepted, undetected gap — engine keeps sending to a name Dragonframe may no longer recognize | Compare against the current discovered list and warn/disable | Matches the project's pattern of accepting rare, self-evident gaps over building detection machinery |
 | Target-type switch behavior | Discard the previous target's configuration entirely | Preserve/hide it for a quick switch-back | Matches "one target per entry, not multiple"; avoids stale hidden state persisting in a mapping entry or a saved preset |
+| Reverting axis → encoder | `clear_axis_target(key)` fully removes the axis entry; engine falls back to the opinionated encoder target | Preserve the axis config for a later switch back to it | Symmetric with the switch-discards-state decision above; a fader has exactly one opinionated encoder target to fall back to, so there's nothing else to remember |
 | Unmapped controls | Silently produce no OSC | Log "unmapped control pressed" | Keeps behavior identical to the prototype's default (disabled = no OSC); avoids noise for controls with no assigned meaning yet |
 | Fader/knob update rate | Send on every distinct value, no debounce | Fixed-rate throttling (e.g. max 30/sec) | Matches prototype behavior; Dragonframe's own OSC handling is the throttle point if one is ever needed |
 | Engine statefulness | Minimal (previous-value map only) | Fully stateless (push edge-detection into MIDI-IN) | Keeps MIDI-IN a pure protocol adapter; edge-detection is inherently a mapping-semantics concern, not a MIDI-parsing concern |
 | Channel matching | Channel is one field of the match condition, same mechanism as CC number | Separate explicit channel-filter step | No new mechanism needed; a channel-16-only invariant falls out of the existing per-control match |
 | Debounce collision handling | Drop the second press-edge inside the window | Queue and re-fire after the window closes | Matches standard debounce semantics and the prototype's existing gate behavior |
 | Stuck-control initial state | Assume "not pressed" at launch; accept the one-cycle detection gap | Query controller for current state at connect | nanoKONTROL Studio has no simple state-dump facility; gap is rare and self-correcting |
+| Transport/marker/track section defaults | Rewind, Previous Marker, Previous Track all → `stepBackward`; Fast Forward, Next Marker, Next Track all → `stepForward`; Cycle → `loop` | Leave Rewind/Marker/Track unmapped (no exact Dragonframe equivalent); force each onto a distinct but unrelated command | Dragonframe has no marker or track concept over OSC, but every one of these physical controls is a "step back" or "step forward" gesture — mapping all of them to the same semantic action is a better default than leaving them silent or inventing an unrelated meaning per button |
+| Set Marker default | Unmapped (falls through to no-OSC) | Keep the prototype's `/dragonframe/delete` binding | That binding was an arbitrary leftover with no semantic relationship to "set marker," and a marker button silently deleting a frame is an actively dangerous default |
 
 ## Open Questions & Future Decisions
 
@@ -93,13 +101,13 @@ The engine keeps a small per-control "previous normalized value" map, needed for
 2. Editable map storage, direct axis-name addressing as the continuous-jog mechanism, user-specified axis scaling, and the Manual-function precondition — see Decisions & Alternatives above.
 3. Axis name entry (picker-only), min/max validation (none needed), and stale axis reference handling (accepted gap) — see Decisions & Alternatives above.
 4. Cross-spec edge audit (Phase 4): the picker-only restriction is selection-time-only, not a continuously re-enforced invariant (clarified above, consistent with the accepted-gap decision); Rescan is the mechanism for picking up newly added axes; an empty picker during the startup discovery window is acceptable, not a bug; and target-type switching discards the previous target's configuration — see the bullets above and Decisions & Alternatives.
+5. The picker-only axis-selection UI, how the mapping view surfaces "never discovered yet" vs. "discovered, zero axes," and the discard-on-target-switch behavior are implemented in `docs/llds/app-ui.md`'s Mapping View section (`UI-MAP-003` through `UI-MAP-008`).
 
 ### Deferred
 1. The jog wheel's relative-delta scale constant needs a concrete default value; the prototype leaves this to per-mapping configuration. A fixed default should be chosen empirically once hardware is available to test against, and does not block the LLD.
 2. Extending direct-axis addressing to knobs (absolute) and the jog wheel (`stepPosition`, relative) — App Delivery Phase 2, not designed yet.
 3. Whether DragonMIDI should ever detect a non-responsive axis (e.g., by comparing sent `gotoPosition` values against subsequent position broadcasts, to warn the user their axis might be `Function: Normal` with no hardware attached) — not in scope for Phase 1's minimal implementation.
 4. Exact preset persistence format (JSON schema, file location) — a code-level decision, not yet made.
-5. The picker-only axis-selection UI, how the mapping view surfaces "never discovered yet" vs. "discovered, zero axes" and an empty-during-startup picker, and the discard-on-target-switch behavior, all belong in `docs/llds/app-ui.md`'s Mapping View section, which has not yet been updated for this target type — a pending cascade, not a decision made here (the decisions themselves are settled above; only their UI implementation is pending).
 
 ## References
 

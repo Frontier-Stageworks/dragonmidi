@@ -4,7 +4,7 @@
 @spec OSC-LISTEN-001, OSC-LISTEN-002, OSC-LISTEN-003, OSC-LISTEN-005, OSC-LISTEN-006
 @spec OSC-CONFIG-001, OSC-CONFIG-002
 @spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003, OSC-DISCOVER-004
-@spec OSC-DISCOVER-005, OSC-DISCOVER-006, OSC-DISCOVER-007, OSC-DISCOVER-008
+@spec OSC-DISCOVER-005, OSC-DISCOVER-006, OSC-DISCOVER-007, OSC-DISCOVER-008, OSC-DISCOVER-009
 """
 from __future__ import annotations
 
@@ -512,3 +512,37 @@ def test_rescan_sends_an_independent_query(free_udp_port: int) -> None:
     finally:
         listener.stop()
         fake_df.stop()
+
+
+# @spec OSC-DISCOVER-009
+def test_update_dragonframe_target_redirects_the_discovery_query(free_udp_port: int) -> None:
+    old_port = free_udp_port + 1 if free_udp_port < 65000 else free_udp_port - 1
+    new_port = free_udp_port + 2 if free_udp_port < 65000 else free_udp_port - 2
+    old_df = _FakeDragonframe(old_port, axis_name="OLD")
+    new_df = _FakeDragonframe(new_port, axis_name="NEW")
+    discovery = AxisDiscovery()
+    listener = OscListener(
+        port=free_udp_port,
+        on_activity=lambda: None,
+        axis_discovery=discovery,
+        dragonframe_host="127.0.0.1",
+        dragonframe_port=old_port,
+    )
+    listener.start()
+    try:
+        deadline = time.monotonic() + 2.0
+        while old_df.query_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert old_df.query_count == 1
+
+        listener.update_dragonframe_target("127.0.0.1", new_port)
+        deadline = time.monotonic() + 2.0
+        while new_df.query_count < 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert new_df.query_count == 1
+        # The old target must not receive a second query - the target was redirected, not duplicated.
+        assert old_df.query_count == 1
+    finally:
+        listener.stop()
+        old_df.stop()
+        new_df.stop()

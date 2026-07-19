@@ -11,7 +11,10 @@ This is the glue-and-presentation layer: it starts the MIDI Input Adapter and OS
 - `dragonmidi/config.py` — the editable host/port fields' pending-vs-applied state and Apply/validation logic.
 - `dragonmidi/queue_drain.py` — the generic full-drain-per-tick queue helper.
 - `dragonmidi/shutdown.py` — the per-step-isolated, timeout-bounded shutdown sequence runner.
-- `dragonmidi/app.py` — the thin Qt shell: real widgets, a real `QTimer`, and the real MIDI/OSC background threads, wired to the modules above. This is the only module that requires a Qt application to exercise, and it is expected to carry little independent logic of its own.
+- `dragonmidi/mapping_view_model.py` — pure functions computing the Mapping View's table rows, axis-picker candidates, and min/max field validation from `MappingEngine` and `AxisDiscovery` state (below).
+- `dragonmidi/status_widgets.py` — the `IndicatorRow` Qt widget (dot + label), the only Qt piece of the Signal Monitor's presentation.
+- `dragonmidi/mapping_widgets.py` — the Mapping View's Qt widgets (`MappingView`, `_AxisTargetEditor`), wiring `mapping_view_model.py`'s pure functions to real combo boxes/table cells.
+- `dragonmidi/app.py` — the thin Qt shell: `DragonMidiWindow` and `run()`. Constructs the real widgets, timers, and MIDI/OSC background threads, and wires them to the modules above. This and the two widget modules above are the only modules that require a Qt application to exercise; none of them carry independent logic beyond wiring.
 
 ## Signal Monitor
 
@@ -33,22 +36,63 @@ This is the glue-and-presentation layer: it starts the MIDI Input Adapter and OS
 ## Status UI
 
 ```
-+-----------------------------------------------+
-|  DragonMIDI                                    |
-|                                                 |
-|   ●  MIDI signal        nanoKONTROL Studio      |
-|   ●  Dragonframe signal  127.0.0.1:7011 (listen)|
-|                                                 |
-|   Sending to: [127.0.0.1] [7010]   [Apply]     |
-+-----------------------------------------------+
++-----------------------------------------------------------------------+
+|  DragonMIDI                                                            |
+|                                                                         |
+|   ●  MIDI signal        nanoKONTROL Studio                             |
+|   ●  Dragonframe signal  127.0.0.1:7011 (listen)                       |
+|                                                                         |
+|   Sending to: [127.0.0.1] [7010]   Listen port: [7011]   [Apply]      |
+|                                                                         |
+|   Mapping                                                              |
+|  +---------------------------------------------------------------+   |
+|  | Name       MIDI            Trigger      Target type   Target   |   |
+|  |-------------------------------------------------------------- |   |
+|  | Fader 1    CC0, ch16       Absolute     OSC axis ▾    [PAN ▾]  |   |
+|  | Fader 2    CC1, ch16       Absolute     OSC encoder   Encoder 2|   |
+|  |  ...        ...             ...          ...           ...     |   |
+|  +---------------------------------------------------------------+   |
+|  [Rescan axes]                                                        |
++-----------------------------------------------------------------------+
 ```
 
 - Two indicator rows, each a **3-state** colored dot plus a short label: **green/lit** = live (recent activity), **amber/red** = error (Native Mode handshake failed for MIDI; listener bind failed for Dragonframe), **dim/gray** = quiet (neither — normal "waiting" state, not a failure). Error takes visual precedence over quiet.
 - The MIDI row's secondary text names the connected device once found; before discovery it reads something like "Waiting for nanoKONTROL Studio…". This text is driven by the MIDI Input Adapter's connection status (`midi-input.md`), **not** by the indicator dot's live/error/quiet state — the two are independent axes. **This means the dot and the label can validly disagree**: a physically connected nanoKONTROL Studio whose Native Mode handshake just failed shows the device's name *and* an amber error dot simultaneously. That combination is intended — it tells the user "your controller is plugged in, but something's wrong with it" — not a bug to be reconciled into one state.
 - The Dragonframe row's secondary text shows the local listen port; the "Sending to" fields show the configured Dragonframe host:port.
 - Host, Dragonframe port, and listen port are lightly editable (small text fields) behind an explicit **Apply** action — edits do not take effect, and no rebind happens, until Apply is pressed. This matches the prototype's existing Apply-button pattern and avoids rebinding on invalid or partial in-progress text. Applying a Dragonframe port equal to the listen port is rejected per `osc-io.md`'s config-apply validation. Applying a changed local listen port triggers the OSC Listener to close its existing socket and rebind to the new port (`osc-io.md`'s rebind-on-config-change rule) — without this, editing the field would silently do nothing.
-- These fields are machine-specific network configuration, not the opinionated control mapping, which has no UI surface at all in this phase.
-- No log pane, no mapping table, no menu bar (explicit non-goals carried from the HLD).
+- These fields are machine-specific network configuration, distinct from the opinionated control mapping, which has its own surface below.
+- No log pane, no menu bar (explicit non-goals carried from the HLD).
+
+## Mapping View
+
+Embedded directly in the main window, as a section below the host/port configuration form — one window, not a separate dialog. Scoped to this phase's capability only — assigning a fader to a discovered Dragonframe axis. The full editor implied by the HLD's mockup (Add/Edit/Duplicate/Remove, MIDI-learn, presets, arbitrary custom OSC paths) is Phase 2 and not built here.
+
+```
++-----------------------------------------------------------------------+
+| Name       MIDI            Trigger      Target type   Target          |
+|-------------------------------------------------------------------------|
+| Fader 1    CC0, ch16       Absolute     OSC axis ▾    [PAN ▾] [0][100] |
+| Fader 2    CC1, ch16       Absolute     OSC encoder   Encoder 2        |
+| Knob 1     CC16, ch16      Absolute     OSC encoder   Encoder 9        |
+| Mute 1     CC48, ch16      Press        OSC action    Reset enc. 1     |
+| Play       CC41, ch16      Press        OSC action    Play            |
+|  ...        ...             ...          ...           ...             |
++-----------------------------------------------------------------------+
+[Rescan axes]
+```
+
+- One row per `OPINIONATED_MAP` entry, in table order. Rows are read-only except for the "Target type" and "Target" cells of the 8 fader rows (`MAP-AXIS-004`) — knobs, buttons, and the jog wheel display their fixed opinionated target with no controls to change it.
+- A fader row's "Target type" cell is a two-way toggle: **OSC encoder** (the opinionated default, `/dragonframe/encoder/<n>`) or **OSC axis**. Switching to OSC axis reveals an axis-name picker (pre-selecting nothing) and two numeric fields pre-filled with `0.0`/`100.0`; switching back to OSC encoder hides them and calls `MappingEngine.clear_axis_target(key)`, which is always safe to call even if no axis target was ever actually established for that key (`MAP-AXIS-007`).
+- **The engine's live target can lag the row's displayed target type.** Revealing the axis controls does not, by itself, call `set_axis_target` — until the user picks a name, the fader keeps driving its previous opinionated OSC encoder target even though the row now reads "OSC axis." This mirrors `MAP-AXIS-006`'s existing principle that the engine only ever acts on the last target it was actually given, never on UI intent alone.
+- The axis-name picker lists exactly the names currently in `AxisDiscovery.axes` (`MAP-AXIS-003`) — never free-text. Its content depends on discovery state:
+  - `axes is None` (never queried, or a query is outstanding): picker shows "Discovering…" and is disabled.
+  - `axes == {}` (queried, zero axes — including the confirmed zero-axes-sends-nothing case, resolved via `OSC-DISCOVER-008`'s timeout): picker shows "No axes found" and is disabled.
+  - `axes` non-empty: picker lists the names, sorted for stable display order.
+  - This candidate list is recomputed every UI tick (same tick that drains the Signal Monitor and redraws the status indicators), not only when the Mapping View is opened or Rescan is pressed — a Rescan response or ordinary discovery arriving while the view is open updates the picker within one tick, with no reopen needed.
+- **A row's picker always shows its currently configured axis name as the selected value**, even if that name has since dropped out of the live discovered list (device reconfigured, Dragonframe restarted with a different project) — it is not hidden or replaced by a placeholder. The rest of the list still reflects the current discovery state; the configured name is simply always present as the current selection, greyed to indicate it can't be re-picked once deselected if it's no longer a real candidate. The engine keeps sending to that name regardless (`MAP-AXIS-006`); the picker's job is to restrict *new* selections, not to babysit existing ones.
+- Selecting a name, once both it and valid min/max values are present, calls `MappingEngine.set_axis_target(key, axis_name, min_value, max_value)` immediately — there is no separate "Save" step, matching the fader's live-tracking behavior everywhere else in the app. Min/max accept any real values including `min > max` or `min == max` (`MAP-AXIS-002`) — no field-level validation beyond "is a number." Text that fails to parse as a number is not applied — the row's last successfully-applied target (if any) is left in effect, with no error dialog.
+- **Rescan axes** calls `OscListener.rescan()` directly; it does not reset any row's already-configured target, only what the picker offers going forward.
+- The view has no persistence: like the status window's host/port fields, it reflects live in-memory `MappingEngine`/`AxisDiscovery` state and resets to the opinionated defaults on next launch — no preset file in this phase.
 
 ## Bootstrap and Shutdown
 
@@ -72,6 +116,16 @@ This is the glue-and-presentation layer: it starts the MIDI Input Adapter and OS
 | Dot/label consistency | One Signal Monitor read per tick feeds both | Independent reads for dot and label | Guarantees by construction that the two can never show different ticks' state |
 | Dot state vs. connection-status label | Two independent axes; may disagree (e.g. connected device name + error dot) | Fold connection status into the 3-state model as a 4th state | "Is a controller present" and "is it healthy" are independent questions; collapsing them loses the distinction between device-present-but-broken and no-device-at-all |
 | Listen-port Apply behavior | Triggers listener socket close+rebind (`osc-io.md`) | Require app restart for listen-port changes | Apply already exists as the change mechanism; a field that visibly does nothing on Apply would be a worse experience than a working rebind |
+| Mapping View scope | Fader target-type toggle only (OSC encoder ↔ OSC axis); other rows read-only | Full editor (Add/Edit/Duplicate/Remove, MIDI-learn, presets) in this phase | Matches `MAP-AXIS-004`'s fader-only restriction and the HLD's Phase 1/Phase 2 split; the full editor is explicitly Phase 2 |
+| Mapping View window placement | Embedded as a section of the single main window | Separate dialog opened on demand | One window is simpler for an always-on utility meant to be glanced at continuously, and keeps the mapping table visible without an extra open/close step |
+| Mapping View apply timing | Immediate — picker selection and min/max fields call `set_axis_target` on change, no Save step | Explicit Save/Cancel per row | Matches the rest of the app's live-tracking behavior (faders already stream continuously); a Save step would be the only delayed-apply control in the UI |
+| Mapping View persistence | None — resets to opinionated defaults each launch | Persist fader axis assignments across launches | Consistent with host/port fields' current no-persistence state; a persisted mapping is a bigger step than this phase's scope |
+| Stale axis reference in picker | Keep showing the configured name (greyed out), engine still sends to it | Auto-clear the row's target when its axis drops out of the discovered list | Matches `MAP-AXIS-006` — the engine already sends unconditionally; silently clearing the UI's record of user intent would contradict that |
+| Engine target vs. displayed target type while mid-edit | Allowed to lag — revealing axis controls doesn't retarget until a name is picked | Force an immediate placeholder target the instant OSC axis is selected | The engine should only ever act on a target it was explicitly given; an auto-chosen placeholder axis name would be worse than briefly lagging the display |
+| Default min/max on reveal | Pre-filled `0.0`/`100.0` | Start blank, require the user to fill both before anything applies | Lets picking just a name immediately produce a valid, immediately-applied target, consistent with the no-Save-step decision |
+| Invalid min/max text | Not applied; last successfully-applied target stays in effect, no error dialog | Reject with a visible error state | Matches the app's general pattern of accepting rare input mistakes without new error-handling machinery |
+| Picker's current-value display for a stale name | Always shown as the selected value, greyed if no longer a real candidate | Show a separate "current: X" label next to an otherwise-empty disabled picker | One widget, one source of truth for "what is this row actually configured to," rather than splitting it across two UI elements |
+| Picker refresh cadence | Recomputed every UI tick, same tick as the status indicators | Only recomputed when the Mapping View is opened or Rescan is pressed | Consistent with the app's existing "single read per tick" pattern; avoids a picker that looks stale until manually reopened |
 
 ## Open Questions & Future Decisions
 
@@ -79,10 +133,13 @@ This is the glue-and-presentation layer: it starts the MIDI Input Adapter and OS
 1. Indicator state model (3-state), `last_activity` initialization, clock source, liveness boundary, queue drain strategy, shutdown robustness, live host/port edit behavior, and dot/label consistency — see Decisions & Alternatives above.
 2. Native Mode handshake failure (`midi-input.md`) and listener bind failure (`osc-io.md`) both surface via the shared 3-state indicator's *error* state, as one design rather than two separate mechanisms.
 3. Connection-status label and indicator dot are independent axes that may validly disagree; Apply-triggered listener rebind on listen-port change — see Decisions & Alternatives above.
+4. Mapping View scope, apply timing, persistence, and stale-axis-reference handling — see Decisions & Alternatives above.
+5. Phase 4 edge audit: engine-target-vs-displayed-type lag while mid-edit, default min/max on reveal, invalid min/max text handling, the picker's stale-name current-value display, and picker refresh cadence — see Decisions & Alternatives above.
 
 ### Deferred
 1. Should the Dragonframe host, Dragonframe port, and local listen port persist across app launches (like the prototype's JSON state file), or always reset to their defaults? A minimal persisted-settings file is small in scope but is the first piece of "state the app remembers," which is adjacent to the deferred configuration phase.
-2. Exact `LIVENESS_WINDOW` value (proposed 2.0s) is a tunable constant pending real hardware testing, not a hard requirement yet.
+2. Phase 2's full Mapping View (Add/Edit/Duplicate/Remove, MIDI-learn, presets, arbitrary custom OSC paths, knob/button/jog-wheel retargeting) is out of scope for this section entirely — see the HLD's Phase 2 description.
+3. Exact `LIVENESS_WINDOW` value (proposed 2.0s) is a tunable constant pending real hardware testing, not a hard requirement yet.
 
 ## References
 

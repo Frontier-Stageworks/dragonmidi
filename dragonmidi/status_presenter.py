@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .signal_monitor import ChannelState
+from .signal_monitor import ChannelState, SignalMonitor
 
 _WAITING_LABEL = "Waiting for nanoKONTROL Studio…"
 
@@ -31,7 +31,7 @@ def dragonframe_indicator(state: ChannelState, listen_port: int) -> IndicatorVie
 
 
 def compute_status_snapshot(
-    monitor,
+    monitor: SignalMonitor,
     midi_connected: bool,
     midi_device_name: str | None,
     listen_port: int,

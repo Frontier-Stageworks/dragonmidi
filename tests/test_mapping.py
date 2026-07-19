@@ -2,6 +2,7 @@
 
 @spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-004, MAP-TABLE-005
 @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
+@spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.events import MidiEvent
-from dragonmidi.mapping import CHANNEL, FADER_KEYS, MappingEngine, decode_sign_magnitude
+from dragonmidi.mapping import CHANNEL, FADER_KEYS, OPINIONATED_MAP, MappingEngine, decode_sign_magnitude
 
 FADER_CCS = list(range(0, 8))  # CC 0-7 -> encoder 1-8
 KNOB_CCS = list(range(16, 24))  # CC 16-23 -> encoder 9-16
@@ -19,13 +20,17 @@ BUTTON_CCS_TO_ADDRESS = {
     47: "/dragonframe/encoderReset/17",  # Return to Zero
     45: "/dragonframe/shoot",  # Transport Record
     41: "/dragonframe/play",
-    42: "/dragonframe/live",
-    44: "/dragonframe/shootVideoAssist",
-    46: "/dragonframe/mute",
-    60: "/dragonframe/delete",
+    42: "/dragonframe/live",  # Stop
+    46: "/dragonframe/loop",  # Cycle
+    43: "/dragonframe/stepBackward",  # Rewind (<<)
+    44: "/dragonframe/stepForward",  # Fast Forward (>>)
+    61: "/dragonframe/stepBackward",  # Previous Marker
+    62: "/dragonframe/stepForward",  # Next Marker
+    58: "/dragonframe/stepBackward",  # Previous Track
+    59: "/dragonframe/stepForward",  # Next Track
 }
 JOG_CC = 110
-UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 43, 61, 62, 58, 59]  # Record/Select/Rewind/markers/tracks
+UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 60]  # Record/Select/Set Marker
 
 
 def cc_event(number: int, value: int, channel: int = CHANNEL) -> MidiEvent:
@@ -442,3 +447,45 @@ def test_setting_an_axis_target_discards_prior_encoder_dedup_state() -> None:
     result = engine.process(cc_event(0, 64), now=0.001)
     assert result is not None
     assert result.address == "/dragonframe/axis/PAN/gotoPosition"
+
+
+# --- MAP-AXIS-007: clearing an axis target reverts to the opinionated encoder target ---
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec MAP-AXIS-007
+def test_clear_axis_target_reverts_to_opinionated_encoder(number: int) -> None:
+    key = ("cc", number)
+    engine = MappingEngine()
+    engine.set_axis_target(key, "PAN", 0.0, 100.0)
+    engine.clear_axis_target(key)
+
+    result = engine.process(cc_event(number, 64), now=0.0)
+    assert result is not None
+    assert result.address == OPINIONATED_MAP[key].address
+    assert not result.address.startswith("/dragonframe/axis/")
+
+
+# @spec MAP-AXIS-007
+def test_clear_axis_target_discards_dedup_state_from_the_axis_target() -> None:
+    key = ("cc", 0)
+    engine = MappingEngine()
+    engine.set_axis_target(key, "PAN", 0.0, 100.0)
+    engine.process(cc_event(0, 64), now=0.0)  # establish previous-value state under the axis target
+
+    engine.clear_axis_target(key)
+    # The same raw value that would have been deduped under the axis target must fire
+    # again under the restored encoder target, proving the clear discarded prior state.
+    result = engine.process(cc_event(0, 64), now=0.001)
+    assert result is not None
+    assert result.address == OPINIONATED_MAP[key].address
+
+
+# @spec MAP-AXIS-007
+def test_clear_axis_target_on_a_key_with_no_axis_target_is_a_noop() -> None:
+    key = ("cc", 0)
+    engine = MappingEngine()
+    engine.clear_axis_target(key)  # must not raise
+
+    result = engine.process(cc_event(0, 64), now=0.0)
+    assert result is not None
+    assert result.address == OPINIONATED_MAP[key].address

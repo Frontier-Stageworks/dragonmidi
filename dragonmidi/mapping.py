@@ -64,9 +64,13 @@ OPINIONATED_MAP: dict[_Key, _MapEntry] = {
     ("cc", 45): _MapEntry("press", "/dragonframe/shoot", args=(1,)),  # Transport Record
     ("cc", 41): _MapEntry("press", "/dragonframe/play"),
     ("cc", 42): _MapEntry("press", "/dragonframe/live"),
-    ("cc", 44): _MapEntry("press", "/dragonframe/shootVideoAssist"),
-    ("cc", 46): _MapEntry("press", "/dragonframe/mute"),
-    ("cc", 60): _MapEntry("press", "/dragonframe/delete"),
+    ("cc", 46): _MapEntry("press", "/dragonframe/loop"),  # Cycle
+    ("cc", 43): _MapEntry("press", "/dragonframe/stepBackward"),  # Rewind (<<)
+    ("cc", 44): _MapEntry("press", "/dragonframe/stepForward"),  # Fast Forward (>>)
+    ("cc", 61): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Marker
+    ("cc", 62): _MapEntry("press", "/dragonframe/stepForward"),  # Next Marker
+    ("cc", 58): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Track
+    ("cc", 59): _MapEntry("press", "/dragonframe/stepForward"),  # Next Track
     ("cc", 110): _MapEntry("relative", "/dragonframe/encoder/17"),  # jog wheel
     ("korg_scene", None): _MapEntry("press", "/dragonframe/black"),
 }
@@ -77,7 +81,7 @@ class MappingEngine:
 
     @spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-004, MAP-TABLE-005
     @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
-    @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006
+    @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
     """
 
     def __init__(self) -> None:
@@ -104,6 +108,19 @@ class MappingEngine:
         self._axis_targets[key] = _AxisTarget(axis_name, min_value, max_value)
         # Switching target discards prior dedup state for this key (LLD: "switching a
         # mapping entry's target type discards the previous target's configuration").
+        self._previous_value.pop(key, None)
+
+    def axis_target(self, key: _Key) -> _AxisTarget | None:
+        """Read-only lookup of a fader's current OSC axis (direct) target, if any."""
+        return self._axis_targets.get(key)
+
+    def clear_axis_target(self, key: _Key) -> None:
+        """Revert a fader from its OSC axis (direct) target back to its opinionated
+        OSC encoder channel target. A no-op if the key has no axis target set.
+
+        @spec MAP-AXIS-007
+        """
+        self._axis_targets.pop(key, None)
         self._previous_value.pop(key, None)
 
     def process(self, event: MidiEvent, now: float) -> OscMessage | None:
