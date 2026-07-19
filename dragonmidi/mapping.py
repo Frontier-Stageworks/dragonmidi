@@ -9,6 +9,9 @@ DEBOUNCE_SECONDS = 0.080
 
 _Key = tuple[str, "int | None"]
 
+# @spec MAP-AXIS-004
+FADER_KEYS: frozenset[_Key] = frozenset(("cc", i) for i in range(8))
+
 
 def decode_sign_magnitude(raw: int) -> int:
     """KORG sign-magnitude relative decode: 0/64 -> 0, 1-63 -> +, 65-127 -> -.
@@ -27,6 +30,13 @@ class _MapEntry:
     kind: str  # "absolute" | "press" | "relative"
     address: str
     args: tuple = ()
+
+
+@dataclass(frozen=True)
+class _AxisTarget:
+    axis_name: str
+    min_value: float
+    max_value: float
 
 
 def _fader_entries() -> dict[_Key, _MapEntry]:
@@ -67,12 +77,14 @@ class MappingEngine:
 
     @spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-004, MAP-TABLE-005
     @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
+    @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006
     """
 
     def __init__(self) -> None:
         self._previous_value: dict[_Key, float] = {}
         self._pressed_state: dict[_Key, bool] = {}
         self._last_fired: dict[_Key, float] = {}
+        self._axis_targets: dict[_Key, _AxisTarget] = {}
 
     def reset(self) -> None:
         self._previous_value.clear()
@@ -82,6 +94,18 @@ class MappingEngine:
     def tracked_controls(self) -> set[_Key]:
         return set(self._previous_value) | set(self._pressed_state) | set(self._last_fired)
 
+    def set_axis_target(self, key: _Key, axis_name: str, min_value: float, max_value: float) -> None:
+        """Retarget a fader to send gotoPosition to a named Dragonframe axis.
+
+        @spec MAP-AXIS-002, MAP-AXIS-004
+        """
+        if key not in FADER_KEYS:
+            raise ValueError(f"OSC axis (direct) target is only available for fader controls, got {key!r}")
+        self._axis_targets[key] = _AxisTarget(axis_name, min_value, max_value)
+        # Switching target discards prior dedup state for this key (LLD: "switching a
+        # mapping entry's target type discards the previous target's configuration").
+        self._previous_value.pop(key, None)
+
     def process(self, event: MidiEvent, now: float) -> OscMessage | None:
         if event.type == "korg_scene":
             key: _Key = ("korg_scene", None)
@@ -90,6 +114,9 @@ class MappingEngine:
             if event.channel != CHANNEL:
                 return None
             key = (event.type, event.number)
+            axis_target = self._axis_targets.get(key)
+            if axis_target is not None:
+                return self._process_axis_target(key, event, axis_target)
             entry = OPINIONATED_MAP.get(key)
 
         if entry is None:
@@ -118,3 +145,13 @@ class MappingEngine:
             return None
         self._last_fired[key] = now
         return OscMessage(entry.address, entry.args)
+
+    def _process_axis_target(self, key: _Key, event: MidiEvent, axis_target: _AxisTarget) -> OscMessage | None:
+        """@spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-006"""
+        previous = self._previous_value.get(key)
+        self._previous_value[key] = event.normalized
+        if previous is not None and previous == event.normalized:
+            return None
+        position = axis_target.min_value + event.normalized * (axis_target.max_value - axis_target.min_value)
+        address = f"/dragonframe/axis/{axis_target.axis_name}/gotoPosition"
+        return OscMessage(address, (float(position),))
