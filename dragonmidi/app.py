@@ -147,7 +147,7 @@ class DragonMidiWindow(QMainWindow):
         self._dragonframe_row.set_state(snapshot.dragonframe.state, snapshot.dragonframe.label)
 
     def _process_midi_event(self, event: MidiEvent) -> None:
-        message = self._mapping.process(event, now=time.monotonic())
+        message = self._mapping.process(event, now=time.monotonic(), axis_positions=self._axis_discovery.axes)
         if message is not None:
             self._osc_client.send(message.address, *message.args)
 

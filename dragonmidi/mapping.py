@@ -89,6 +89,7 @@ class MappingEngine:
     @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
     @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
     @spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
+    @spec MAP-BANK-008
     """
 
     def __init__(self) -> None:
@@ -99,6 +100,12 @@ class MappingEngine:
         # Faders explicitly switched to OSC encoder mode; absence = OSC axis mode (the
         # default - @spec MAP-AXIS-008).
         self._encoder_mode: set[_Key] = set()
+        # Fallback estimate of each fader's axis's current absolute position, keyed by
+        # fader key, built entirely from DragonMIDI's own sends. Used to clamp Knob N's
+        # cumulative nudges to the fader's [min, max] range only when no live position
+        # reading is available from Dragonframe (see `process`'s `axis_positions` param)
+        # (@spec MAP-BANK-008).
+        self._axis_position: dict[_Key, float] = {}
 
     def reset(self) -> None:
         self._previous_value.clear()
@@ -129,6 +136,7 @@ class MappingEngine:
         self._encoder_mode.discard(key)
         if was_encoder_mode:
             self._discard_bank_knob_dedup(key)
+        self._axis_position.pop(key, None)
 
     def set_axis_target(self, key: _Key, axis_name: str, min_value: float, max_value: float) -> None:
         """Retarget a fader to send gotoPosition to a named Dragonframe axis.
@@ -145,6 +153,9 @@ class MappingEngine:
         # Switching target discards prior dedup state for this key (LLD: "switching a
         # mapping entry's target type discards the previous target's configuration").
         self._previous_value.pop(key, None)
+        # A new axis name (or new min/max) invalidates any tracked position estimate,
+        # even without a mode transition - it may be a different axis entirely.
+        self._axis_position.pop(key, None)
 
     def axis_target(self, key: _Key) -> _AxisTarget | None:
         """Read-only lookup of a fader's current OSC axis (direct) target, if any."""
@@ -160,10 +171,20 @@ class MappingEngine:
         self._encoder_mode.add(key)
         self._axis_targets.pop(key, None)
         self._previous_value.pop(key, None)
+        self._axis_position.pop(key, None)
         if not was_encoder_mode:
             self._discard_bank_knob_dedup(key)
 
-    def process(self, event: MidiEvent, now: float) -> OscMessage | None:
+    def process(
+        self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None
+    ) -> OscMessage | None:
+        """`axis_positions` is the OSC Listener's most recently observed position per
+        axis name (`AxisDiscovery.axes`), if available - used to clamp Knob N's nudges
+        against Dragonframe's actual reported position rather than only an internal
+        estimate. Optional: faders and buttons ignore it entirely.
+
+        @spec MAP-BANK-008
+        """
         if event.type == "korg_scene":
             key: _Key = ("korg_scene", None)
             entry = OPINIONATED_MAP.get(key)
@@ -182,7 +203,7 @@ class MappingEngine:
             if fader_key is not None and self.is_axis_mode(fader_key):
                 axis_target = self._axis_targets.get(fader_key)
                 if axis_target is not None:
-                    return self._process_bank_derived(key, event, now, axis_target)
+                    return self._process_bank_derived(key, event, now, fader_key, axis_target, axis_positions)
                 # Bank's fader is in axis mode but has no name yet: falls through to
                 # this control's own opinionated entry below, same as MAP-BANK-004's
                 # "no axis assigned" fallback.
@@ -223,13 +244,20 @@ class MappingEngine:
         if previous is not None and previous == event.normalized:
             return None
         position = axis_target.min_value + event.normalized * (axis_target.max_value - axis_target.min_value)
+        self._axis_position[key] = position
         address = f"/dragonframe/axis/{axis_target.axis_name}/gotoPosition"
         return OscMessage(address, (float(position),))
 
     def _process_bank_derived(
-        self, key: _Key, event: MidiEvent, now: float, axis_target: _AxisTarget
+        self,
+        key: _Key,
+        event: MidiEvent,
+        now: float,
+        fader_key: _Key,
+        axis_target: _AxisTarget,
+        axis_positions: "dict[str, float] | None",
     ) -> OscMessage | None:
-        """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-005"""
+        """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-005, MAP-BANK-008"""
         _, number = key
         axis_path = f"/dragonframe/axis/{axis_target.axis_name}"
         if _KNOB_BANK_OFFSET <= number < _KNOB_BANK_OFFSET + 8:
@@ -240,7 +268,28 @@ class MappingEngine:
             raw_delta = event.raw_value - previous
             if raw_delta == 0:
                 return None
-            return OscMessage(f"{axis_path}/stepPosition", (float(raw_delta) * _KNOB_STEP_SCALE,))
+            delta = float(raw_delta) * _KNOB_STEP_SCALE
+
+            low, high = sorted((axis_target.min_value, axis_target.max_value))
+            live_position = (axis_positions or {}).get(axis_target.axis_name)
+            # Prefer Dragonframe's own last-reported position (authoritative, self-
+            # correcting) over the internal estimate, which only serves as a fallback
+            # for when no live reading is available yet for this axis.
+            current_position = live_position if live_position is not None else self._axis_position.get(fader_key, low)
+            new_position = current_position + delta
+            if low <= new_position <= high:
+                # Common case: no clamping needed - use the exact delta rather than
+                # recovering it via position subtraction, which can reintroduce
+                # floating-point error even when no clamping actually occurred.
+                clamped_delta = delta
+                clamped_position = new_position
+            else:
+                clamped_position = max(low, min(high, new_position))
+                clamped_delta = clamped_position - current_position
+                if clamped_delta == 0:
+                    return None  # already at the boundary in the requested direction
+            self._axis_position[fader_key] = clamped_position
+            return OscMessage(f"{axis_path}/stepPosition", (float(clamped_delta),))
         if _MUTE_BANK_OFFSET <= number < _MUTE_BANK_OFFSET + 8:
             return self._process_press(key, event, now, f"{axis_path}/setZero")
         # Solo

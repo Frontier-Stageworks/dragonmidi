@@ -5,6 +5,7 @@
 @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
 @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
 @spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
+@spec MAP-BANK-008, MAP-BANK-009
 """
 from __future__ import annotations
 
@@ -527,7 +528,12 @@ def test_knob_sends_step_position_as_the_change_since_its_own_last_reading(
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    # A wide range, with a real fader-established position safely in the middle of
+    # it, so MAP-BANK-008's clamping never interferes - this test is only about the
+    # delta formula; clamping (including the no-established-position default) has
+    # its own dedicated tests below.
+    engine.set_axis_target(fader_key, "PAN", -1000.0, 1000.0)
+    engine.process(cc_event(fader_number, 64), now=-1.0)  # establishes a mid-range position
     engine.process(cc_event(knob_number, first_raw), now=0.0)  # establish baseline
 
     result = engine.process(cc_event(knob_number, second_raw), now=0.001)
@@ -664,3 +670,118 @@ def test_enter_axis_mode_alone_discards_knob_dedup_on_transition(fader_number: i
     second = engine.process(cc_event(knob_number, 55), now=1.001)
     assert second is not None
     assert second.args == (5.0 * _KNOB_STEP_SCALE,)
+
+
+# --- Knob position clamping (MAP-BANK-008, MAP-BANK-009) ---
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-008
+def test_knob_nudge_reduced_to_reach_the_lower_bound_exactly(fader_number: int) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)  # normalized*127 == raw_value, for easy math
+    engine.process(cc_event(fader_number, 5), now=-1.0)  # establishes position 5.0
+    engine.process(cc_event(knob_number, 100), now=0.0)  # establish knob baseline
+
+    result = engine.process(cc_event(knob_number, 0), now=0.001)  # raw delta -100 -> requested delta -10.0
+    assert result is not None
+    assert result.address == "/dragonframe/axis/PAN/stepPosition"
+    assert result.args == (-5.0,)  # reduced from -10.0 to land exactly on the 0.0 floor
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-008
+def test_knob_nudge_already_at_lower_bound_sends_nothing(fader_number: int) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)
+    engine.process(cc_event(fader_number, 0), now=-1.0)  # establishes position 0.0, the floor itself
+    engine.process(cc_event(knob_number, 100), now=0.0)  # establish knob baseline
+
+    result = engine.process(cc_event(knob_number, 0), now=0.001)  # requests a further negative move
+    assert result is None
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-008
+def test_knob_nudge_reduced_to_reach_the_upper_bound_exactly(fader_number: int) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)
+    engine.process(cc_event(fader_number, 122), now=-1.0)  # establishes position 122.0
+    engine.process(cc_event(knob_number, 0), now=0.0)  # establish knob baseline
+
+    result = engine.process(cc_event(knob_number, 100), now=0.001)  # raw delta +100 -> requested delta +10.0
+    assert result is not None
+    assert result.args == (5.0,)  # reduced from +10.0 to land exactly on the 127.0 ceiling
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-008
+def test_knob_clamp_bounds_are_order_independent(fader_number: int) -> None:
+    """min > max (MAP-AXIS-002 permits it) still clamps against sorted(min, max)."""
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 127.0, 0.0)  # min > max
+    engine.process(cc_event(fader_number, 5), now=-1.0)  # normalized*(0-127)+127 == 122.0
+    engine.process(cc_event(knob_number, 0), now=0.0)  # establish knob baseline
+
+    result = engine.process(cc_event(knob_number, 100), now=0.001)  # requested delta +10.0
+    assert result is not None
+    assert result.args == (5.0,)  # still clamped to the 127.0 ceiling, whichever field it came from
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-009
+def test_knob_position_defaults_to_the_lower_bound_with_no_fader_send_and_no_live_reading(
+    fader_number: int,
+) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)  # fader never sends a gotoPosition
+    engine.process(cc_event(knob_number, 100), now=0.0)  # establish knob baseline
+
+    result = engine.process(cc_event(knob_number, 0), now=0.001)  # any negative delta
+    assert result is None  # already assumed to be at the 0.0 floor
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-009
+def test_knob_clamp_prefers_live_reported_position_over_internal_estimate(fader_number: int) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # fader never sends -> internal estimate is 0.0 (the floor)
+    engine.process(cc_event(knob_number, 50), now=0.0)  # establish knob baseline
+
+    # Without the live reading, this delta (-5.0) would clamp against the internal
+    # estimate's floor (0.0) and send nothing. With Dragonframe reporting 60.0 live,
+    # it should be treated as comfortably mid-range instead.
+    result = engine.process(cc_event(knob_number, 0), now=0.001, axis_positions={"PAN": 60.0})
+    assert result is not None
+    assert result.args == (-5.0,)
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-009
+def test_knob_clamp_falls_back_to_internal_estimate_when_no_live_reading_for_this_axis(
+    fader_number: int,
+) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # internal estimate is 0.0 (the floor)
+    engine.process(cc_event(knob_number, 50), now=0.0)  # establish knob baseline
+
+    # axis_positions has no entry for "PAN" - must fall back to the internal estimate
+    # (0.0), which is already at the floor, so the negative delta sends nothing.
+    result = engine.process(
+        cc_event(knob_number, 0), now=0.001, axis_positions={"OTHER_AXIS": 999.0}
+    )
+    assert result is None

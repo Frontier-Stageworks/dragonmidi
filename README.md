@@ -54,7 +54,7 @@ Each fader, together with the knob, Mute button, and Solo button directly above/
 | Control | Behavior once the bank's fader has an axis assigned |
 |---|---|
 | Fader | Drives the axis to an absolute position across the fader's travel |
-| Knob | Nudges that axis by however far you just turned it — turning it further right moves the axis one way, further left the other way, proportional to the turn. Holding it still does nothing further. Useful for fine-tuning a position the fader got you close to. |
+| Knob | Nudges that axis by however far you just turned it — turning it further right moves the axis one way, further left the other way, proportional to the turn. Holding it still does nothing further. Useful for fine-tuning a position the fader got you close to. Can't push the axis below the fader's configured **min** or above its **max** — it stops exactly at whichever bound you reach. |
 | Mute | Marks the axis's current position as its zero reference — it does **not** move the axis anywhere |
 | Solo | Marks the axis's current position as its home reference — it does **not** move the axis anywhere |
 
@@ -65,7 +65,7 @@ Faders start out already in this mode with no axis picked yet — until you pick
    - If it says **"Discovering…"**, DragonMIDI is still checking — wait a second and it'll populate.
    - If it says **"No axes found"**, your current Dragonframe project doesn't have any motion-control axes set up yet.
    - Just added a new axis in Dragonframe, or opened a different project? Click **Rescan axes** to refresh the list.
-3. Enter a **min** and **max** value next to the dropdown — this is the range the axis moves across as you slide the fader from empty to full. (The knob's nudge, and the Mute/Solo zero/home actions, aren't affected by min/max — those are fixed Dragonframe commands.)
+3. Enter a **min** and **max** value next to the dropdown — this is the range the axis moves across as you slide the fader from empty to full. The knob's nudge is kept inside this same range (it stops at whichever bound it reaches, never overshoots); the Mute/Solo zero/home actions aren't affected by min/max — those are fixed Dragonframe commands.
 
 If you'd rather use the older encoder-channel approach for a given fader instead (see [Configuring Dragonframe](#configuring-dragonframe) below), switch that fader's **Target type** to **OSC encoder** — its bank's knob and Mute/Solo fall back to their encoder-channel/reset behavior too.
 
