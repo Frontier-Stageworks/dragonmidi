@@ -17,6 +17,7 @@ FADER_KEYS: frozenset[_Key] = frozenset(("cc", i) for i in range(8))
 _KNOB_BANK_OFFSET = 16
 _MUTE_BANK_OFFSET = 48
 _SOLO_BANK_OFFSET = 32
+_KNOB_STEP_SCALE = 0.1  # axis position units per one MIDI raw-value increment
 
 
 def bank_fader_key(key: _Key) -> "_Key | None":
@@ -236,10 +237,10 @@ class MappingEngine:
             self._previous_value[key] = event.raw_value
             if previous is None:
                 return None  # no baseline yet - this reading only establishes one
-            delta = event.raw_value - previous
-            if delta == 0:
+            raw_delta = event.raw_value - previous
+            if raw_delta == 0:
                 return None
-            return OscMessage(f"{axis_path}/stepPosition", (float(delta),))
+            return OscMessage(f"{axis_path}/stepPosition", (float(raw_delta) * _KNOB_STEP_SCALE,))
         if _MUTE_BANK_OFFSET <= number < _MUTE_BANK_OFFSET + 8:
             return self._process_press(key, event, now, f"{axis_path}/setZero")
         # Solo

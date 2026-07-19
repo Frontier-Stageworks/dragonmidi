@@ -501,6 +501,7 @@ def test_enter_axis_mode_without_a_name_sends_nothing_not_encoder_fallback(numbe
 _KNOB_BANK_OFFSET = 16
 _MUTE_BANK_OFFSET = 48
 _SOLO_BANK_OFFSET = 32
+_KNOB_STEP_SCALE = 0.1
 
 
 @given(fader_number=st.sampled_from(FADER_CCS), raw=st.integers(min_value=0, max_value=127))
@@ -535,7 +536,7 @@ def test_knob_sends_step_position_as_the_change_since_its_own_last_reading(
     else:
         assert result is not None
         assert result.address == "/dragonframe/axis/PAN/stepPosition"
-        assert result.args == (float(second_raw - first_raw),)
+        assert result.args == (float(second_raw - first_raw) * _KNOB_STEP_SCALE,)
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
@@ -595,7 +596,7 @@ def test_knob_derived_step_position_deduped_on_identical_raw_value(fader_number:
     second = engine.process(cc_event(knob_number, 90), now=0.002)  # identical raw value again
     assert first is not None
     assert first.address == "/dragonframe/axis/PAN/stepPosition"
-    assert first.args == (30.0,)
+    assert first.args == (30.0 * _KNOB_STEP_SCALE,)
     assert second is None
 
 
@@ -627,7 +628,7 @@ def test_knob_dedup_discarded_on_encoder_to_axis_transition(fader_number: int) -
     second = engine.process(cc_event(knob_number, 55), now=1.001)
     assert second is not None
     assert second.address == "/dragonframe/axis/PAN/stepPosition"
-    assert second.args == (5.0,)  # normal relative delta once a real baseline exists
+    assert second.args == (5.0 * _KNOB_STEP_SCALE,)  # normal relative delta once a real baseline exists
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
@@ -662,4 +663,4 @@ def test_enter_axis_mode_alone_discards_knob_dedup_on_transition(fader_number: i
 
     second = engine.process(cc_event(knob_number, 55), now=1.001)
     assert second is not None
-    assert second.args == (5.0,)
+    assert second.args == (5.0 * _KNOB_STEP_SCALE,)
