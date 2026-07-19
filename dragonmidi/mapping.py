@@ -21,7 +21,7 @@ _STEP_MOCO_FORWARD = KeyCombo(frozenset({"alt", "shift"}), "right")
 _STEP_MOCO_BACKWARD = KeyCombo(frozenset({"alt", "shift"}), "left")
 
 # Bank membership: Bank N = Fader N, Knob N, Mute N, Solo N (Record N/Select N excluded, no
-# matching per-axis OSC action exists for them - @spec MAP-BANK-006).
+# matching per-axis action exists for them - @spec MAP-BANK-006).
 _KNOB_BANK_OFFSET = 16
 _MUTE_BANK_OFFSET = 48
 _SOLO_BANK_OFFSET = 32
