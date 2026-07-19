@@ -7,6 +7,10 @@ name = "dragonmidi"
 version = "0.1.0"
 description = "MIDI-to-OSC bridge from a KORG nanoKONTROL Studio to Dragonframe"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+]
 dependencies = [
   "mido==1.3.3",
   "python-rtmidi==1.5.8",
