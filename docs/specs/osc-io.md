@@ -37,4 +37,4 @@ Traces to `docs/llds/osc-io.md`.
 
 - `docs/llds/osc-io.md`
 - `~/github/DragonMIDI-vibed/dragonmidi/osc.py` — source of the OSC 1.0 encoder this LLD reuses.
-- `docs/dragonframe-messages-research.md § Empirically validated: direct axis addressing` — the bundle format, single-socket query, and duplicate-response findings behind the Axis Discovery specs.
+- `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the bundle format, single-socket query, and duplicate-response findings behind the Axis Discovery specs.

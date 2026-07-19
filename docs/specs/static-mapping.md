@@ -29,4 +29,4 @@ Traces to `docs/llds/static-mapping.md`.
 
 - `docs/llds/static-mapping.md`
 - `~/github/DragonMIDI-vibed/mappings.md` — source table this LLD's map mirrors.
-- `docs/dragonframe-messages-research.md § Empirically validated: direct axis addressing` — the `gotoPosition` scaling and Manual-function findings behind the OSC Axis (Direct) Target specs.
+- `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the `gotoPosition` scaling and Manual-function findings behind the OSC Axis (Direct) Target specs.

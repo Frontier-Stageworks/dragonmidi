@@ -95,4 +95,4 @@ These three values are machine-specific network configuration, not part of the o
 
 - `~/github/DragonMIDI-vibed/dragonmidi/osc.py` — source of the OSC 1.0 message encoder reused here.
 - Dragonframe official manual, "Outputting Axis Positions via Open Sound Control (OSC)" (`Using Dragonframe 2025.pdf`) — confirms Dragonframe's OSC Output capability that the Listener depends on.
-- `docs/dragonframe-messages-research.md § Empirically validated: direct axis addressing` — the bundle format, single-socket query requirement, and duplicate-response findings this LLD's axis-discovery design is built on.
+- `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the bundle format, single-socket query requirement, and duplicate-response findings this LLD's axis-discovery design is built on.
