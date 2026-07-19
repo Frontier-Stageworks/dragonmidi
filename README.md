@@ -18,11 +18,12 @@ DragonMIDI ships with a ready-to-use set of defaults — no setup required to st
 
 | Control | What it does in Dragonframe |
 |---|---|
-| Faders 1-8 | Drive motion-control axes (see [Controlling a motor axis with a fader](#controlling-a-motor-axis-with-a-fader) to assign one) |
-| Knobs 1-8 | Drive motion-control axes (via Dragonframe's "OSC encoder" setup) |
-| Jog wheel | Drives a motion-control axis, relative movement |
-| Mute 1-8 / Solo 1-8 | Reset the axis assigned to the fader / knob in that same column |
-| Return to Zero | Resets the jog wheel's axis |
+| Faders 1-8 | Drive a motion-control axis directly — pick which one in the Mapping table (see [Controlling a motor axis](#controlling-a-motor-axis) below) |
+| Knobs 1-8 | Fine-tune nudge for the axis its own fader is driving (see below); drives an OSC encoder channel instead if that fader has no axis picked |
+| Jog wheel | Drives a motion-control axis, relative movement, via Dragonframe's "OSC encoder" setup |
+| Mute 1-8 | Sends that axis to its zero position, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
+| Solo 1-8 | Sends that axis to its home position, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
+| Return to Zero | Resets the jog wheel's encoder channel |
 | Play | Play back your shot frames |
 | Stop | Return to the live camera view |
 | Transport Record (●) | Shoot one frame |
@@ -47,20 +48,31 @@ When you run `dragonmidi`, you'll see:
 - Below the lights: the network address DragonMIDI sends to and listens on, with an **Apply** button if you ever need to change them (most people never will).
 - Below that: the **Mapping** table described above.
 
-## Controlling a motor axis with a fader
+## Controlling a motor axis
 
-Any of the 8 faders can be pointed directly at one of your Dragonframe project's motion-control axes, instead of going through the manual "OSC encoder" wiring:
+Each fader, together with the knob, Mute button, and Solo button directly above/below it in the same column, forms a **bank**. Assigning an axis to the fader is the only step — the other three controls in that bank pick it up automatically:
 
-1. In the app's Mapping table, find the fader's row and change **Target type** to **OSC axis**.
-2. A dropdown appears, listing the axis names DragonMIDI found in your currently-open Dragonframe project. Pick one.
+| Control | Behavior once the bank's fader has an axis assigned |
+|---|---|
+| Fader | Drives the axis to an absolute position across the fader's travel |
+| Knob | Nudges that axis — turn right of center to move one way, left of center the other, centered (12 o'clock) does nothing. Useful for fine-tuning a position the fader got you close to. |
+| Mute | Sends the axis to its zero position |
+| Solo | Sends the axis to its home position |
+
+Faders start out already in this mode with no axis picked yet — until you pick one, that fader (and its bank) produces no output. To assign one:
+
+1. In the app's Mapping table, find the fader's row. It defaults to **Target type: OSC axis** with an empty dropdown.
+2. The dropdown lists the axis names DragonMIDI found in your currently-open Dragonframe project. Pick one.
    - If it says **"Discovering…"**, DragonMIDI is still checking — wait a second and it'll populate.
    - If it says **"No axes found"**, your current Dragonframe project doesn't have any motion-control axes set up yet.
    - Just added a new axis in Dragonframe, or opened a different project? Click **Rescan axes** to refresh the list.
-3. Enter a **min** and **max** value next to the dropdown — this is the range the axis moves across as you slide the fader from empty to full.
+3. Enter a **min** and **max** value next to the dropdown — this is the range the axis moves across as you slide the fader from empty to full. (The knob's nudge, and the Mute/Solo zero/home actions, aren't affected by min/max — those are fixed Dragonframe commands.)
+
+If you'd rather use the older encoder-channel approach for a given fader instead (see [Configuring Dragonframe](#configuring-dragonframe) below), switch that fader's **Target type** to **OSC encoder** — its bank's knob and Mute/Solo fall back to their encoder-channel/reset behavior too.
 
 **Important:** for the fader to actually move the axis, that axis's **Function** must be set to **Manual** in Dragonframe's Arc Motion Control workspace (axis settings). If it's left on `Function: Normal` without a real motor attached, Dragonframe will silently accept the commands without moving anything — this is a Dragonframe-side setting DragonMIDI can't detect or fix for you.
 
-Fader-to-axis assignments reset back to the defaults every time you restart DragonMIDI — they aren't saved between sessions yet.
+Bank assignments reset back to the defaults every time you restart DragonMIDI — they aren't saved between sessions yet.
 
 ## Installing
 
@@ -94,14 +106,14 @@ One-time setup, per machine:
 2. Enable **OSC Input** on UDP port `7010`.
 3. Enable **OSC Output**, sending to `127.0.0.1` port `7011`.
 
-That's it for the transport/shoot/marker buttons and knob/jog wheel encoders to work. If you also want faders wired to encoder channels (rather than the direct axis-picker approach above), open Dragonframe's **Arc Motion Control** workspace and, for each axis, set its **OSC encoder channel** to match the fader driving it (Fader 1 → channel 1, Fader 2 → channel 2, and so on), plus the scale/absolute-vs-relative setting for that axis.
+That's it for the transport/shoot/marker buttons to work. Encoder channels (the jog wheel always, and a fader/knob/Mute/Solo bank whenever that fader is left on OSC encoder mode instead of picking an axis) need one more step: open Dragonframe's **Arc Motion Control** workspace and, for each axis, set its **OSC encoder channel** to match the control driving it (Fader 1 → channel 1, Knob 1 → channel 9, and so on — see the table above), plus the scale/absolute-vs-relative setting for that axis.
 
 Once you've configured a rig's axes once, you can reuse that setup in future projects: in the Arc Motion Control workspace, use **Export | Arc Axis Setup (ARCX)** to save it, then **Import | Arc Axis Setup (ARCX)** in a new project instead of redoing it by hand.
 
 ## Current limitations
 
-- Only the 8 faders can be pointed at a motion-control axis directly; knobs, buttons, and the jog wheel use Dragonframe's encoder-channel wiring instead.
-- No custom mapping editor yet — you can retarget a fader's axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
+- Only faders have their own axis picker. Knobs and Mute/Solo automatically follow whichever axis their bank's fader is set to (nudge / zero / home) — they can't be pointed at a *different* axis independently. The jog wheel always uses an OSC encoder channel.
+- No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
 - Only the KORG nanoKONTROL Studio is supported.
 
 ---

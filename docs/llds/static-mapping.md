@@ -6,7 +6,7 @@ This component is the one place MIDI meaning becomes Dragonframe meaning. Each m
 
 Unlike the original static-table design, entries are now editable (add/edit/remove, enable/disable, MIDI-learn) and persisted through a Preset Store, per `docs/high-level-design.md`. The table ships pre-loaded with the nanoKONTROL Studio's opinionated default map (mirroring `DragonMIDI-vibed/mappings.md`), so a user who never opens the mapping view sees identical behavior to a fixed table.
 
-**Phase scope** (per `docs/high-level-design.md § Delivery Phasing`): this LLD describes the target design. **App Delivery Phase 1** implements only the new "OSC axis (direct)" target type described below, and only for the 8 faders — knobs, buttons, and the jog wheel keep their existing default targets (OSC encoder channel / OSC action) unchanged in this phase, and the general editor (MIDI-learn, add/remove, presets) is **App Delivery Phase 2**.
+**Phase scope** (per `docs/high-level-design.md § Delivery Phasing`): this LLD describes the target design. **App Delivery Phase 1** implements the "OSC axis (direct)" target type, as the **default** for the 8 faders, plus **bank derivation** — knobs and the Mute/Solo buttons automatically follow their bank's fader assignment rather than being independently configurable (see Bank Derivation below). Transport/marker/track buttons, Record/Select, and the jog wheel are unaffected and keep their existing targets. The general editor (MIDI-learn, add/remove, presets, independently retargeting a knob/button/jog wheel) is **App Delivery Phase 2**.
 
 ## The Opinionated Default Map
 
@@ -14,10 +14,10 @@ All controls are on MIDI channel 16 (zero-indexed 15), matching the nanoKONTROL 
 
 | Control(s) | MIDI source | Behavior | Default target |
 |---|---|---|---|
-| Faders 1–8 | CC 0–7 | Continuous absolute | `/dragonframe/encoder/1`–`8`, float 0.0–1.0 |
-| Knobs 1–8 | CC 16–23 | Continuous absolute | `/dragonframe/encoder/9`–`16`, float 0.0–1.0 |
-| Mute 1–8 | CC 48–55 | Press edge | `/dragonframe/encoderReset/1`–`8` |
-| Solo 1–8 | CC 32–39 | Press edge | `/dragonframe/encoderReset/9`–`16` |
+| Faders 1–8 | CC 0–7 | Continuous absolute | OSC axis (direct), no axis selected — see Fader Axis Mode below. `/dragonframe/encoder/1`–`8` only if explicitly switched to OSC encoder. |
+| Knobs 1–8 | CC 16–23 | Continuous absolute | Bank-derived — see Bank Derivation below. `/dragonframe/encoder/9`–`16` when that bank has no axis assigned. |
+| Mute 1–8 | CC 48–55 | Press edge | Bank-derived — see Bank Derivation below. `/dragonframe/encoderReset/1`–`8` when that bank has no axis assigned. |
+| Solo 1–8 | CC 32–39 | Press edge | Bank-derived — see Bank Derivation below. `/dragonframe/encoderReset/9`–`16` when that bank has no axis assigned. |
 | Jog wheel | CC 110, sign-magnitude relative | Relative delta | `/dragonframe/encoder/17`, signed float delta |
 | Return to Zero | CC 47 | Press edge | `/dragonframe/encoderReset/17` |
 | Transport Record | CC 45 | Press edge | `/dragonframe/shoot`, int `1` |
@@ -38,11 +38,31 @@ All controls are on MIDI channel 16 (zero-indexed 15), matching the nanoKONTROL 
 Each entry has exactly one target, chosen by the user (or left at its default):
 
 - **OSC action** — one of Dragonframe's fixed named commands (`shoot`, `play`, `live`, `mute`, `black`, `delete`, `shootVideoAssist`, and the further commands listed in `docs/dragonframe-messages-research.md` not yet defaulted to any control).
-- **OSC encoder channel** — `/dragonframe/encoder/{n}` / `/dragonframe/encoderReset/{n}`, requiring the user to separately wire that channel to an axis inside Dragonframe's Arc workspace.
-- **OSC axis (direct)** — addresses a discovered axis by name directly (see below). **This is the only new target type implemented in App Delivery Phase 1, and only for faders.**
+- **OSC encoder channel** — `/dragonframe/encoder/{n}` / `/dragonframe/encoderReset/{n}`, requiring the user to separately wire that channel to an axis inside Dragonframe's Arc workspace. The fallback for a fader/knob/Mute/Solo whose bank has no axis assigned; no longer the default for faders.
+- **OSC axis (direct)** — addresses a discovered axis by name directly (see below). **The default target type for faders in App Delivery Phase 1.** Knobs and Mute/Solo reach this same mechanism only through bank derivation, not as an independently selectable target.
 - **Custom OSC path** — arbitrary address/argument, restoring the old prototype's escape hatch. Not implemented before App Delivery Phase 2.
 
-## OSC Axis (Direct) Target
+## Fader Axis Mode (Default) vs. OSC Encoder Mode
+
+- Every fader starts in **axis mode**, with no axis name selected. In this state, moving the fader produces **no OSC output at all** — there is no fallback to the opinionated encoder target while unconfigured. An axis name is inherently project-specific; unlike an encoder channel number, there is no meaningful placeholder to fall back to until the user configures one.
+- Switching a fader's target type to **OSC encoder** enters encoder mode: the fader (and its bank, see below) behaves exactly as documented in the Opinionated Default Map table's encoder-fallback column.
+- Switching back to **OSC axis** re-enters axis mode; if no name has been picked yet (or was cleared), it again sends nothing until one is chosen.
+- This is tracked by `MappingEngine` itself, not only the Mapping View UI — it changes actual dispatch behavior (whether an event produces OSC output at all), not merely what the table displays. `set_axis_target` implies axis mode; `clear_axis_target` implies encoder mode, in addition to their existing effects on the stored target and dedup state.
+
+## Bank Derivation
+
+The 8 channel strips are grouped into **banks**. Bank N = Fader N, Knob N, Mute N, Solo N. Record N and Select N are not part of a bank — no per-axis OSC action exists for them (`docs/dragonframe-messages-research.md`), so they remain unmapped regardless of bank state, unchanged from today.
+
+- **Only Fader N's target is directly configurable** — the OSC axis (direct) picker described above and in `docs/llds/app-ui.md`. Knob N, Mute N, and Solo N have no independent target selection; their effective target is derived from Fader N's current state, recomputed on every event they produce, not fixed at the moment Fader N's axis was chosen.
+- **Fader N has a real axis name assigned:**
+  - Knob N sends `/dragonframe/axis/{axisname}/stepPosition,f (delta)` on every distinct value, where `delta = raw_value - 64` (signed, over the MIDI CC 0–127 range; `64` is treated as the knob's center/"12 o'clock" position). No debounce, no user-configurable scale — the raw signed offset is sent directly, the same "no separate scale" precedent already set by the jog wheel's relative delta.
+  - Mute N sends `/dragonframe/axis/{axisname}/setZero` on press.
+  - Solo N sends `/dragonframe/axis/{axisname}/setHome` on press.
+- **Fader N has no axis assigned** (default state, or explicitly switched to OSC encoder): Knob N, Mute N, and Solo N fall back to their table-listed static defaults (`/dragonframe/encoder/{9-16}`, `/dragonframe/encoderReset/{1-8}`, `/dragonframe/encoderReset/{9-16}`) — unchanged from today's behavior.
+- **Dedup applies to Knob N's derived `stepPosition` the same way it applies to any continuous control:** a repeated identical raw value (e.g. duplicate MIDI messages) is not resent, since resending an identical *relative* delta would move the axis twice for one physical reading.
+- **Knob N's dedup state spans two different value semantics** — a normalized absolute float (0.0–1.0) in encoder mode, versus a raw signed delta (`raw - 64`) in derived-axis mode. Comparing a stale value from one semantic against a fresh value from the other, right at a mode transition, is a meaningless comparison. Assigning Fader N's first axis name (entering axis mode from encoder mode) or clearing it (leaving axis mode for encoder mode) therefore also discards Knob N's dedup state — mirroring the same "switching a target discards prior dedup state" precedent already established for the fader itself. Picking a *different* axis name while Fader N is already in axis mode does not discard Knob N's dedup state, since the delta computation doesn't depend on which axis is targeted.
+
+## OSC Axis (Direct) Target (Fader — `gotoPosition`)
 
 - The user picks an axis name from the list the OSC Listener has discovered via `getAllPosition` (see `docs/llds/osc-io.md`), plus a **min** and **max** position value.
 - For a continuous-absolute MIDI source (a fader), the engine sends `/dragonframe/axis/{axisname}/gotoPosition,f (position)` on every distinct MIDI value, with no debounce — position is computed as `min + normalized_value * (max - min)`, matching the same "continuous, no debounce" handling already used for OSC encoder targets.
@@ -57,7 +77,7 @@ Each entry has exactly one target, chosen by the user (or left at its default):
 
 ## Trigger Semantics
 
-- **Continuous absolute** (faders, knobs): every distinct MIDI value produces an OSC send, whether the target is an OSC encoder channel or a direct axis. No debounce — Dragonframe needs frequent updates to drive smooth axis motion.
+- **Continuous absolute** (faders, knobs): every distinct MIDI value produces an OSC send, whether the target is an OSC encoder channel, a fader's direct-axis `gotoPosition`, or a knob's bank-derived `stepPosition`. No debounce — Dragonframe needs frequent updates to drive smooth axis motion.
 - **Press edge** (buttons, resets, transport, Scene): fires once when the source transitions into "pressed" (velocity/value crossing above 0, or note-on) — reused edge-detection logic from the prototype's `_evaluate`. Debounced at 80ms to absorb switch bounce, matching the prototype's default.
 - **Relative delta** (jog wheel): decodes KORG sign-magnitude relative values into a signed delta, scaled by a fixed constant, and forwarded as `/dragonframe/encoder/17` — reused decode logic from the prototype's `relative_sign_magnitude` handling. (Extending this trigger to also support a direct-axis `stepPosition` target is App Delivery Phase 2, not Phase 1.)
 
@@ -93,6 +113,12 @@ The engine keeps a small per-control "previous normalized value" map, needed for
 | Stuck-control initial state | Assume "not pressed" at launch; accept the one-cycle detection gap | Query controller for current state at connect | nanoKONTROL Studio has no simple state-dump facility; gap is rare and self-correcting |
 | Transport/marker/track section defaults | Rewind, Previous Marker, Previous Track all → `stepBackward`; Fast Forward, Next Marker, Next Track all → `stepForward`; Cycle → `loop` | Leave Rewind/Marker/Track unmapped (no exact Dragonframe equivalent); force each onto a distinct but unrelated command | Dragonframe has no marker or track concept over OSC, but every one of these physical controls is a "step back" or "step forward" gesture — mapping all of them to the same semantic action is a better default than leaving them silent or inventing an unrelated meaning per button |
 | Set Marker default | Unmapped (falls through to no-OSC) | Keep the prototype's `/dragonframe/delete` binding | That binding was an arbitrary leftover with no semantic relationship to "set marker," and a marker button silently deleting a frame is an actively dangerous default |
+| Fader default target | OSC axis (direct), no name selected | OSC encoder (the original default) | Axis addressing is the primary interaction model for this project; OSC encoder remains available as a manual fallback, not the default |
+| Fader-in-axis-mode, no name chosen | Send nothing | Fall back to the opinionated encoder target until configured | An axis name has no meaningful placeholder default; falling back would silently substitute a different target type than what's displayed |
+| Bank derivation ownership | Engine-level: only the fader is configurable, Knob/Mute/Solo derive automatically | Give Knob/Mute/Solo their own independent target pickers | Matches "select the bank once" — configuring one control per bank instead of four |
+| Knob's derived `stepPosition` scale | Raw signed MIDI delta (`raw_value - 64`), no configurable sensitivity | User-specified scale, like the fader's min/max | Matches the jog wheel's existing unscaled-relative-delta precedent; avoids adding a config field before real usage shows it's needed |
+| Bank membership | Fader + Knob + Mute + Solo; Record/Select excluded | Include Record/Select with an invented per-axis action | No matching per-axis OSC action exists for them; matches the established "no forced unrelated mapping" pattern (Set Marker, above) |
+| Mute/Solo derived actions | Mute → `setZero`, Solo → `setHome` | Leave Mute/Solo as static encoder resets, only Fader/Knob become axis-aware | Gives every control in the bank a real, distinct per-axis action rather than an arbitrary subset |
 
 ## Open Questions & Future Decisions
 
@@ -102,12 +128,14 @@ The engine keeps a small per-control "previous normalized value" map, needed for
 3. Axis name entry (picker-only), min/max validation (none needed), and stale axis reference handling (accepted gap) — see Decisions & Alternatives above.
 4. Cross-spec edge audit (Phase 4): the picker-only restriction is selection-time-only, not a continuously re-enforced invariant (clarified above, consistent with the accepted-gap decision); Rescan is the mechanism for picking up newly added axes; an empty picker during the startup discovery window is acceptable, not a bug; and target-type switching discards the previous target's configuration — see the bullets above and Decisions & Alternatives.
 5. The picker-only axis-selection UI, how the mapping view surfaces "never discovered yet" vs. "discovered, zero axes," and the discard-on-target-switch behavior are implemented in `docs/llds/app-ui.md`'s Mapping View section (`UI-MAP-003` through `UI-MAP-008`).
+6. Fader default target (OSC axis, not encoder), fader-in-axis-mode-with-no-name send behavior (nothing, no fallback), bank derivation ownership and membership, and the knob's derived `stepPosition` scale — see Decisions & Alternatives above.
 
 ### Deferred
 1. The jog wheel's relative-delta scale constant needs a concrete default value; the prototype leaves this to per-mapping configuration. A fixed default should be chosen empirically once hardware is available to test against, and does not block the LLD.
-2. Extending direct-axis addressing to knobs (absolute) and the jog wheel (`stepPosition`, relative) — App Delivery Phase 2, not designed yet.
+2. Extending direct-axis addressing to the jog wheel (`stepPosition`, relative) — the jog wheel is not part of any bank and is unaffected by this change; still App Delivery Phase 2.
 3. Whether DragonMIDI should ever detect a non-responsive axis (e.g., by comparing sent `gotoPosition` values against subsequent position broadcasts, to warn the user their axis might be `Function: Normal` with no hardware attached) — not in scope for Phase 1's minimal implementation.
 4. Exact preset persistence format (JSON schema, file location) — a code-level decision, not yet made.
+5. Whether `gotoPosition`/`stepPosition` work against an axis with real, genuinely-connected motion-control hardware (`Function: Normal`, a physical device actually attached) is untested — only the "`Function: Normal`, no device attached" case has been confirmed (`docs/dragonframe-messages-research.md`). If direct addressing does not work against real connected hardware, OSC encoder channels may be more than a manual fallback for rigs using real motors, not merely a legacy option.
 
 ## References
 

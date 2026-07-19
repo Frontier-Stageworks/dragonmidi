@@ -1,6 +1,7 @@
 """Tests for the Mapping View's pure-Python logic (docs/specs/app-ui.md § Mapping View).
 
 @spec UI-MAP-001, UI-MAP-002, UI-MAP-004, UI-MAP-005, UI-MAP-007, UI-MAP-008
+@spec UI-MAP-011, UI-MAP-012
 """
 from __future__ import annotations
 
@@ -39,17 +40,31 @@ def test_only_fader_rows_are_marked_editable() -> None:
 # --- Fader row target rendering: default vs. axis-targeted vs. reverted ---
 
 @given(number=st.sampled_from(FADER_CCS))
-def test_fader_row_defaults_to_its_opinionated_osc_encoder_target(number: int) -> None:
+# @spec UI-MAP-011
+def test_fader_row_defaults_to_osc_axis_with_no_name_selected(number: int) -> None:
     key = ("cc", number)
     engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[key]
+    assert row.target_type == "OSC axis"
+    assert row.target == ""
+
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec MAP-AXIS-010
+def test_fader_row_shows_osc_encoder_once_explicitly_switched(number: int) -> None:
+    key = ("cc", number)
+    engine = MappingEngine()
+    engine.clear_axis_target(key)
     rows = {row.key: row for row in build_rows(engine)}
     row = rows[key]
     assert row.target_type == "OSC encoder"
     assert row.target == f"Encoder {number + 1}"
 
 
-def test_fader_row_shows_osc_axis_target_once_set() -> None:
-    key = ("cc", 0)
+@given(number=st.sampled_from(FADER_CCS))
+def test_fader_row_shows_osc_axis_target_once_set(number: int) -> None:
+    key = ("cc", number)
     engine = MappingEngine()
     engine.set_axis_target(key, "PAN", 0.0, 100.0)
     rows = {row.key: row for row in build_rows(engine)}
@@ -58,41 +73,102 @@ def test_fader_row_shows_osc_axis_target_once_set() -> None:
     assert row.target == "PAN (0-100)"
 
 
-def test_fader_row_target_formatting_handles_non_integer_and_negative_bounds() -> None:
-    key = ("cc", 1)
+@given(
+    number=st.sampled_from(FADER_CCS),
+    axis_name=st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=1, max_size=6),
+    min_value=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    max_value=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+)
+def test_fader_row_target_formatting(number: int, axis_name: str, min_value: float, max_value: float) -> None:
+    key = ("cc", number)
     engine = MappingEngine()
-    engine.set_axis_target(key, "TILT", -5.5, 12.25)
+    engine.set_axis_target(key, axis_name, min_value, max_value)
     rows = {row.key: row for row in build_rows(engine)}
-    assert rows[key].target == "TILT (-5.5-12.25)"
+    assert rows[key].target == f"{axis_name} ({min_value:g}-{max_value:g})"
 
 
-def test_fader_row_reverts_to_osc_encoder_after_clear_axis_target() -> None:
-    key = ("cc", 2)
+@given(number=st.sampled_from(FADER_CCS))
+def test_fader_row_reverts_to_osc_encoder_after_clear_axis_target(number: int) -> None:
+    key = ("cc", number)
     engine = MappingEngine()
     engine.set_axis_target(key, "PAN", 0.0, 100.0)
     engine.clear_axis_target(key)
     rows = {row.key: row for row in build_rows(engine)}
     row = rows[key]
     assert row.target_type == "OSC encoder"
-    assert row.target == "Encoder 3"
+    assert row.target == f"Encoder {number + 1}"
 
 
 # --- Non-fader row target rendering: OSC action / OSC encoder (reset) ---
 
-def test_knob_row_shows_osc_encoder_target() -> None:
+@given(number=st.sampled_from(FADER_CCS))
+def test_knob_row_shows_osc_encoder_target(number: int) -> None:
     engine = MappingEngine()
     rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("cc", 16)]  # Knob 1 -> encoder 9
+    row = rows[("cc", number + 16)]
     assert row.target_type == "OSC encoder"
-    assert row.target == "Encoder 9"
+    assert row.target == f"Encoder {number + 9}"
 
 
-def test_mute_row_shows_encoder_reset_target() -> None:
+@given(number=st.sampled_from(FADER_CCS))
+def test_mute_row_shows_encoder_reset_target(number: int) -> None:
     engine = MappingEngine()
     rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("cc", 48)]  # Mute 1 -> reset encoder 1
+    row = rows[("cc", number + 48)]
     assert row.target_type == "OSC encoder"
-    assert row.target == "Reset encoder 1"
+    assert row.target == f"Reset encoder {number + 1}"
+
+
+# --- Bank-derived rows (UI-MAP-012) ---
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec UI-MAP-012
+def test_knob_row_shows_derived_step_position_when_bank_fader_has_axis(number: int) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[("cc", number + 16)]
+    assert row.target_type == "OSC axis"
+    assert row.target == "stepPosition → PAN"
+
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec UI-MAP-012
+def test_mute_row_shows_derived_setzero_when_bank_fader_has_axis(number: int) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[("cc", number + 48)]
+    assert row.target_type == "OSC action"
+    assert row.target == "setZero → PAN"
+
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec UI-MAP-012
+def test_solo_row_shows_derived_sethome_when_bank_fader_has_axis(number: int) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[("cc", number + 32)]
+    assert row.target_type == "OSC action"
+    assert row.target == "setHome → PAN"
+
+
+@given(assigned_fader=st.sampled_from(FADER_CCS))
+# @spec UI-MAP-012
+def test_only_the_assigned_banks_knob_mute_solo_change(assigned_fader: int) -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", assigned_fader), "PAN", 0.0, 100.0)
+    rows = {row.key: row for row in build_rows(engine)}
+    for other in FADER_CCS:
+        if other == assigned_fader:
+            continue
+        assert rows[("cc", other + 16)].target_type == "OSC encoder"
+        assert rows[("cc", other + 16)].target == f"Encoder {other + 9}"
+        assert rows[("cc", other + 48)].target_type == "OSC encoder"
+        assert rows[("cc", other + 48)].target == f"Reset encoder {other + 1}"
+        assert rows[("cc", other + 32)].target_type == "OSC encoder"
+        assert rows[("cc", other + 32)].target == f"Reset encoder {other + 9}"
 
 
 def test_play_row_shows_osc_action_target() -> None:
@@ -135,11 +211,16 @@ def test_axis_picker_state_disabled_with_no_axes_placeholder_when_queried_empty(
     assert state == AxisPickerState(enabled=False, placeholder="No axes found", candidates=(), current=None)
 
 
-def test_axis_picker_state_enabled_with_sorted_candidates_when_axes_present() -> None:
-    state = axis_picker_state(configured_name=None, axes={"PAN": 1.0, "ARM": 2.0, "TILT": 3.0})
+@given(
+    axes=st.dictionaries(
+        st.text(min_size=1, max_size=8), st.floats(allow_nan=False, allow_infinity=False), min_size=1, max_size=10
+    )
+)
+def test_axis_picker_state_enabled_with_sorted_candidates_when_axes_present(axes: dict[str, float]) -> None:
+    state = axis_picker_state(configured_name=None, axes=axes)
     assert state.enabled is True
     assert state.placeholder is None
-    assert state.candidates == ("ARM", "PAN", "TILT")
+    assert state.candidates == tuple(sorted(axes))
 
 
 # --- UI-MAP-008: configured name is always carried through as `current`, even if stale ---
@@ -173,6 +254,14 @@ def test_parse_axis_field_accepts_any_real_number(value: float) -> None:
     assert parse_axis_field(repr(value)) == value
 
 
-@given(text=st.sampled_from(["", "abc", "1.2.3", "--5", "PAN", "12,5"]))
+def _not_a_float(text: str) -> bool:
+    try:
+        float(text)
+        return False
+    except ValueError:
+        return True
+
+
+@given(text=st.text(max_size=12).filter(_not_a_float))
 def test_parse_axis_field_rejects_unparseable_text(text: str) -> None:
     assert parse_axis_field(text) is None

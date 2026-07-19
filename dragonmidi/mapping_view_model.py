@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine
+from .mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine, bank_fader_key, bank_member_kind
+
+_BANK_DERIVED_ACTION = {"knob": "stepPosition", "mute": "setZero", "solo": "setHome"}
 
 _Key = tuple[str, "int | None"]
 
@@ -47,10 +49,21 @@ def _format_bound(value: float) -> str:
 
 def _target_label(key: _Key, engine: MappingEngine) -> tuple[str, str]:
     if key in FADER_KEYS:
-        axis = engine.axis_target(key)
-        if axis is not None:
-            bounds = f"{_format_bound(axis.min_value)}-{_format_bound(axis.max_value)}"
-            return "OSC axis", f"{axis.axis_name} ({bounds})"
+        if engine.is_axis_mode(key):
+            axis = engine.axis_target(key)
+            if axis is not None:
+                bounds = f"{_format_bound(axis.min_value)}-{_format_bound(axis.max_value)}"
+                return "OSC axis", f"{axis.axis_name} ({bounds})"
+            return "OSC axis", ""
+    else:
+        fader_key = bank_fader_key(key)
+        if fader_key is not None and engine.is_axis_mode(fader_key):
+            axis = engine.axis_target(fader_key)
+            if axis is not None:
+                kind = bank_member_kind(key)
+                action = _BANK_DERIVED_ACTION[kind]
+                target_type = "OSC axis" if kind == "knob" else "OSC action"
+                return target_type, f"{action} → {axis.axis_name}"
     entry = OPINIONATED_MAP[key]
     if entry.address.startswith("/dragonframe/encoderReset/"):
         return "OSC encoder", f"Reset encoder {entry.address.rsplit('/', 1)[-1]}"

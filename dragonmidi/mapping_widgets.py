@@ -156,13 +156,6 @@ class MappingView(QWidget):
         super().__init__()
         self._engine = mapping_engine
         self._axis_discovery = axis_discovery
-        # Which target-type mode the user has chosen for each fader row, independent of
-        # whether the engine has actually been given a target yet (UI-MAP-006's "engine
-        # target can lag the displayed type until a name is picked"). Without tracking
-        # this separately, refresh() would have nothing but engine state to go on, and
-        # would flip a freshly-chosen "OSC axis" row straight back to "OSC encoder" on
-        # the very next tick, before the user ever got to pick a name.
-        self._axis_mode: dict = {}
 
         rows = build_rows(self._engine)
         self._table = QTableWidget(len(rows), len(self._COLUMNS))
@@ -211,10 +204,9 @@ class MappingView(QWidget):
     def _on_type_changed(self, key, text: str) -> None:
         _type_combo, editor = self._editors[key]
         if text == "OSC axis":
-            self._axis_mode[key] = True
+            self._engine.enter_axis_mode(key)
             editor.show_axis_picker()
         else:
-            self._axis_mode[key] = False
             editor.show_encoder("")  # replaced on the next refresh() tick
             self._engine.clear_axis_target(key)
 
@@ -234,7 +226,7 @@ class MappingView(QWidget):
         for key, (type_combo, editor) in self._editors.items():
             row = rows[key]
             axis_target = self._engine.axis_target(key)
-            axis_mode = self._axis_mode.get(key, False)
+            axis_mode = self._engine.is_axis_mode(key)
             desired_type = "OSC axis" if axis_mode else "OSC encoder"
             if not type_combo.view().isVisible() and type_combo.currentText() != desired_type:
                 with _signals_blocked(type_combo):

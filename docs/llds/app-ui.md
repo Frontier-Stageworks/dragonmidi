@@ -72,18 +72,22 @@ Embedded directly in the main window, as a section below the host/port configura
 | Name       MIDI            Trigger      Target type   Target          |
 |-------------------------------------------------------------------------|
 | Fader 1    CC0, ch16       Absolute     OSC axis ▾    [PAN ▾] [0][100] |
-| Fader 2    CC1, ch16       Absolute     OSC encoder   Encoder 2        |
-| Knob 1     CC16, ch16      Absolute     OSC encoder   Encoder 9        |
-| Mute 1     CC48, ch16      Press        OSC action    Reset enc. 1     |
+| Fader 2    CC1, ch16       Absolute     OSC axis ▾    [ ▾]             |
+| Knob 1     CC16, ch16      Absolute     OSC axis      stepPosition → PAN|
+| Knob 2     CC17, ch16      Absolute     OSC encoder   Encoder 10       |
+| Mute 1     CC48, ch16      Press        OSC action    setZero → PAN    |
+| Mute 2     CC49, ch16      Press        OSC action    Reset enc. 2     |
 | Play       CC41, ch16      Press        OSC action    Play            |
 |  ...        ...             ...          ...           ...             |
 +-----------------------------------------------------------------------+
 [Rescan axes]
 ```
 
-- One row per `OPINIONATED_MAP` entry, in table order. Rows are read-only except for the "Target type" and "Target" cells of the 8 fader rows (`MAP-AXIS-004`) — knobs, buttons, and the jog wheel display their fixed opinionated target with no controls to change it.
-- A fader row's "Target type" cell is a two-way toggle: **OSC encoder** (the opinionated default, `/dragonframe/encoder/<n>`) or **OSC axis**. Switching to OSC axis reveals an axis-name picker (pre-selecting nothing) and two numeric fields pre-filled with `0.0`/`100.0`; switching back to OSC encoder hides them and calls `MappingEngine.clear_axis_target(key)`, which is always safe to call even if no axis target was ever actually established for that key (`MAP-AXIS-007`).
-- **The engine's live target can lag the row's displayed target type.** Revealing the axis controls does not, by itself, call `set_axis_target` — until the user picks a name, the fader keeps driving its previous opinionated OSC encoder target even though the row now reads "OSC axis." This mirrors `MAP-AXIS-006`'s existing principle that the engine only ever acts on the last target it was actually given, never on UI intent alone.
+(Bank 1's fader has "PAN" assigned, so Knob 1/Mute 1 show their derived targets; Bank 2's fader has no axis picked yet, so Knob 2/Mute 2 show their static encoder fallback.)
+
+- One row per `OPINIONATED_MAP` entry, in table order. Only the 8 fader rows are directly editable (`MAP-AXIS-004`) — the "Target type" and "Target" cells. Knob, Mute, and Solo rows are also read-only, but their *displayed* target is computed from their bank's fader state (see `docs/llds/static-mapping.md` § Bank Derivation), not fixed — Knob N shows `stepPosition → {axis}` and Mute/Solo N show `setZero → {axis}` / `setHome → {axis}` once Fader N has a real axis assigned, and their static encoder fallback otherwise. Recomputed every tick, same as the fader rows.
+- A fader row's "Target type" cell is a two-way toggle: **OSC axis** (the default, picker pre-selecting nothing) or **OSC encoder**. A fresh fader row already shows the axis picker and two numeric fields pre-filled with `0.0`/`100.0`, since axis is the starting state; switching to OSC encoder hides them and calls `MappingEngine.clear_axis_target(key)`, which is always safe to call even if no axis target was ever actually established for that key (`MAP-AXIS-007`).
+- **The engine's live target can lag the row's displayed target type — including at startup.** A fresh fader shows "OSC axis" with no name picked and produces **no OSC output at all** until one is chosen; there is no fallback to the opinionated encoder target while unconfigured (`docs/llds/static-mapping.md` § Fader Axis Mode). This mirrors `MAP-AXIS-006`'s existing principle that the engine only ever acts on the last target it was actually given, never on UI intent alone.
 - The axis-name picker lists exactly the names currently in `AxisDiscovery.axes` (`MAP-AXIS-003`) — never free-text. Its content depends on discovery state:
   - `axes is None` (never queried, or a query is outstanding): picker shows "Discovering…" and is disabled.
   - `axes == {}` (queried, zero axes — including the confirmed zero-axes-sends-nothing case, resolved via `OSC-DISCOVER-008`'s timeout): picker shows "No axes found" and is disabled.
@@ -118,6 +122,7 @@ Embedded directly in the main window, as a section below the host/port configura
 | Listen-port Apply behavior | Triggers listener socket close+rebind (`osc-io.md`) | Require app restart for listen-port changes | Apply already exists as the change mechanism; a field that visibly does nothing on Apply would be a worse experience than a working rebind |
 | Mapping View scope | Fader target-type toggle only (OSC encoder ↔ OSC axis); other rows read-only | Full editor (Add/Edit/Duplicate/Remove, MIDI-learn, presets) in this phase | Matches `MAP-AXIS-004`'s fader-only restriction and the HLD's Phase 1/Phase 2 split; the full editor is explicitly Phase 2 |
 | Mapping View window placement | Embedded as a section of the single main window | Separate dialog opened on demand | One window is simpler for an always-on utility meant to be glanced at continuously, and keeps the mapping table visible without an extra open/close step |
+| Knob/Mute/Solo row display | Read-only, recomputed every tick from the bank's fader state | Give them their own static row content, ignoring bank state | Matches `docs/llds/static-mapping.md` § Bank Derivation — the table must reflect what will actually be sent, which now depends on the bank's fader, not a fixed entry |
 | Mapping View apply timing | Immediate — picker selection and min/max fields call `set_axis_target` on change, no Save step | Explicit Save/Cancel per row | Matches the rest of the app's live-tracking behavior (faders already stream continuously); a Save step would be the only delayed-apply control in the UI |
 | Mapping View persistence | None — resets to opinionated defaults each launch | Persist fader axis assignments across launches | Consistent with host/port fields' current no-persistence state; a persisted mapping is a bigger step than this phase's scope |
 | Stale axis reference in picker | Keep showing the configured name (greyed out), engine still sends to it | Auto-clear the row's target when its axis drops out of the discovered list | Matches `MAP-AXIS-006` — the engine already sends unconditionally; silently clearing the UI's record of user intent would contradict that |
@@ -135,10 +140,11 @@ Embedded directly in the main window, as a section below the host/port configura
 3. Connection-status label and indicator dot are independent axes that may validly disagree; Apply-triggered listener rebind on listen-port change — see Decisions & Alternatives above.
 4. Mapping View scope, apply timing, persistence, and stale-axis-reference handling — see Decisions & Alternatives above.
 5. Phase 4 edge audit: engine-target-vs-displayed-type lag while mid-edit, default min/max on reveal, invalid min/max text handling, the picker's stale-name current-value display, and picker refresh cadence — see Decisions & Alternatives above.
+6. Knob/Mute/Solo row display now reflects bank derivation, recomputed every tick from their bank's fader state — see Decisions & Alternatives above.
 
 ### Deferred
 1. Should the Dragonframe host, Dragonframe port, and local listen port persist across app launches (like the prototype's JSON state file), or always reset to their defaults? A minimal persisted-settings file is small in scope but is the first piece of "state the app remembers," which is adjacent to the deferred configuration phase.
-2. Phase 2's full Mapping View (Add/Edit/Duplicate/Remove, MIDI-learn, presets, arbitrary custom OSC paths, knob/button/jog-wheel retargeting) is out of scope for this section entirely — see the HLD's Phase 2 description.
+2. Phase 2's full Mapping View (Add/Edit/Duplicate/Remove, MIDI-learn, presets, arbitrary custom OSC paths) is out of scope for this section entirely — see the HLD's Phase 2 description. Knob/Mute/Solo are now bank-derived (see above), but remain non-independently-configurable; independently retargeting them, or retargeting the jog wheel, is still Phase 2.
 3. Exact `LIVENESS_WINDOW` value (proposed 2.0s) is a tunable constant pending real hardware testing, not a hard requirement yet.
 
 ## References
