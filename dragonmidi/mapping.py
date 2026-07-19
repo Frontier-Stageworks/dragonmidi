@@ -17,7 +17,6 @@ FADER_KEYS: frozenset[_Key] = frozenset(("cc", i) for i in range(8))
 _KNOB_BANK_OFFSET = 16
 _MUTE_BANK_OFFSET = 48
 _SOLO_BANK_OFFSET = 32
-_ROTOR_CENTER = 64
 
 
 def bank_fader_key(key: _Key) -> "_Key | None":
@@ -235,9 +234,11 @@ class MappingEngine:
         if _KNOB_BANK_OFFSET <= number < _KNOB_BANK_OFFSET + 8:
             previous = self._previous_value.get(key)
             self._previous_value[key] = event.raw_value
-            if previous is not None and previous == event.raw_value:
+            if previous is None:
+                return None  # no baseline yet - this reading only establishes one
+            delta = event.raw_value - previous
+            if delta == 0:
                 return None
-            delta = event.raw_value - _ROTOR_CENTER
             return OscMessage(f"{axis_path}/stepPosition", (float(delta),))
         if _MUTE_BANK_OFFSET <= number < _MUTE_BANK_OFFSET + 8:
             return self._process_press(key, event, now, f"{axis_path}/setZero")

@@ -501,20 +501,41 @@ def test_enter_axis_mode_without_a_name_sends_nothing_not_encoder_fallback(numbe
 _KNOB_BANK_OFFSET = 16
 _MUTE_BANK_OFFSET = 48
 _SOLO_BANK_OFFSET = 32
-_ROTOR_CENTER = 64
 
 
 @given(fader_number=st.sampled_from(FADER_CCS), raw=st.integers(min_value=0, max_value=127))
 # @spec MAP-BANK-001
-def test_knob_sends_step_position_when_bank_fader_has_axis(fader_number: int, raw: int) -> None:
+def test_knob_first_reading_establishes_baseline_and_sends_nothing(fader_number: int, raw: int) -> None:
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
     engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
     result = engine.process(cc_event(knob_number, raw), now=0.0)
-    assert result is not None
-    assert result.address == "/dragonframe/axis/PAN/stepPosition"
-    assert result.args == (float(raw - _ROTOR_CENTER),)
+    assert result is None
+
+
+@given(
+    fader_number=st.sampled_from(FADER_CCS),
+    first_raw=st.integers(min_value=0, max_value=127),
+    second_raw=st.integers(min_value=0, max_value=127),
+)
+# @spec MAP-BANK-001
+def test_knob_sends_step_position_as_the_change_since_its_own_last_reading(
+    fader_number: int, first_raw: int, second_raw: int
+) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    engine.process(cc_event(knob_number, first_raw), now=0.0)  # establish baseline
+
+    result = engine.process(cc_event(knob_number, second_raw), now=0.001)
+    if second_raw == first_raw:
+        assert result is None
+    else:
+        assert result is not None
+        assert result.address == "/dragonframe/axis/PAN/stepPosition"
+        assert result.args == (float(second_raw - first_raw),)
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
@@ -569,10 +590,12 @@ def test_knob_derived_step_position_deduped_on_identical_raw_value(fader_number:
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
     engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
-    first = engine.process(cc_event(knob_number, 90), now=0.0)
-    second = engine.process(cc_event(knob_number, 90), now=0.001)  # identical raw value
+    engine.process(cc_event(knob_number, 60), now=0.0)  # establish baseline
+    first = engine.process(cc_event(knob_number, 90), now=0.001)
+    second = engine.process(cc_event(knob_number, 90), now=0.002)  # identical raw value again
     assert first is not None
     assert first.address == "/dragonframe/axis/PAN/stepPosition"
+    assert first.args == (30.0,)
     assert second is None
 
 
@@ -595,12 +618,16 @@ def test_knob_dedup_discarded_on_encoder_to_axis_transition(fader_number: int) -
     engine.process(cc_event(knob_number, 0), now=0.0)  # encoder-mode dedup stores normalized 0.0
 
     engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # encoder -> axis transition
-    result = engine.process(cc_event(knob_number, 0), now=1.0)  # raw 0 again, now in axis mode
-    # Without the MAP-BANK-007 discard, stale normalized 0.0 == new raw_value 0 would
-    # wrongly dedupe this away (0.0 == 0 is True in Python).
-    assert result is not None
-    assert result.address == "/dragonframe/axis/PAN/stepPosition"
-    assert result.args == (float(0 - _ROTOR_CENTER),)
+    # Without the MAP-BANK-007 discard, the stale normalized 0.0 would still be compared
+    # against as if it were a raw baseline (0 - 0.0 == 0.0, a nonzero raw value like 50
+    # would wrongly compute as a real delta of 50.0 instead of establishing a fresh baseline).
+    first = engine.process(cc_event(knob_number, 50), now=1.0)
+    assert first is None  # correctly treated as a fresh baseline, not a stale-comparison send
+
+    second = engine.process(cc_event(knob_number, 55), now=1.001)
+    assert second is not None
+    assert second.address == "/dragonframe/axis/PAN/stepPosition"
+    assert second.args == (5.0,)  # normal relative delta once a real baseline exists
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
@@ -610,11 +637,12 @@ def test_knob_dedup_not_discarded_by_a_same_mode_axis_name_change(fader_number: 
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
     engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
-    engine.process(cc_event(knob_number, 90), now=0.0)  # establish dedup at raw=90
+    engine.process(cc_event(knob_number, 60), now=0.0)  # establish baseline
+    engine.process(cc_event(knob_number, 90), now=0.5)  # real reading, previous now = 90
 
     engine.set_axis_target(fader_key, "TILT", 0.0, 100.0)  # different name, still axis mode
     result = engine.process(cc_event(knob_number, 90), now=1.0)  # same raw value again
-    assert result is None  # still deduped - no mode transition occurred
+    assert result is None  # still deduped (delta=0) - no mode transition occurred
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
@@ -628,7 +656,10 @@ def test_enter_axis_mode_alone_discards_knob_dedup_on_transition(fader_number: i
 
     engine.enter_axis_mode(fader_key)  # transition back to axis mode, no name yet
     engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # already in axis mode - no further transition here
-    result = engine.process(cc_event(knob_number, 0), now=1.0)
     # Proves the discard happened in enter_axis_mode itself, not (redundantly) in this set_axis_target call.
-    assert result is not None
-    assert result.args == (float(0 - _ROTOR_CENTER),)
+    first = engine.process(cc_event(knob_number, 50), now=1.0)
+    assert first is None
+
+    second = engine.process(cc_event(knob_number, 55), now=1.001)
+    assert second is not None
+    assert second.args == (5.0,)

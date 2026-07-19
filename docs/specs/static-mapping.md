@@ -23,11 +23,11 @@ Traces to `docs/llds/static-mapping.md`.
 
 ## Bank Derivation
 
-- [x] **MAP-BANK-001**: While Bank N's fader has a real axis name assigned, Knob N shall send `/dragonframe/axis/{axisname}/stepPosition,f (delta)` on every distinct value, with no debounce, where `delta = raw_value - 64` (signed, over the MIDI CC 0–127 range).
+- [x] **MAP-BANK-001**: While Bank N's fader has a real axis name assigned, Knob N shall send `/dragonframe/axis/{axisname}/stepPosition,f (delta)` on every distinct value once a prior reading exists to compare against, with no debounce, where `delta = raw_value - previous_raw_value` (the change since Knob N's own last reported value); the first reading after establishing this state shall produce no send, only a baseline.
 - [x] **MAP-BANK-002**: When Bank N's fader has a real axis name assigned, Mute N shall send `/dragonframe/axis/{axisname}/setZero` on its press transition (in place of its opinionated encoder-reset target). This recalibrates the axis's zero reference to its current position; it does not move the axis.
 - [x] **MAP-BANK-003**: When Bank N's fader has a real axis name assigned, Solo N shall send `/dragonframe/axis/{axisname}/setHome` on its press transition (in place of its opinionated encoder-reset target). This recalibrates the axis's home reference to its current position; it does not move the axis.
 - [x] **MAP-BANK-004**: While Bank N's fader has no axis name assigned (default state, or explicitly in OSC encoder mode), Knob N, Mute N, and Solo N shall produce their opinionated encoder-channel / encoder-reset targets (`MAP-TABLE-002`/`MAP-TABLE-003`), not the derived actions above.
-- [x] **MAP-BANK-005**: Knob N's derived `stepPosition` send (`MAP-BANK-001`) shall be deduplicated the same as any other continuous-absolute control — a repeated identical raw value shall not produce a repeated send.
+- [x] **MAP-BANK-005**: Knob N's derived `stepPosition` send (`MAP-BANK-001`) shall not be repeated for a repeated identical raw value; this follows directly from `MAP-BANK-001`'s delta formula (a repeat computes to a `0` delta) without a separate dedup mechanism.
 - [x] **MAP-BANK-006**: Bank derivation shall not apply to Record N or Select N regardless of Bank N's fader state; they shall remain unmapped (`MAP-TABLE-005`) in every case.
 - [x] **MAP-BANK-007**: When Bank N's fader transitions between OSC encoder mode and OSC axis (direct) mode (`MAP-AXIS-010`) in either direction, the system shall discard Knob N's dedup state; selecting a different axis name while the fader remains in OSC axis (direct) mode shall not discard it.
 

@@ -54,7 +54,7 @@ Each fader, together with the knob, Mute button, and Solo button directly above/
 | Control | Behavior once the bank's fader has an axis assigned |
 |---|---|
 | Fader | Drives the axis to an absolute position across the fader's travel |
-| Knob | Nudges that axis — turn right of center to move one way, left of center the other, centered (12 o'clock) does nothing. Useful for fine-tuning a position the fader got you close to. |
+| Knob | Nudges that axis by however far you just turned it — turning it further right moves the axis one way, further left the other way, proportional to the turn. Holding it still does nothing further. Useful for fine-tuning a position the fader got you close to. |
 | Mute | Marks the axis's current position as its zero reference — it does **not** move the axis anywhere |
 | Solo | Marks the axis's current position as its home reference — it does **not** move the axis anywhere |
 
