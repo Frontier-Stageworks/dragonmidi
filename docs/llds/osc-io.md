@@ -4,10 +4,22 @@
 
 Two independent UDP responsibilities that share the OSC 1.0 wire format:
 
-1. **Client** — encodes and sends Dragonframe OSC commands produced by the Static Mapping Engine to Dragonframe's OSC Input port.
-2. **Listener** — binds a local UDP port and treats incoming datagrams as evidence that Dragonframe is alive and reachable, per the HLD's decision to use bidirectional OSC rather than a send-only heartbeat. It does not need to decode *what* Dragonframe sent in phase 1 — only that something arrived.
+1. **Client** — encodes and sends Dragonframe OSC commands produced by the Mapping Engine to Dragonframe's OSC Input port.
+2. **Listener** — binds a local UDP port and treats incoming datagrams as evidence that Dragonframe is alive and reachable, per the HLD's decision to use bidirectional OSC rather than a send-only heartbeat. It additionally parses `getAllPosition` responses specifically, to discover the current project's axis names for the mapping view's axis picker (`docs/high-level-design.md § Delivery Phasing`) — it does not decode any other OSC content Dragonframe sends.
 
-Both share the same small OSC 1.0 message encoder; the Listener does not need a full decoder, only enough to optionally sanity-check that a datagram looks like an OSC packet (see Decisions).
+Both share the same OSC 1.0 message encoder. The Listener now also needs a **decoder** — for the one response shape it cares about (`getAllPosition`'s bundled per-axis replies) — where phase 1's original design only needed to detect "a datagram arrived," not parse it.
+
+## Axis Discovery (`getAllPosition`)
+
+- To discover axis names, the Listener sends `/dragonframe/axis/getAllPosition` (no arguments) to Dragonframe's OSC Input port, **from the same socket it has bound for listening**, not from the Client's separate send socket.
+- **This is a real, empirically-required constraint, not a simplification:** sending the query from an unbound (ephemeral-port) socket while listening on a different socket bound to the configured listen port failed to receive any reply in direct testing against a real Dragonframe instance. Sending from the same bound socket worked reliably. Dragonframe's exact reply-addressing convention (reply-to-source vs. reply-to-configured-output-port) isn't documented; using one socket for both roles is robust regardless of which it actually is.
+- **The response arrives as an OSC 1.0 `#bundle`**, not a bare message: `"#bundle\0"` (8 bytes) + an 8-byte OSC time tag + a sequence of `(int32 size, message bytes)` elements. Each element is itself an OSC message of the form `/dragonframe/axis/{axisname},f (position)` (one per known axis) and must be unwrapped before the per-axis address/value pairs are usable. A bundle element may in principle nest another bundle; the decoder handles this recursively rather than assuming exactly one level of nesting.
+- Discovered `(axis_name, position)` pairs are handed to the mapping view for its axis picker (`static-mapping.md`'s OSC axis (direct) target type) — this is the only content interpretation this component performs; all other incoming traffic is still treated as opaque liveness signal only.
+- **Discovered axes are stored keyed by name**, overwritten on each new response for that name. This gives two behaviors "for free," without dedicated logic: duplicate responses for the same axis (whether from a genuine re-query or the unprompted motor-position broadcast described below) simply overwrite with whichever arrived most recently, and if Dragonframe ever reports two axes under the same name, the later one silently wins in the picker — an accepted limitation, not something this component disambiguates.
+- **Duplicate responses are expected and tolerated, not an error.** With "Output motor positions" enabled in Dragonframe's OSC preferences, a `gotoPosition` command can trigger both an unprompted motor-position broadcast and the explicit `getAllPosition` reply. In practice these carry the same value, but even if a real move happened between the two (making them genuinely differ), the store-by-name/last-write-wins behavior above already resolves it without needing a dedicated "which one is authoritative" rule.
+- **Discovery is triggered automatically once, right after the listener socket successfully binds at startup** (mirroring the "always-on pipeline" pattern already used for MIDI discovery polling), plus on-demand via an explicit "Refresh" action in the mapping view — for example after the user switches Dragonframe projects and wants the axis list to reflect the new project. No periodic/background re-query loop.
+- **Two distinct empty states are tracked, not conflated:** "never queried yet" (no `getAllPosition` has been sent or answered since startup) versus "queried, and the current project reports zero axes." The discovered-axes store starts as `None` (never queried) and only becomes an empty collection once at least one query round-trip has completed with no axes in the response — the same sentinel-vs-empty pattern already used for Signal Monitor's `last_activity` in `app-ui.md`.
+- **No recursion-depth or size-consistency bounds on bundle decoding.** Dragonframe is a trusted local peer, not untrusted input; the decoder trusts each element's declared size field and recurses without a depth limit. A decode failure (malformed/truncated framing) is caught and skipped at the top level, same as the existing "tolerate decode failures, liveness still counts" handling for any other unrecognized datagram.
 
 ## Configuration
 
@@ -26,17 +38,17 @@ These three values are machine-specific network configuration, not part of the o
 - Encodes `(address, *args)` into an OSC 1.0 message: address string, type-tag string, then arguments (`int32`, `float32`, or `string`), each NUL-padded to a 4-byte boundary — reused directly from the prototype's `osc.py`, since it is a small, correct, side-effect-free wire-format implementation rather than "architecture."
 - Sends via a UDP socket to the configured Dragonframe host:port. UDP send is fire-and-forget; a successful `sendto` call does not indicate Dragonframe received or understood the message (this is exactly why the Listener exists).
 - If `sendto` raises (e.g. `ENETUNREACH`, a full send buffer), the exception is caught and logged; the send is treated like any other dropped UDP packet. There is no retry queue in phase 1.
-- **Encoder type coverage is a closed invariant:** the Static Mapping Engine (`static-mapping.md`) only ever produces `float`, `int`, or no-argument OSC messages, which is a strict subset of what this encoder supports. No fallback path is needed for argument types the mapping engine never produces.
+- **Encoder type coverage is a closed invariant:** the Mapping Engine (`static-mapping.md`) only ever produces `float`, `int`, or no-argument OSC messages, which is a strict subset of what this encoder supports. No fallback path is needed for argument types the mapping engine never produces.
 
-## Listener (Receive, status only)
+## Listener (Receive)
 
 - Binds a UDP socket to `0.0.0.0:<local listen port>` on a background thread/loop, at app startup.
 - **Every bind attempt — at startup, or triggered by an Apply of a changed local listen port (see below) — clears the Dragonframe channel's error flag before attempting the bind**, so the flag always reflects only the most recent attempt's outcome, mirroring the same lifecycle rule as `midi-input.md`'s Native Mode error flag.
 - If the bind fails (e.g. port already in use by a previous instance that didn't shut down cleanly), this is a real configuration problem, not ordinary "no signal yet" — it surfaces as the *error* state on the Status UI's Dragonframe indicator (3-state: live / quiet / error — see `app-ui.md`), resolved jointly with `midi-input.md`'s Native-Mode-failure surfacing question.
 - **Rebind on config change:** when the user applies a changed local listen port via the Status UI's Apply action (`app-ui.md`), the existing listener socket is closed and a new one is bound to the new port, going through the same clear-error-flag-then-bind-attempt path described above. Without this, editing the listen port in the UI would silently have no effect on the actual listener. The Client (send) side needs no equivalent rebind: it is stateless per send and simply reads the current configured host/port on every `sendto` call.
-- On receiving any datagram, updates a "last Dragonframe activity" timestamp, consumed by the Signal Monitor (`app-ui.md`) to drive the Dragonframe signal indicator. No size validation is applied — UDP datagrams are inherently bounded, and since content isn't parsed, size is irrelevant to the liveness purpose.
+- On receiving any datagram, updates a "last Dragonframe activity" timestamp, consumed by the Signal Monitor (`app-ui.md`) to drive the Dragonframe signal indicator — **this happens regardless of whether the datagram decodes successfully**, matching the same "liveness before parsing" principle already used in `midi-input.md`. No size validation is applied — UDP datagrams are inherently bounded, and content that isn't a recognized response doesn't need to be size-checked either.
 - A datagram that arrives in the brief window before the listener thread finishes binding at startup is simply not received (no listener yet exists to catch it) — accepted as a harmless, sub-second startup race; the indicator lights on the next packet instead.
-- Does not attempt to parse Dragonframe's OSC content (axis positions, frame/shutter/shoot events) in this phase — content interpretation is an explicit HLD non-goal for phase 1.
+- Beyond liveness and the `getAllPosition` bundle parsing described above, does not attempt to interpret any other OSC content Dragonframe sends (frame/shutter/shoot events, unprompted motor-position streaming outside of a discovery query) — those remain opaque liveness signal only.
 
 ## Decisions & Alternatives
 
@@ -52,18 +64,30 @@ These three values are machine-specific network configuration, not part of the o
 | Pre-bind datagram loss | Accepted as harmless | Buffer/replay | Sub-second startup race with no meaningful consequence — indicator lights on the next packet |
 | Error-flag lifecycle | Clear before every bind attempt (startup or rebind) | Clear only on explicit user action; leave set until app restart | Mirrors `midi-input.md`'s rule; each attempt should be judged on its own outcome, not haunted by a prior one |
 | Listen-port change while running | Close and rebind the listener socket when Apply is pressed with a changed port | Require an app restart to change the listen port | Apply already exists as the config-change mechanism (`app-ui.md`); without a rebind, editing the field would silently do nothing |
+| Axis-discovery query socket | Send `getAllPosition` from the same socket the Listener is bound to | Send from the Client's separate socket | Empirically required — sending from a separate, unbound socket failed to receive the reply against a real Dragonframe instance |
+| `getAllPosition` response format | Decode as an OSC `#bundle` containing per-axis messages, recursively | Assume a bare single message | Confirmed by direct testing; a single-message-only decoder silently fails on the real response shape |
+| Duplicate discovery responses | Tolerated, not deduplicated by content | Track and suppress repeats | Both the motor-position broadcast and the explicit query reply carry the same value in practice; simpler to just accept both |
+| Content interpretation scope | Only `getAllPosition` bundles are parsed; everything else stays opaque liveness signal | Build a general OSC content interpreter | Matches the HLD's non-goal of not interpreting Dragonframe's other output (frame events, unprompted motor-position streaming) |
+| Discovered-axis storage | Keyed by name, overwritten on each response | Track a list/history per axis | Gives duplicate-response tolerance and same-name-collision behavior "for free," with no dedicated conflict-resolution logic needed |
+| Discovery trigger | Automatic once at startup (right after bind succeeds), plus an explicit on-demand "Refresh" action | Periodic background re-query | Matches the always-on-pipeline pattern elsewhere; avoids polling overhead for something that only changes when the user switches projects |
+| Empty discovery states | Two distinct states tracked: never-queried (`None`) vs. queried-with-zero-axes (empty collection) | Conflate both into one "no axes" display | Same sentinel-vs-empty pattern as Signal Monitor's `last_activity`; lets the UI distinguish "still waiting" from "genuinely empty project" |
+| Bundle decode bounds | None — trust declared sizes, recurse without a depth limit | Enforce a max recursion depth / validate size consistency | Dragonframe is a trusted local peer, not untrusted input; a malformed/truncated packet is caught and skipped like any other decode failure |
 
 ## Open Questions & Future Decisions
 
 ### Resolved
 1. Send-path exceptions, listener bind failure surfacing, port-collision validation, datagram size validation, and pre-bind datagram loss — see Decisions & Alternatives above.
 2. Error-flag clearing lifecycle and listener rebind-on-Apply — see Decisions & Alternatives above.
+3. Axis-discovery query socket choice, `getAllPosition`'s bundle response format, and duplicate-response handling — see Decisions & Alternatives above.
+4. Discovered-axis storage/collision behavior, discovery trigger timing, empty-state tracking, and bundle decode bounds — see Decisions & Alternatives above.
 
 ### Deferred
 1. Should the Listener verify the sender's source address matches the configured Dragonframe host, to avoid a false-positive "Dragonframe signal" from some unrelated traffic hitting the same port? Cheap to add; currently deferred as unnecessary complexity until it causes a real false positive.
 2. Default local listen port (`7011`) is arbitrary and only needs to not collide with `7010`; no other constraint identified yet.
+3. The mapping view's UI treatment of the two empty-discovery states (what text/affordance it shows for each) belongs in `docs/llds/app-ui.md`'s Mapping View section, not yet updated for this — a pending cascade.
 
 ## References
 
 - `~/github/DragonMIDI-vibed/dragonmidi/osc.py` — source of the OSC 1.0 message encoder reused here.
 - Dragonframe official manual, "Outputting Axis Positions via Open Sound Control (OSC)" (`Using Dragonframe 2025.pdf`) — confirms Dragonframe's OSC Output capability that the Listener depends on.
+- `docs/dragonframe-messages-research.md § Empirically validated: direct axis addressing` — the bundle format, single-socket query requirement, and duplicate-response findings this LLD's axis-discovery design is built on.
