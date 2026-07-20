@@ -1,0 +1,47 @@
+name: Build Windows Executable
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build with PyInstaller
+        run: pyinstaller DragonMIDI-win.spec --clean --noconfirm
+
+      - name: Upload warnings
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyinstaller-warnings
+          path: build/DragonMIDI-win/warn-DragonMIDI-win.txt
+          retention-days: 7
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DragonMIDI-${{ github.sha }}
+          path: dist/DragonMIDI.exe
+          retention-days: 7
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/DragonMIDI.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
