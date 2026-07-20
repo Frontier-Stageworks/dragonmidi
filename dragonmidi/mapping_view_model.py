@@ -19,12 +19,8 @@ CONTROL_NAMES: dict[_Key, str] = {
     **_numbered("Fader Channel", 0, 8),
     ("cc", 45): "Transport Record",
     ("cc", 41): "Play",
-    ("cc", 42): "Stop",
-    ("cc", 46): "Cycle",
     ("cc", 43): "Rewind",
     ("cc", 44): "Fast Forward",
-    ("cc", 61): "Previous Marker",
-    ("cc", 62): "Next Marker",
     ("cc", 58): "Previous Track",
     ("cc", 59): "Next Track",
     ("korg_scene", None): "Scene",
@@ -103,18 +99,87 @@ def _jog_wheel_rows() -> list[RowView]:
     ]
 
 
+_STOP_ROW_KEY: _Key = ("cc", 42)
+_CYCLE_ROW_KEY: _Key = ("cc", 46)
+_SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for CC32-39
+_PREV_MARKER_ROW_KEY: _Key = ("cc", 61)
+_NEXT_MARKER_ROW_KEY: _Key = ("cc", 62)
+
+
+def _websocket_target_rows() -> list[RowView]:
+    """Stop, Cycle, Solo 1-8, and Previous/Next Marker target the WebSocket Output
+    Adapter (docs/llds/websocket-output.md), not OSC. Stop/Cycle/Marker were removed
+    from OPINIONATED_MAP entirely (MAP-WS-009) and Solo was removed from bank
+    derivation (MAP-WS-002), so none of them are reachable via build_rows()'s
+    OPINIONATED_MAP loop below - rendered as fixed rows here instead, the same
+    treatment as the jog wheel's rows for entries that aren't table lookups. Solo
+    gets one summary row for all 8 buttons, not eight near-identical rows and not
+    folded into the fader rows (docs/llds/app-ui.md § Mapping View).
+
+    @spec UI-MAP-001, UI-MAP-013
+    """
+    return [
+        RowView(
+            key=_STOP_ROW_KEY,
+            name="Stop",
+            midi_source=midi_source_label(_STOP_ROW_KEY),
+            trigger="Press",
+            target_type="WebSocket",
+            target="E-Stop",
+            editable=False,
+        ),
+        RowView(
+            key=_CYCLE_ROW_KEY,
+            name="Cycle",
+            midi_source=midi_source_label(_CYCLE_ROW_KEY),
+            trigger="Press",
+            target_type="WebSocket",
+            target="select-AXn (cycling)",
+            editable=False,
+        ),
+        RowView(
+            key=_SOLO_ROW_KEY,
+            name="Solo 1-8",
+            midi_source="CC32-39, ch16",
+            trigger="Press",
+            target_type="WebSocket",
+            target="select-AX1 – select-AX8 (button N → AXN)",
+            editable=False,
+        ),
+        RowView(
+            key=_PREV_MARKER_ROW_KEY,
+            name="Previous Marker",
+            midi_source=midi_source_label(_PREV_MARKER_ROW_KEY),
+            trigger="Press",
+            target_type="WebSocket",
+            target="Jog All (backward)",
+            editable=False,
+        ),
+        RowView(
+            key=_NEXT_MARKER_ROW_KEY,
+            name="Next Marker",
+            midi_source=midi_source_label(_NEXT_MARKER_ROW_KEY),
+            trigger="Press",
+            target_type="WebSocket",
+            target="Jog All (forward)",
+            editable=False,
+        ),
+    ]
+
+
 def build_rows(engine: MappingEngine) -> list[RowView]:
-    """One row per opinionated-map entry, in table order - except Knob/Mute/Solo
+    """One row per opinionated-map entry, in table order - except Knob/Mute
     entries, which are bank-derived and folded into their bank's Fader Channel
     row rather than shown as their own rows (their OSC dispatch is unaffected) -
-    plus two further rows for the jog wheel, appended last (UI-MAP-012).
+    plus the WebSocket-targeted rows (UI-MAP-013) and two further rows for the
+    jog wheel (UI-MAP-012), both appended last.
 
-    @spec UI-MAP-001, UI-MAP-002, UI-MAP-012
+    @spec UI-MAP-001, UI-MAP-002, UI-MAP-012, UI-MAP-013
     """
     rows = []
     for key, entry in OPINIONATED_MAP.items():
         if bank_fader_key(key) is not None:
-            continue  # Knob/Mute/Solo: folded into the Fader Channel row, not its own row
+            continue  # Knob/Mute: folded into the Fader Channel row, not its own row
         target_type, target = _target_label(key, engine)
         rows.append(
             RowView(
@@ -127,6 +192,7 @@ def build_rows(engine: MappingEngine) -> list[RowView]:
                 editable=key in FADER_KEYS,
             )
         )
+    rows.extend(_websocket_target_rows())
     rows.extend(_jog_wheel_rows())
     return rows
 

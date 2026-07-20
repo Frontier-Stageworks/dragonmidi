@@ -19,7 +19,7 @@ Traces to `docs/llds/app-ui.md`.
 
 ## Mapping View
 
-- [x] **UI-MAP-001**: The system shall render one table row per entry in the opinionated map, in table order, showing that entry's name, MIDI source, trigger type, target type, and target — except Knob, Mute, and Solo entries, which shall not be rendered as their own rows; their behavior (`MAP-BANK-001` through `MAP-BANK-004`, see `docs/specs/static-mapping.md`) is unaffected, only their table display is folded into their bank's fader row.
+- [x] **UI-MAP-001**: The system shall render one table row per entry in the opinionated map, in table order, showing that entry's name, MIDI source, trigger type, target type, and target — except Knob and Mute entries, which shall not be rendered as their own rows; their behavior (`MAP-BANK-001`, `MAP-BANK-002`, `MAP-BANK-004`, see `docs/specs/static-mapping.md`) is unaffected, only their table display is folded into their bank's fader row. Stop, Cycle, and Previous/Next Marker are ordinary (non-folded) entries under this rule, each rendering its own row with its WebSocket target type/target (`MAP-WS-001`, `MAP-WS-003`/`004`, `MAP-WS-006`/`007`, see `docs/specs/static-mapping.md`); Solo is not rendered under this rule at all — see `UI-MAP-013`.
 - [x] **UI-MAP-002**: The system shall permit editing the target type and target only on the 8 fader rows (`MAP-AXIS-004`, see `docs/specs/static-mapping.md`); non-fader, non-bank-member rows (transport/marker/track buttons, Scene) shall display their target with no control to change it.
 - [x] **UI-MAP-003**: On a fader row, the system shall offer exactly two target types, OSC encoder and OSC axis; selecting OSC axis shall reveal an axis-name picker (with no name pre-selected) and min/max numeric fields pre-filled with `0.0`/`100.0`, without itself calling `MappingEngine.set_axis_target`; selecting OSC encoder shall hide those controls and call `MappingEngine.clear_axis_target(key)` (`MAP-AXIS-007`, see `docs/specs/static-mapping.md`), which is safe to call whether or not an axis target had actually been established for that key.
 - [x] **UI-MAP-004**: The system shall recompute the axis-name picker's candidate list from `AxisDiscovery.axes` on every UI update tick (the same tick that updates the status indicators), not only when the picker is opened or Rescan is pressed, and shall not accept a free-text or arbitrary name (`MAP-AXIS-003`, see `docs/specs/static-mapping.md`).
@@ -31,6 +31,7 @@ Traces to `docs/llds/app-ui.md`.
 - [x] **UI-MAP-010**: The Mapping View shall hold no persisted state; on next application launch, all fader rows shall reflect the default OSC axis (direct) mode with no name selected (`MAP-AXIS-008`), not any OSC axis target or OSC encoder mode configured in a prior session.
 - [x] **UI-MAP-011**: On initial render, the system shall show each fader row's Target-type control as "OSC axis" with its axis-name picker visible and no name selected, rather than "OSC encoder" (`MAP-AXIS-008`, see `docs/specs/static-mapping.md`).
 - [x] **UI-MAP-012**: In addition to the opinionated-map-derived rows (`UI-MAP-001`), the system shall render two further rows for the jog wheel, since it is not itself an opinionated-map entry (`docs/specs/static-mapping.md § Jog Wheel Frame Stepping`): a row named "Jog Wheel" with Target type "OSC action" and Target "stepForward / stepBackward", and a row named "Jog Wheel (Arc)" with Target type "Keystroke" and Target "Option+Shift+Right / Option+Shift+Left"; both rows shall show MIDI source "CC110, ch16" and trigger "Directional", and neither shall be editable.
+- [x] **UI-MAP-013**: The system shall render exactly one row named "Solo 1-8" for the Solo 1–8 controls, not folded into any fader row (unlike Knob/Mute, `UI-MAP-001`) and not rendered as eight separate rows; the row shall show MIDI source "CC32-39, ch16", trigger "Press", Target type "WebSocket", and Target "select-AX1 – select-AX8 (button N → AXN)" (`MAP-WS-002`, see `docs/specs/static-mapping.md`), and shall not be editable.
 
 ## Threading and Shutdown
 
@@ -40,3 +41,4 @@ Traces to `docs/llds/app-ui.md`.
 ## References
 
 - `docs/llds/app-ui.md`
+- `docs/llds/static-mapping.md § WebSocket-Targeted Controls`, `docs/specs/static-mapping.md § WebSocket-Targeted Controls` — the `MAP-WS-*` specs behind `UI-MAP-001`'s and `UI-MAP-013`'s WebSocket target display.

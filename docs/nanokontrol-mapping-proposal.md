@@ -1,6 +1,8 @@
 # nanoKONTROL Mapping Proposal — Status Tracker
 
-A friend proposed a set of Arc Motion Control mappings for the KORG nanoKONTROL2 (see the diagram shared 2026-07-19) as a brainstorm — none of it is implemented. This tracks each proposed function against what's actually reachable from DragonMIDI, translated to the nanoKONTROL Studio (the hardware DragonMIDI targets — see `docs/high-level-design.md`).
+This is a proposed set of Arc Motion Control mappings for the KORG nanoKONTROL2 — none of it is implemented. This tracks each proposed function against what's actually reachable from DragonMIDI, translated to the nanoKONTROL Studio (the hardware DragonMIDI targets — see `docs/high-level-design.md`).
+
+![Proposed nanoKONTROL2 mapping](proposed-mapping.jpg)
 
 **Status legend:**
 - **Done** — already implemented in DragonMIDI today.

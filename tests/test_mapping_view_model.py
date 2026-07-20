@@ -1,7 +1,7 @@
 """Tests for the Mapping View's pure-Python logic (docs/specs/app-ui.md § Mapping View).
 
 @spec UI-MAP-001, UI-MAP-002, UI-MAP-004, UI-MAP-005, UI-MAP-007, UI-MAP-008
-@spec UI-MAP-011, UI-MAP-012
+@spec UI-MAP-011, UI-MAP-012, UI-MAP-013
 """
 from __future__ import annotations
 
@@ -20,6 +20,14 @@ from dragonmidi.mapping_view_model import (
 )
 
 FADER_CCS = list(range(0, 8))
+SOLO_CCS = list(range(32, 40))
+WEBSOCKET_ROW_KEYS = [
+    ("cc", 42),  # Stop
+    ("cc", 46),  # Cycle
+    ("solo_websocket", None),  # Solo 1-8 summary row
+    ("cc", 61),  # Previous Marker
+    ("cc", 62),  # Next Marker
+]
 
 
 # --- UI-MAP-001: one row per opinionated entry, in table order, except bank members ---
@@ -29,19 +37,29 @@ def test_build_rows_returns_one_row_per_non_bank_member_entry_in_table_order() -
     rows = build_rows(engine)
     expected_keys = [key for key in OPINIONATED_MAP if bank_fader_key(key) is None]
     row_keys = [row.key for row in rows]
-    # The two jog wheel rows (UI-MAP-012) are appended after every opinionated-map
-    # row, since the jog wheel isn't itself an OPINIONATED_MAP entry.
+    # The WebSocket-targeted rows (UI-MAP-013) and the two jog wheel rows
+    # (UI-MAP-012) are appended after every opinionated-map row, since none of
+    # them are themselves OPINIONATED_MAP entries.
     assert row_keys[: len(expected_keys)] == expected_keys
-    assert row_keys[len(expected_keys) :] == [JOG_WHEEL_ROW_KEY, JOG_WHEEL_ARC_ROW_KEY]
+    assert row_keys[len(expected_keys) :] == [*WEBSOCKET_ROW_KEYS, JOG_WHEEL_ROW_KEY, JOG_WHEEL_ARC_ROW_KEY]
 
 
-def test_build_rows_excludes_knob_mute_solo_rows() -> None:
+def test_build_rows_excludes_knob_mute_rows() -> None:
     engine = MappingEngine()
     rows = build_rows(engine)
     row_keys = {row.key for row in rows}
     for key in OPINIONATED_MAP:
         if bank_fader_key(key) is not None:
             assert key not in row_keys
+
+
+@given(cc=st.sampled_from(SOLO_CCS))
+# @spec UI-MAP-013
+def test_build_rows_excludes_individual_solo_cc_keys(cc: int) -> None:
+    engine = MappingEngine()
+    rows = build_rows(engine)
+    row_keys = {row.key for row in rows}
+    assert ("cc", cc) not in row_keys
 
 
 # --- UI-MAP-002: only fader rows are editable ---
@@ -130,6 +148,58 @@ def test_scene_row_shows_osc_action_target_with_no_cc_number() -> None:
     assert row.target_type == "OSC action"
     assert row.target == "/dragonframe/black"
     assert row.midi_source == "Native Mode Scene"
+
+
+# --- UI-MAP-013: WebSocket-targeted rows (Stop, Cycle, Solo 1-8, Marker) ---
+
+def test_build_rows_includes_all_websocket_target_rows() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    for key in WEBSOCKET_ROW_KEYS:
+        assert key in rows
+        assert rows[key].target_type == "WebSocket"
+        assert rows[key].editable is False
+
+
+def test_stop_row_content() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[("cc", 42)]
+    assert row.name == "Stop"
+    assert row.midi_source == "CC42, ch16"
+    assert row.trigger == "Press"
+    assert row.target == "E-Stop"
+
+
+def test_cycle_row_content() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[("cc", 46)]
+    assert row.name == "Cycle"
+    assert row.midi_source == "CC46, ch16"
+    assert row.target == "select-AXn (cycling)"
+
+
+def test_solo_summary_row_content() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    row = rows[("solo_websocket", None)]
+    assert row.name == "Solo 1-8"
+    assert row.midi_source == "CC32-39, ch16"
+    assert row.target == "select-AX1 – select-AX8 (button N → AXN)"
+
+
+def test_marker_row_content() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_rows(engine)}
+    prev_row = rows[("cc", 61)]
+    next_row = rows[("cc", 62)]
+    assert prev_row.name == "Previous Marker"
+    assert prev_row.midi_source == "CC61, ch16"
+    assert prev_row.target == "Jog All (backward)"
+    assert next_row.name == "Next Marker"
+    assert next_row.midi_source == "CC62, ch16"
+    assert next_row.target == "Jog All (forward)"
 
 
 # --- UI-MAP-012: jog wheel's two additional, non-editable rows ---

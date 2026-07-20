@@ -28,6 +28,7 @@ from .shutdown import run_shutdown_sequence
 from .signal_monitor import SignalMonitor
 from .status_presenter import compute_status_snapshot
 from .status_widgets import IndicatorRow
+from .websocket_output import WebSocketOutputAdapter
 
 APP_TITLE = "DragonMIDI"
 DISCOVERY_POLL_MS = 2000
@@ -44,6 +45,7 @@ class DragonMidiWindow(QMainWindow):
 
         self._mapping = MappingEngine()
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
+        self._websocket_output = WebSocketOutputAdapter()
         self._monitor = SignalMonitor()
         self._config = ConfigController(EndpointConfig(), on_apply=self._on_config_applied)
 
@@ -71,6 +73,7 @@ class DragonMidiWindow(QMainWindow):
         self._build_ui()
 
         self._osc_listener.start()
+        self._websocket_output.start()
 
         self._discovery_timer = QTimer(self)
         self._discovery_timer.timeout.connect(self._midi.poll_discovery)
@@ -149,12 +152,17 @@ class DragonMidiWindow(QMainWindow):
         self._dragonframe_row.set_state(snapshot.dragonframe.state, snapshot.dragonframe.label)
 
     def _process_midi_event(self, event: MidiEvent) -> None:
-        message = self._mapping.process(event, now=time.monotonic(), axis_positions=self._axis_discovery.axes)
+        now = time.monotonic()
+        axis_positions = self._axis_discovery.axes
+        message = self._mapping.process(event, now=now, axis_positions=axis_positions)
         if message is not None:
             self._osc_client.send(message.address, *message.args)
         combo = self._mapping.process_keystroke(event)
         if combo is not None:
             self._keystroke_output.send(combo)
+        command = self._mapping.process_websocket(event, now=now, axis_positions=axis_positions)
+        if command is not None:
+            self._websocket_output.send(command)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override signature
         run_shutdown_sequence(
@@ -162,6 +170,7 @@ class DragonMidiWindow(QMainWindow):
                 self._midi.disconnect,
                 self._osc_listener.stop,
                 self._osc_client.close,
+                self._websocket_output.stop,
             ]
         )
         super().closeEvent(event)

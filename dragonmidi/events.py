@@ -34,3 +34,15 @@ class KeyCombo:
 
     modifiers: frozenset[str]
     key: str
+
+
+@dataclass(frozen=True)
+class WebSocketCommand:
+    """A Dragonframe WebSocket input command.
+
+    @spec WS-SEND-001, WS-SEND-002
+    """
+
+    input: str
+    operation: str = ""
+    params: tuple = ()

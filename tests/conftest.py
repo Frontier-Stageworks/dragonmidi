@@ -20,3 +20,13 @@ def free_udp_port() -> int:
     port = sock.getsockname()[1]
     sock.close()
     return port
+
+
+@pytest.fixture
+def free_tcp_port() -> int:
+    """Reserve an ephemeral TCP port number, then release it for the test to bind."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port

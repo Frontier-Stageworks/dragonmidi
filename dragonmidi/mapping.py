@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .events import KeyCombo, MidiEvent, OscMessage
+from .events import KeyCombo, MidiEvent, OscMessage, WebSocketCommand
 
 CHANNEL = 15  # zero-indexed MIDI channel 16, the nanoKONTROL Studio's Native Mode channel
 DEBOUNCE_SECONDS = 0.080
@@ -20,21 +20,30 @@ _JOG_WHEEL_KEY: _Key = ("cc", JOG_WHEEL_CC)
 _STEP_MOCO_FORWARD = KeyCombo(frozenset({"alt", "shift"}), "right")
 _STEP_MOCO_BACKWARD = KeyCombo(frozenset({"alt", "shift"}), "left")
 
-# Bank membership: Bank N = Fader N, Knob N, Mute N, Solo N (Record N/Select N excluded, no
-# matching per-axis action exists for them - @spec MAP-BANK-006).
+# WebSocket-targeted controls - @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-006, MAP-WS-007
+_STOP_KEY: _Key = ("cc", 42)
+_CYCLE_KEY: _Key = ("cc", 46)
+_PREV_MARKER_KEY: _Key = ("cc", 61)
+_NEXT_MARKER_KEY: _Key = ("cc", 62)
+_SOLO_BANK_OFFSET = 32
+_SOLO_KEYS: frozenset[_Key] = frozenset(("cc", _SOLO_BANK_OFFSET + i) for i in range(8))
+
+# Bank membership: Bank N = Fader N, Knob N, Mute N (Record N/Select N excluded, no
+# matching per-axis action exists for them - @spec MAP-BANK-006). Solo N is not a bank
+# member here - it's an unconditional WebSocket target regardless of Fader N's axis
+# state (@spec MAP-WS-002), so it's excluded from bank_fader_key()'s offsets below.
 _KNOB_BANK_OFFSET = 16
 _MUTE_BANK_OFFSET = 48
-_SOLO_BANK_OFFSET = 32
 _KNOB_STEP_SCALE = 0.1  # axis position units per one MIDI raw-value increment
 
 
 def bank_fader_key(key: _Key) -> "_Key | None":
-    """Given a Knob/Mute/Solo key, return its bank's Fader key. `None` if `key`
-    is not a bank member (a fader itself, a button/scene, or the jog wheel)."""
+    """Given a Knob/Mute key, return its bank's Fader key. `None` if `key`
+    is not a bank member (a fader itself, Solo, a button/scene, or the jog wheel)."""
     kind, number = key
     if kind != "cc" or number is None:
         return None
-    for offset in (_KNOB_BANK_OFFSET, _MUTE_BANK_OFFSET, _SOLO_BANK_OFFSET):
+    for offset in (_KNOB_BANK_OFFSET, _MUTE_BANK_OFFSET):
         if offset <= number < offset + 8:
             return ("cc", number - offset)
     return None
@@ -66,23 +75,17 @@ def _mute_entries() -> dict[_Key, _MapEntry]:
     return {("cc", 48 + i): _MapEntry("press", f"/dragonframe/encoderReset/{i + 1}") for i in range(8)}
 
 
-def _solo_entries() -> dict[_Key, _MapEntry]:
-    return {("cc", 32 + i): _MapEntry("press", f"/dragonframe/encoderReset/{9 + i}") for i in range(8)}
-
-
+# Stop, Cycle, Solo 1-8, and Previous/Next Marker are WebSocket-targeted
+# (process_websocket(), @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-006, MAP-WS-007)
+# and deliberately absent from this table - @spec MAP-WS-009.
 OPINIONATED_MAP: dict[_Key, _MapEntry] = {
     **_fader_entries(),
     **_knob_entries(),
     **_mute_entries(),
-    **_solo_entries(),
     ("cc", 45): _MapEntry("press", "/dragonframe/shoot", args=(1,)),  # Transport Record
     ("cc", 41): _MapEntry("press", "/dragonframe/play"),
-    ("cc", 42): _MapEntry("press", "/dragonframe/live"),
-    ("cc", 46): _MapEntry("press", "/dragonframe/loop"),  # Cycle
     ("cc", 43): _MapEntry("press", "/dragonframe/stepBackward"),  # Rewind (<<)
     ("cc", 44): _MapEntry("press", "/dragonframe/stepForward"),  # Fast Forward (>>)
-    ("cc", 61): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Marker
-    ("cc", 62): _MapEntry("press", "/dragonframe/stepForward"),  # Next Marker
     ("cc", 58): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Track
     ("cc", 59): _MapEntry("press", "/dragonframe/stepForward"),  # Next Track
     ("korg_scene", None): _MapEntry("press", "/dragonframe/black"),
@@ -96,11 +99,13 @@ class MappingEngine:
     @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
     @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
     @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
-    @spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
+    @spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
     @spec MAP-BANK-008
     @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
     @spec MAP-JOGKEY-001, MAP-JOGKEY-002, MAP-JOGKEY-003, MAP-JOGKEY-004, MAP-JOGKEY-005
     @spec MAP-JOGKEY-006, MAP-JOGKEY-007
+    @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005, MAP-WS-006
+    @spec MAP-WS-007, MAP-WS-008, MAP-WS-009
     """
 
     def __init__(self) -> None:
@@ -117,11 +122,14 @@ class MappingEngine:
         # reading is available from Dragonframe (see `process`'s `axis_positions` param)
         # (@spec MAP-BANK-008).
         self._axis_position: dict[_Key, float] = {}
+        # Cycle's last-selected axis index, -1 = nothing selected yet (@spec MAP-WS-005).
+        self._cycle_index: int = -1
 
     def reset(self) -> None:
         self._previous_value.clear()
         self._pressed_state.clear()
         self._last_fired.clear()
+        self._cycle_index = -1
 
     def tracked_controls(self) -> set[_Key]:
         return set(self._previous_value) | set(self._pressed_state) | set(self._last_fired)
@@ -237,18 +245,30 @@ class MappingEngine:
         # kind == "press"
         return self._process_press(key, event, now, entry.address, entry.args)
 
+    def _press_edge(self, key: _Key, event: MidiEvent, now: float) -> bool:
+        """Rising-edge detection with debounce (`MAP-DEBOUNCE-001`), shared by every
+        press-type output regardless of whether it ends up producing an OSC message
+        (`_process_press`) or a WebSocket command (`process_websocket`,
+        `MAP-WS-008`) - each key belongs to exactly one of the two, so there's no
+        double-consumption of this shared state. Always updates `_pressed_state`;
+        returns whether this call should actually fire.
+        """
+        was_pressed = self._pressed_state.get(key, False)
+        self._pressed_state[key] = event.is_press
+        if was_pressed or not event.is_press:
+            return False
+        last = self._last_fired.get(key)
+        if last is not None and (now - last) < DEBOUNCE_SECONDS:
+            return False
+        self._last_fired[key] = now
+        return True
+
     def _process_press(
         self, key: _Key, event: MidiEvent, now: float, address: str, args: tuple = ()
     ) -> OscMessage | None:
         """Fires on the rising edge (not-pressed -> pressed) only, debounced."""
-        was_pressed = self._pressed_state.get(key, False)
-        self._pressed_state[key] = event.is_press
-        if was_pressed or not event.is_press:
+        if not self._press_edge(key, event, now):
             return None
-        last = self._last_fired.get(key)
-        if last is not None and (now - last) < DEBOUNCE_SECONDS:
-            return None
-        self._last_fired[key] = now
         return OscMessage(address, args)
 
     def _process_axis_target(self, key: _Key, event: MidiEvent, axis_target: _AxisTarget) -> OscMessage | None:
@@ -271,7 +291,7 @@ class MappingEngine:
         axis_target: _AxisTarget,
         axis_positions: "dict[str, float] | None",
     ) -> OscMessage | None:
-        """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-005, MAP-BANK-008"""
+        """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-005, MAP-BANK-008"""
         _, number = key
         axis_path = f"/dragonframe/axis/{axis_target.axis_name}"
         if _KNOB_BANK_OFFSET <= number < _KNOB_BANK_OFFSET + 8:
@@ -304,10 +324,8 @@ class MappingEngine:
                     return None  # already at the boundary in the requested direction
             self._axis_position[fader_key] = clamped_position
             return OscMessage(f"{axis_path}/stepPosition", (float(clamped_delta),))
-        if _MUTE_BANK_OFFSET <= number < _MUTE_BANK_OFFSET + 8:
-            return self._process_press(key, event, now, f"{axis_path}/setZero")
-        # Solo
-        return self._process_press(key, event, now, f"{axis_path}/setHome")
+        # Mute (the only other bank-derived kind - Solo is WebSocket-targeted, MAP-WS-002)
+        return self._process_press(key, event, now, f"{axis_path}/setZero")
 
     def _process_jog(self, event: MidiEvent) -> OscMessage | None:
         """Decodes the jog wheel's KORG sign-magnitude relative value: 1-63 is clockwise,
@@ -341,3 +359,59 @@ class MappingEngine:
         if raw == 0 or raw == 64:
             return None
         return _STEP_MOCO_FORWARD if raw < 64 else _STEP_MOCO_BACKWARD
+
+    def process_websocket(
+        self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None
+    ) -> WebSocketCommand | None:
+        """Third, independent output path alongside `process()`/`process_keystroke()`,
+        for Stop, Cycle, Solo 1-8, and Previous/Next Marker - the WebSocket-targeted
+        controls (`docs/llds/static-mapping.md § WebSocket-Targeted Controls`). Each of
+        these keys is absent from `OPINIONATED_MAP`/bank derivation entirely
+        (`MAP-WS-009`, `MAP-WS-002`), so `process()` never matches them; this method is
+        their only output. Shares press-edge/debounce state with `process()` via
+        `_press_edge` (`MAP-WS-008`).
+
+        `axis_positions` is reused from the same `AxisDiscovery.axes` snapshot passed to
+        `process()` for the same event, purely for its length (the discovered axis
+        count) - Cycle uses it to wrap around, per the accepted assumption that
+        Dragonframe's WebSocket-side AX1/AX2/... numbering matches OSC discovery order
+        (`docs/llds/static-mapping.md`).
+
+        @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005
+        @spec MAP-WS-006, MAP-WS-007, MAP-WS-008, MAP-WS-009
+        """
+        if event.type != "cc" or event.channel != CHANNEL:
+            return None
+        key: _Key = (event.type, event.number)
+
+        if key == _STOP_KEY:
+            if not self._press_edge(key, event, now):
+                return None
+            return WebSocketCommand("E-Stop")
+
+        if key in _SOLO_KEYS:
+            if not self._press_edge(key, event, now):
+                return None
+            axis_number = event.number - _SOLO_BANK_OFFSET + 1
+            return WebSocketCommand(f"select-AX{axis_number}")
+
+        if key == _CYCLE_KEY:
+            if not self._press_edge(key, event, now):
+                return None
+            axis_count = len(axis_positions or {})
+            if axis_count == 0:
+                return None  # nothing to cycle through - @spec MAP-WS-004
+            self._cycle_index = (self._cycle_index + 1) % axis_count
+            return WebSocketCommand(f"select-AX{self._cycle_index + 1}")
+
+        if key == _PREV_MARKER_KEY:
+            if not self._press_edge(key, event, now):
+                return None
+            return WebSocketCommand("Jog All", operation="+", params=(-1,))
+
+        if key == _NEXT_MARKER_KEY:
+            if not self._press_edge(key, event, now):
+                return None
+            return WebSocketCommand("Jog All", operation="+", params=(1,))
+
+        return None

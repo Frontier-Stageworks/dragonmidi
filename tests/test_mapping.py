@@ -4,36 +4,37 @@
 @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
 @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
 @spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
-@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-003, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
+@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
 @spec MAP-BANK-008, MAP-BANK-009
 @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
 @spec MAP-JOGKEY-001, MAP-JOGKEY-002, MAP-JOGKEY-003, MAP-JOGKEY-004, MAP-JOGKEY-005
 @spec MAP-JOGKEY-006, MAP-JOGKEY-007
+@spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005, MAP-WS-006
+@spec MAP-WS-007, MAP-WS-008, MAP-WS-009
 """
 from __future__ import annotations
 
 from hypothesis import given
 from hypothesis import strategies as st
 
-from dragonmidi.events import KeyCombo, MidiEvent
+from dragonmidi.events import KeyCombo, MidiEvent, WebSocketCommand
 from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, MappingEngine
 
 FADER_CCS = list(range(0, 8))  # CC 0-7 -> encoder 1-8
 KNOB_CCS = list(range(16, 24))  # CC 16-23 -> encoder 9-16
 MUTE_CCS = list(range(48, 56))  # CC 48-55 -> encoderReset 1-8
-SOLO_CCS = list(range(32, 40))  # CC 32-39 -> encoderReset 9-16
+SOLO_CCS = list(range(32, 40))  # CC 32-39 -> WebSocket select-AX1..8 (MAP-WS-002), not OSC
 BUTTON_CCS_TO_ADDRESS = {
     45: "/dragonframe/shoot",  # Transport Record
     41: "/dragonframe/play",
-    42: "/dragonframe/live",  # Stop
-    46: "/dragonframe/loop",  # Cycle
     43: "/dragonframe/stepBackward",  # Rewind (<<)
     44: "/dragonframe/stepForward",  # Fast Forward (>>)
-    61: "/dragonframe/stepBackward",  # Previous Marker
-    62: "/dragonframe/stepForward",  # Next Marker
     58: "/dragonframe/stepBackward",  # Previous Track
     59: "/dragonframe/stepForward",  # Next Track
 }
+# Stop/Cycle/Previous Marker/Next Marker are WebSocket-targeted (MAP-WS-001, 003, 006, 007),
+# not OSC - tested separately below, not via BUTTON_CCS_TO_ADDRESS.
+WEBSOCKET_BUTTON_CCS = [42, 46, 61, 62]
 UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 60, 47]  # Record/Select/Set Marker/Return to Zero
 JOG_CC = 110
 
@@ -65,7 +66,7 @@ def scene_event(channel: int, value: int) -> MidiEvent:
 # --- MAP-TABLE-001: channel invariant for CC-sourced controls, korg_scene exempt ---
 
 @given(
-    number=st.sampled_from(FADER_CCS + KNOB_CCS + MUTE_CCS + SOLO_CCS + list(BUTTON_CCS_TO_ADDRESS)),
+    number=st.sampled_from(FADER_CCS + KNOB_CCS + MUTE_CCS + list(BUTTON_CCS_TO_ADDRESS)),
     channel=st.integers(min_value=0, max_value=15).filter(lambda c: c != CHANNEL),
     value=st.integers(min_value=0, max_value=127),
 )
@@ -167,16 +168,6 @@ def test_mute_resets_matching_encoder(cc: int) -> None:
     result = engine.process(cc_event(cc, 127), now=0.0)
     assert result is not None
     assert result.address == f"/dragonframe/encoderReset/{cc - 48 + 1}"
-
-
-@given(cc=st.sampled_from(SOLO_CCS))
-# @spec MAP-TABLE-003
-def test_solo_resets_matching_encoder(cc: int) -> None:
-    engine = MappingEngine()
-    engine.process(cc_event(cc, 0), now=0.0)
-    result = engine.process(cc_event(cc, 127), now=0.0)
-    assert result is not None
-    assert result.address == f"/dragonframe/encoderReset/{cc - 32 + 9}"
 
 
 @given(cc=st.sampled_from(list(BUTTON_CCS_TO_ADDRESS)))
@@ -563,35 +554,40 @@ def test_mute_sends_setzero_when_bank_fader_has_axis(fader_number: int) -> None:
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
-# @spec MAP-BANK-003
-def test_solo_sends_sethome_when_bank_fader_has_axis(fader_number: int) -> None:
-    fader_key = ("cc", fader_number)
-    solo_number = fader_number + _SOLO_BANK_OFFSET
-    engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
-    engine.process(cc_event(solo_number, 0), now=0.0)
-    result = engine.process(cc_event(solo_number, 127), now=0.0)
-    assert result is not None
-    assert result.address == "/dragonframe/axis/PAN/setHome"
-
-
-@given(fader_number=st.sampled_from(FADER_CCS))
 # @spec MAP-BANK-004
-def test_knob_mute_solo_fall_back_to_static_targets_when_bank_has_no_axis(fader_number: int) -> None:
+def test_knob_mute_fall_back_to_static_targets_when_bank_has_no_axis(fader_number: int) -> None:
     knob_number = fader_number + _KNOB_BANK_OFFSET
     mute_number = fader_number + _MUTE_BANK_OFFSET
-    solo_number = fader_number + _SOLO_BANK_OFFSET
     engine = MappingEngine()  # fresh: bank's fader has no axis (default axis mode, no name)
 
     knob_result = engine.process(cc_event(knob_number, 100), now=0.0)
     engine.process(cc_event(mute_number, 0), now=0.0)
     mute_result = engine.process(cc_event(mute_number, 127), now=0.0)
-    engine.process(cc_event(solo_number, 0), now=0.0)
-    solo_result = engine.process(cc_event(solo_number, 127), now=0.0)
 
     assert knob_result is not None and knob_result.address == OPINIONATED_MAP[("cc", knob_number)].address
     assert mute_result is not None and mute_result.address == OPINIONATED_MAP[("cc", mute_number)].address
-    assert solo_result is not None and solo_result.address == OPINIONATED_MAP[("cc", solo_number)].address
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-WS-002
+def test_solo_sends_select_ax_regardless_of_bank_fader_axis_state(fader_number: int) -> None:
+    # Solo is unconditional on bank state (MAP-WS-002) - it behaves identically whether
+    # or not Bank N's fader has an axis assigned, unlike Knob/Mute above.
+    fader_key = ("cc", fader_number)
+    solo_number = fader_number + _SOLO_BANK_OFFSET
+
+    engine_with_axis = MappingEngine()
+    engine_with_axis.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    engine_with_axis.process_websocket(cc_event(solo_number, 0), now=0.0)
+    result_with_axis = engine_with_axis.process_websocket(cc_event(solo_number, 127), now=0.0)
+
+    engine_without_axis = MappingEngine()
+    engine_without_axis.process_websocket(cc_event(solo_number, 0), now=0.0)
+    result_without_axis = engine_without_axis.process_websocket(cc_event(solo_number, 127), now=0.0)
+
+    expected = WebSocketCommand(f"select-AX{fader_number + 1}")
+    assert result_with_axis == expected
+    assert result_without_axis == expected
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
@@ -939,3 +935,195 @@ def test_jog_keystroke_allocates_no_tracked_state(raw: int) -> None:
     engine = MappingEngine()
     engine.process_keystroke(cc_event(JOG_CC, raw))
     assert ("cc", JOG_CC) not in engine.tracked_controls()
+
+
+# --- WebSocket-Targeted Controls (MAP-WS-001 through MAP-WS-009) ---
+
+STOP_CC = 42
+CYCLE_CC = 46
+PREV_MARKER_CC = 61
+NEXT_MARKER_CC = 62
+
+
+# @spec MAP-WS-001
+def test_stop_sends_e_stop_on_press_edge() -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(STOP_CC, 0), now=0.0)
+    result = engine.process_websocket(cc_event(STOP_CC, 127), now=0.0)
+    assert result == WebSocketCommand("E-Stop")
+
+
+# @spec MAP-WS-001, MAP-WS-009
+def test_stop_produces_no_osc_output() -> None:
+    engine = MappingEngine()
+    engine.process(cc_event(STOP_CC, 0), now=0.0)
+    assert engine.process(cc_event(STOP_CC, 127), now=0.0) is None
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-WS-002
+def test_solo_n_sends_select_ax_n(fader_number: int) -> None:
+    solo_number = fader_number + _SOLO_BANK_OFFSET
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(solo_number, 0), now=0.0)
+    result = engine.process_websocket(cc_event(solo_number, 127), now=0.0)
+    assert result == WebSocketCommand(f"select-AX{fader_number + 1}")
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-WS-002, MAP-WS-009
+def test_solo_produces_no_osc_output(fader_number: int) -> None:
+    solo_number = fader_number + _SOLO_BANK_OFFSET
+    engine = MappingEngine()
+    engine.process(cc_event(solo_number, 0), now=0.0)
+    assert engine.process(cc_event(solo_number, 127), now=0.0) is None
+
+
+# @spec MAP-WS-003
+def test_cycle_advances_through_axes_and_wraps() -> None:
+    engine = MappingEngine()
+    axes = {"PAN": 0.0, "TILT": 0.0, "ZOOM": 0.0}
+    clock = [0.0]
+
+    def press() -> "WebSocketCommand | None":
+        clock[0] += 1.0  # each press well outside the 80ms debounce window
+        engine.process_websocket(cc_event(CYCLE_CC, 0), now=clock[0])
+        return engine.process_websocket(cc_event(CYCLE_CC, 127), now=clock[0], axis_positions=axes)
+
+    assert press() == WebSocketCommand("select-AX1")
+    assert press() == WebSocketCommand("select-AX2")
+    assert press() == WebSocketCommand("select-AX3")
+    assert press() == WebSocketCommand("select-AX1")  # wraps back around
+
+
+# @spec MAP-WS-003
+def test_cycle_reuses_axis_positions_snapshot_passed_to_process() -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(CYCLE_CC, 0), now=0.0)
+    result = engine.process_websocket(cc_event(CYCLE_CC, 127), now=0.0, axis_positions={"PAN": 1.0})
+    assert result == WebSocketCommand("select-AX1")
+
+
+# @spec MAP-WS-004
+def test_cycle_with_zero_axes_produces_nothing_and_does_not_advance() -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(CYCLE_CC, 0), now=0.0)
+    result = engine.process_websocket(cc_event(CYCLE_CC, 127), now=0.0, axis_positions={})
+    assert result is None
+
+    # Once axes exist, the very first successful cycle still starts at AX1 - proving
+    # the zero-axis press above never advanced _cycle_index.
+    engine.process_websocket(cc_event(CYCLE_CC, 0), now=1.0)
+    next_result = engine.process_websocket(cc_event(CYCLE_CC, 127), now=1.0, axis_positions={"PAN": 0.0})
+    assert next_result == WebSocketCommand("select-AX1")
+
+
+# @spec MAP-WS-004
+def test_cycle_with_none_axis_positions_treated_as_zero_axes() -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(CYCLE_CC, 0), now=0.0)
+    result = engine.process_websocket(cc_event(CYCLE_CC, 127), now=0.0, axis_positions=None)
+    assert result is None
+
+
+# @spec MAP-WS-005
+def test_cycle_index_resets_on_engine_reset() -> None:
+    engine = MappingEngine()
+    axis_positions = {"PAN": 0.0, "TILT": 0.0}
+    engine.process_websocket(cc_event(CYCLE_CC, 0), now=0.0)
+    first = engine.process_websocket(cc_event(CYCLE_CC, 127), now=0.0, axis_positions=axis_positions)
+    engine.process_websocket(cc_event(CYCLE_CC, 0), now=1.0)
+    engine.process_websocket(cc_event(CYCLE_CC, 127), now=1.0, axis_positions=axis_positions)  # advances to AX2
+
+    engine.reset()
+
+    engine.process_websocket(cc_event(CYCLE_CC, 0), now=2.0)
+    after_reset = engine.process_websocket(cc_event(CYCLE_CC, 127), now=2.0, axis_positions=axis_positions)
+    assert first == WebSocketCommand("select-AX1")
+    assert after_reset == WebSocketCommand("select-AX1")  # back to the start, not continuing from AX2
+
+
+# @spec MAP-WS-003, MAP-WS-009
+def test_cycle_produces_no_osc_output() -> None:
+    engine = MappingEngine()
+    engine.process(cc_event(CYCLE_CC, 0), now=0.0)
+    assert engine.process(cc_event(CYCLE_CC, 127), now=0.0) is None
+
+
+# @spec MAP-WS-006
+def test_previous_marker_sends_jog_all_backward() -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(PREV_MARKER_CC, 0), now=0.0)
+    result = engine.process_websocket(cc_event(PREV_MARKER_CC, 127), now=0.0)
+    assert result == WebSocketCommand("Jog All", operation="+", params=(-1,))
+
+
+# @spec MAP-WS-007
+def test_next_marker_sends_jog_all_forward() -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(NEXT_MARKER_CC, 0), now=0.0)
+    result = engine.process_websocket(cc_event(NEXT_MARKER_CC, 127), now=0.0)
+    assert result == WebSocketCommand("Jog All", operation="+", params=(1,))
+
+
+@given(cc=st.sampled_from([PREV_MARKER_CC, NEXT_MARKER_CC]))
+# @spec MAP-WS-006, MAP-WS-007, MAP-WS-009
+def test_marker_produces_no_osc_output(cc: int) -> None:
+    engine = MappingEngine()
+    engine.process(cc_event(cc, 0), now=0.0)
+    assert engine.process(cc_event(cc, 127), now=0.0) is None
+
+
+# --- MAP-WS-008: shared press-edge/debounce state with process()'s button entries ---
+
+@given(
+    cc=st.sampled_from([STOP_CC, CYCLE_CC, PREV_MARKER_CC, NEXT_MARKER_CC] + SOLO_CCS),
+    gap=st.floats(min_value=0.0, max_value=0.079),
+)
+# @spec MAP-WS-008
+def test_websocket_control_second_press_inside_debounce_window_is_dropped(cc: int, gap: float) -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(cc, 0), now=0.0)
+    engine.process_websocket(cc_event(cc, 127), now=0.0, axis_positions={"PAN": 0.0})  # first press, fires
+    engine.process_websocket(cc_event(cc, 0), now=gap / 2)  # release
+    result = engine.process_websocket(cc_event(cc, 127), now=gap, axis_positions={"PAN": 0.0})
+    assert result is None
+
+
+@given(
+    cc=st.sampled_from([STOP_CC, CYCLE_CC, PREV_MARKER_CC, NEXT_MARKER_CC] + SOLO_CCS),
+    gap=st.floats(min_value=0.081, max_value=5.0),
+)
+# @spec MAP-WS-008
+def test_websocket_control_second_press_after_debounce_window_fires(cc: int, gap: float) -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(cc, 0), now=0.0)
+    engine.process_websocket(cc_event(cc, 127), now=0.0, axis_positions={"PAN": 0.0})  # first press, fires
+    engine.process_websocket(cc_event(cc, 0), now=gap / 2)  # release
+    result = engine.process_websocket(cc_event(cc, 127), now=gap, axis_positions={"PAN": 0.0})
+    assert result is not None
+
+
+@given(cc=st.sampled_from([STOP_CC, CYCLE_CC, PREV_MARKER_CC, NEXT_MARKER_CC] + SOLO_CCS))
+# @spec MAP-WS-008
+def test_websocket_control_holding_at_max_only_fires_once(cc: int) -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(cc, 0), now=0.0)
+    first = engine.process_websocket(cc_event(cc, 127), now=0.0, axis_positions={"PAN": 0.0})
+    second = engine.process_websocket(cc_event(cc, 127), now=1.0, axis_positions={"PAN": 0.0})
+    assert first is not None
+    assert second is None
+
+
+# --- Channel-16 invariant for WebSocket-targeted controls ---
+
+@given(
+    cc=st.sampled_from([STOP_CC, CYCLE_CC, PREV_MARKER_CC, NEXT_MARKER_CC] + SOLO_CCS),
+    channel=st.integers(min_value=0, max_value=15).filter(lambda c: c != CHANNEL),
+    value=st.integers(min_value=0, max_value=127),
+)
+# @spec MAP-WS-001 (channel invariant, mirroring MAP-TABLE-001 for the OSC path)
+def test_websocket_control_on_wrong_channel_never_matches(cc: int, channel: int, value: int) -> None:
+    engine = MappingEngine()
+    result = engine.process_websocket(cc_event(cc, value, channel=channel), now=0.0, axis_positions={"PAN": 0.0})
+    assert result is None
