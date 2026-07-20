@@ -4,7 +4,7 @@ import socket
 import struct
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 # @spec OSC-CONFIG-001
 DEFAULT_DRAGONFRAME_HOST = "127.0.0.1"
@@ -13,6 +13,25 @@ DEFAULT_LISTEN_PORT = 7011
 DISCOVERY_TIMEOUT_SECONDS = 2.0
 AXIS_ADDRESS_PREFIX = "/dragonframe/axis/"
 GET_ALL_POSITION_ADDRESS = "/dragonframe/axis/getAllPosition"
+
+
+class UdpSocket(Protocol):
+    """The subset of `socket.socket`'s interface `OscClient`/`OscListener` depend
+    on - lets tests inject a fake instead of a real OS socket, matching the
+    `MidiBackend`/`KeystrokeBackend` pattern used elsewhere in this app.
+
+    @spec OSC-BACKEND-001
+    """
+
+    def bind(self, address: tuple[str, int]) -> None: ...
+    def settimeout(self, value: "float | None") -> None: ...
+    def sendto(self, data: bytes, address: tuple[str, int]) -> int: ...
+    def recvfrom(self, bufsize: int) -> tuple[bytes, Any]: ...
+    def close(self) -> None: ...
+
+
+def _real_udp_socket() -> socket.socket:
+    return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 
 def _pad4(data: bytes) -> bytes:
@@ -156,18 +175,18 @@ class AxisDiscovery:
 
 
 class OscClient:
-    """@spec OSC-CLIENT-001, OSC-CLIENT-002"""
+    """@spec OSC-CLIENT-001, OSC-CLIENT-002, OSC-BACKEND-001"""
 
     def __init__(
         self,
         host: str = DEFAULT_DRAGONFRAME_HOST,
         port: int = DEFAULT_DRAGONFRAME_PORT,
-        sock: Any | None = None,
+        sock: "UdpSocket | None" = None,
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
         self.host = host
         self.port = port
-        self._socket = sock if sock is not None else socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket: UdpSocket = sock if sock is not None else _real_udp_socket()
         self._on_error = on_error
 
     def configure(self, host: str, port: int) -> None:
@@ -194,6 +213,7 @@ class OscListener:
     every received datagram through the given AxisDiscovery.
 
     @spec OSC-LISTEN-001, OSC-LISTEN-002, OSC-LISTEN-003, OSC-LISTEN-005, OSC-LISTEN-006
+    @spec OSC-LISTEN-007, OSC-BACKEND-001
     @spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003, OSC-DISCOVER-009
     """
 
@@ -205,6 +225,7 @@ class OscListener:
         axis_discovery: "AxisDiscovery | None" = None,
         dragonframe_host: str | None = None,
         dragonframe_port: int | None = None,
+        socket_factory: Callable[[], UdpSocket] = _real_udp_socket,
     ) -> None:
         self.port = port
         self._on_activity = on_activity
@@ -212,14 +233,24 @@ class OscListener:
         self._axis_discovery = axis_discovery
         self._dragonframe_host = dragonframe_host
         self._dragonframe_port = dragonframe_port
-        self._socket: socket.socket | None = None
+        self._socket_factory = socket_factory
+        self._socket: "UdpSocket | None" = None
         self._thread: threading.Thread | None = None
         self._running = False
 
     def start(self) -> None:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock = self._socket_factory()
             sock.bind(("0.0.0.0", self.port))
+            # A bounded timeout, not an indefinite block, so `_run()` re-checks
+            # `self._running` on a steady cadence instead of depending solely on
+            # `stop()`'s `socket.close()` to unblock a concurrent `recvfrom()` -
+            # closing a socket from another thread while a blocking recv is in
+            # flight isn't reliably prompt cross-platform (observed: fine on
+            # macOS, but on Linux CI the old thread could outlive `stop()`'s
+            # `join()` and still process one more in-flight datagram on the
+            # port `rebind()` was meant to have already vacated).
+            sock.settimeout(0.5)
         except OSError:
             if self._on_bind_result is not None:
                 self._on_bind_result(False)
@@ -264,8 +295,12 @@ class OscListener:
             try:
                 assert self._socket is not None
                 data, _addr = self._socket.recvfrom(65536)
+            except TimeoutError:
+                continue  # just a poll interval, not a real error - re-check self._running
             except OSError:
                 break
+            if not self._running:
+                break  # stop() ran while this recvfrom() was already in flight - drop it
             self._on_activity()
             if self._axis_discovery is not None:
                 self._axis_discovery.handle_datagram(data)

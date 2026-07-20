@@ -2,6 +2,10 @@
 
 Traces to `docs/llds/osc-io.md`.
 
+## Socket Backend
+
+- [x] **OSC-BACKEND-001**: The system shall abstract UDP socket operations behind a `UdpSocket` protocol (`bind`/`settimeout`/`sendto`/`recvfrom`/`close`) for both `OscClient` and `OscListener`, with a real-socket implementation as the default, enabling a fake to be substituted in tests without touching real OS sockets or threads; `OscClient` shall accept a single socket instance, while `OscListener` shall accept a factory callable invoked fresh on every bind attempt.
+
 ## Client (Send)
 
 - [x] **OSC-CLIENT-001**: When the Mapping Engine produces an OSC message, the system shall encode it as an OSC 1.0 packet (address string, type-tag string, then `int32`/`float32`/`string` arguments, each NUL-padded to a 4-byte boundary) and send it via UDP to the configured Dragonframe host and port.
@@ -14,6 +18,7 @@ Traces to `docs/llds/osc-io.md`.
 - [x] **OSC-LISTEN-003**: If the local listen port fails to bind at startup (e.g. already in use), then the system shall set the Dragonframe channel's error flag (consumed by `UI-MONITOR-003`, see `docs/specs/app-ui.md`) rather than behaving as if no traffic has simply arrived yet.
 - [x] **OSC-LISTEN-005**: When a bind attempt begins (at startup, or triggered by an Apply of a changed local listen port per `UI-CONFIG-001`), the system shall clear the Dragonframe channel's error flag before attempting the bind, so the flag reflects only the current attempt's outcome.
 - [x] **OSC-LISTEN-006**: When the user applies a changed local listen port (`UI-CONFIG-001`), the system shall close the existing listener socket and bind a new one to the new port, following the same clear-flag-then-bind path as the startup bind (`OSC-LISTEN-001`, `OSC-LISTEN-005`, `OSC-LISTEN-003`).
+- [x] **OSC-LISTEN-007**: The system shall bound the receive loop's blocking wait with a timeout rather than blocking indefinitely, re-checking whether the listener is still running both on each poll interval and immediately after any receive returns; a datagram whose receive was already in flight when the listener was stopped shall be dropped, not dispatched to the activity callback or axis discovery.
 - [D] **OSC-LISTEN-004**: Where source-address verification is enabled, the system shall discard datagrams whose source IP does not match the configured Dragonframe host (deferred until a real false-positive liveness signal is observed).
 
 ## Axis Discovery (`getAllPosition`)
@@ -38,3 +43,4 @@ Traces to `docs/llds/osc-io.md`.
 - `docs/llds/osc-io.md`
 - `~/github/DragonMIDI-vibed/dragonmidi/osc.py` — source of the OSC 1.0 encoder this LLD reuses.
 - `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the bundle format, single-socket query, and duplicate-response findings behind the Axis Discovery specs.
+- `docs/llds/midi-input.md`, `docs/llds/keystroke-output.md` — the `MidiBackend`/`KeystrokeBackend` precedent `OSC-BACKEND-001`'s `UdpSocket` protocol follows.

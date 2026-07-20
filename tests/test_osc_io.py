@@ -1,10 +1,11 @@
 """Tests for the OSC Transport (docs/specs/osc-io.md).
 
 @spec OSC-CLIENT-001, OSC-CLIENT-002
-@spec OSC-LISTEN-001, OSC-LISTEN-002, OSC-LISTEN-003, OSC-LISTEN-005, OSC-LISTEN-006
+@spec OSC-LISTEN-001, OSC-LISTEN-002, OSC-LISTEN-003, OSC-LISTEN-005, OSC-LISTEN-006, OSC-LISTEN-007
 @spec OSC-CONFIG-001, OSC-CONFIG-002
 @spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003, OSC-DISCOVER-004
 @spec OSC-DISCOVER-005, OSC-DISCOVER-006, OSC-DISCOVER-007, OSC-DISCOVER-008, OSC-DISCOVER-009
+@spec OSC-BACKEND-001
 """
 
 from __future__ import annotations
@@ -222,6 +223,87 @@ def test_rebind_moves_listening_to_the_new_port(free_udp_port: int) -> None:
         time.sleep(0.2)
         assert activity_count["n"] == 2
         sender.close()
+    finally:
+        listener.stop()
+
+
+# --- OSC-LISTEN-007: a receive already in flight when stop() runs is dropped, not processed ---
+#
+# The test above depends on real OS thread scheduling to (maybe) hit this race -
+# it never failed locally, only on Linux CI, purely by luck of timing. This test
+# forces the exact interleaving deterministically with a fake socket_factory
+# (OSC-BACKEND-001) and a threading.Event as a synchronization barrier, so it
+# reproduces the race on every run, on any platform, with no timing luck involved.
+
+
+class _BlockingOnceSocket:
+    """A fake UdpSocket whose first recvfrom() blocks until released, then
+    returns one pre-baked datagram - lets a test hold a "receive" open and
+    control exactly when it resolves, instead of racing real OS scheduling."""
+
+    def __init__(self, datagram: bytes) -> None:
+        self._datagram = datagram
+        self.recvfrom_entered = threading.Event()
+        self.release = threading.Event()
+        self.closed = False
+
+    def bind(self, address: tuple[str, int]) -> None:
+        pass
+
+    def settimeout(self, value: "float | None") -> None:
+        pass
+
+    def sendto(self, data: bytes, address: tuple[str, int]) -> int:
+        return len(data)
+
+    def recvfrom(self, bufsize: int) -> tuple[bytes, tuple[str, int]]:
+        self.recvfrom_entered.set()
+        self.release.wait()
+        return self._datagram, ("127.0.0.1", 0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+# @spec OSC-LISTEN-007, OSC-BACKEND-001
+def test_stop_drops_a_datagram_whose_receive_was_already_in_flight() -> None:
+    activity_count = {"n": 0}
+
+    def on_activity() -> None:
+        activity_count["n"] += 1
+
+    fake_socket = _BlockingOnceSocket(encode_osc_message("/dragonframe/live"))
+    listener = OscListener(port=7011, on_activity=on_activity, socket_factory=lambda: fake_socket)
+    listener.start()
+    try:
+        # Deterministic sync point: don't proceed until the background thread is
+        # actually blocked inside recvfrom(), simulating "a receive already in
+        # flight" - no sleep-and-hope needed.
+        assert fake_socket.recvfrom_entered.wait(timeout=2.0)
+
+        # Capture the thread before stop() clears the reference - the fake's
+        # recvfrom() is still blocked at this point, so stop()'s own
+        # thread.join(timeout=1.0) will time out and return without the thread
+        # actually having exited yet, exactly like the real race on Linux CI.
+        background_thread = listener._thread  # noqa: SLF001 - test-only reach-in
+        assert background_thread is not None
+
+        listener.stop()  # flips _running False; the fake's close() does NOT unblock recvfrom()
+
+        # Only now let the in-flight recvfrom() return the datagram it was holding -
+        # after stop() has already given up waiting, reproducing the exact race
+        # from the real-socket test above, deterministically instead of by
+        # timing luck.
+        fake_socket.release.set()
+
+        # Wait for the background thread to actually finish processing (or
+        # correctly dropping) the datagram before asserting - joining the real
+        # thread object directly, not a sleep-and-hope guess.
+        background_thread.join(timeout=2.0)
+        assert not background_thread.is_alive()
+
+        assert activity_count["n"] == 0
+        assert fake_socket.closed is True
     finally:
         listener.stop()
 
