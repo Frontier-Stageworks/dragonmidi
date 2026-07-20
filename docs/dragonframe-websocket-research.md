@@ -28,7 +28,7 @@ The actual wire protocol (port number, message framing, connection-ID encoding) 
 - **Well-known port: `59177`** (`WEBSOCKET_SERVER_PORT` constant in `service.ts`, `src/service/server/websocket-server.ts`). Bound to `system.localhost` (loopback) only.
 - **Connection URL**: `ws://localhost:59177/<connectionId>`, where `connectionId` is `<appId>/<connectionName>` — for Dragonframe, `com.dzed.dragonframe/DragonframeConnection`, giving the full URL `ws://localhost:59177/com.dzed.dragonframe/DragonframeConnection`. Confirmed by `App.getConnectionDetails(id)` in `service.ts`, which does `id.split('/')` into `[appId, connectionName]`, and by the connection-ID validation regex `CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)+[0-9a-z_-]\/[a-z][a-z0-9_-]*$/i`.
 - **Dragonframe connects on its own at startup**, with no Monogram installation required to observe this — confirmed by `lsof` showing an existing (closed) connection record to port 59177 before any listener existed, and then a live connection once one did.
-- **Dragonframe retries in the background.** Reconnect timing observed to vary — sometimes within ~10-15 seconds of a prior disconnect, other times up to ~90 seconds. No relaunch of Dragonframe is needed to get a fresh connection; closing the listening socket from the server side is enough to trigger Dragonframe's own retry logic.
+- **Dragonframe's reconnect is focus-triggered, not periodic.** Initial testing assumed a background retry timer (reconnects were observed at varying ~10-90s intervals), but a later fuzzing run stalled with no reconnect for over 10 minutes with Dragonframe in the background. Its debug log showed the actual trigger: `*** ApplicationActivate` / `Activating workspace on change event` — Dragonframe reconnects when it regains OS focus, not on a timer. Clicking the Dragonframe window to bring it forward reliably triggers an immediate reconnect. No relaunch is needed, only a fresh socket connection from the server side (or a focus change) to get Dragonframe to reconnect.
 
 ## Wire Format
 
@@ -114,15 +114,66 @@ Observed sequence on every fresh connection, with a diagnostic listener standing
 
 `inputs.json` is very likely a **curated subset** for Monogram Creator's own assignment UI, not necessarily an exhaustive list of everything Dragonframe's WebSocket handler will accept — this can't be fully verified since Dragonframe itself is closed-source (unlike Monogram Service, whose installer payload could be read directly).
 
+## The Log-File Oracle
+
+Watching the WebSocket wire (does Dragonframe send back a `setInputColor` echo?) and watching the UI (did anything visibly happen?) are both unreliable signals — a valid-but-currently-inert input produces neither, indistinguishable over the wire from an input Dragonframe doesn't recognize at all. Dragonframe's own debug log resolves this completely.
+
+**Log location**: `~/Library/Logs/Dragonframe.txt` (rotated as `-2`/`-3`/`-4` on relaunch). Dragonframe logs every single Monogram message it receives, recognized or not:
+
+- **Unrecognized input** → `[D] UNKNOWN Mono MSG:  "<raw json as sent, escaped>"`. This line fires for *every* input name Dragonframe's Monogram handler doesn't have a case for — a complete, unambiguous negative oracle. No false negatives observed: every candidate later confirmed rejected below produced exactly this line, and every candidate confirmed valid (see below) never produced it, even when it had no visible effect.
+- **Recognized input** → a distinctive, action-specific log line instead of (or alongside) any `setInputColor` echo. Examples observed directly in this session's logs: `SHOOT TEST AVFCapture(...)` for `Test Shot`, `HARD STOP` for `E-Stop`, and the sequence `initiateJogging` → `joggerEnabled = true` → `updateJogSpeed: value=N` → `stopJogging` for `Jog All`. These confirm the input was recognized and dispatched even when nothing changed on screen (e.g. no axis currently jogging).
+
+This makes "is `<name>` a real Monogram input Dragonframe recognizes?" answerable definitively after the fact, without needing to watch the UI live or trust wire-level silence — just send the candidate, then grep the log for `UNKNOWN Mono MSG` containing that candidate's JSON. Absence of that line, for a message actually delivered, means the input was recognized.
+
 ## Live Test Results (2026-07-19, real Dragonframe, scratch project)
 
 | Input sent | Result | Confidence |
 |---|---|---|
 | `{"input": "Shoot"}` | **Captured an actual frame.** Full round-trip confirmed. | Confirmed |
 | `{"input": "select-AX2"}` | Recolored `select-AX2` and `Jog All` to the same color — confirmed it retargets which axis subsequent generic actions (like `Jog All`) apply to. | Confirmed |
-| `{"input": "Step", "operation": "+", "params": [1]}` | **No effect**, tested 4 times. One early sighting of a keyframe appearing was later attributed to a coincidental, unrelated action (most likely the `Shoot` test or an axis-configuration change) — not reproduced in two subsequent deliberately-watched attempts. | Debunked false lead |
+| `{"input": "Test Shot"}` | Logged `SHOOT TEST AVFCapture(...)` — recognized and dispatched. | Confirmed valid |
+| `{"input": "E-Stop"}` | Logged `HARD STOP` — recognized and dispatched. | Confirmed valid |
+| `{"input": "Jog All", ...}` | Logged `initiateJogging` / `joggerEnabled = true` / `updateJogSpeed: value=N` / `stopJogging` — recognized and dispatched. | Confirmed valid |
+| `{"input": "Step", "operation": "+", "params": [1]}` | No visible effect in the UI across several tests. One early sighting of a keyframe appearing was traced to a coincidental, unrelated action (an earlier `Record` test), **not** to `Step` — debunked as a false lead. However, retroactively checking the log: `Step` was **never** logged as `UNKNOWN Mono MSG` in any of these tests. | **Confirmed valid, silent under current preconditions** — recognized by Dragonframe, but has no observed effect in this scratch project's current state. Not the same as "invalid": the earlier "debunked" verdict applied only to the keyframe hypothesis, not to whether `Step` is a real command. |
+| `{"input": "Reverse"}`, `{"input": "Hi-Res Toggle"}`, `{"input": "Onion Skin", ...}`, `{"input": "Audio Character", ...}`, `{"input": "Audio Shape", ...}` | No visible UI effect observed; retroactively checked against the log — **none were ever logged as `UNKNOWN Mono MSG`**. | **Confirmed valid, silent under current preconditions** (likely require project state this scratch project doesn't have: an audio track loaded for the Audio* inputs, a specific display mode for Hi-Res Toggle, etc. — not yet determined which precondition each needs). |
 | Toggling the axis power/enable icon in Dragonframe's own UI (nothing sent, log-only) | Triggered a fresh burst of `setInputColor` messages; `Jog All`'s color alternated red (`#ff0000`)/blue (`#0000a8`) with each toggle — plausibly "an axis is disabled" vs. normal. | Confirmed observable (state is reported) |
-| `enable-AX1`, `disable-AX1`, `power-AX1`, `toggle-AX1`, `{"input":"Enable","params":["AX1"]}`, `{"input":"Disable","params":["AX1"]}` (six candidates, sent individually ~5s apart) | **No effect, no response message at all** for any of them — unlike every working input above, which always produced at least a `setInputColor` echo. | Six clean misses; not proof the mechanism doesn't exist, but confidence lowered |
+| `enable-AX1`, `disable-AX1`, `power-AX1`, `toggle-AX1`, `{"input":"Enable","params":["AX1"]}`, `{"input":"Disable","params":["AX1"]}` (six candidates, sent individually ~5s apart, ~20:54:12–20:54:37) | No response over the wire at the time. **Retroactively confirmed via the log-file oracle**: all six produced `UNKNOWN Mono MSG` lines (e.g. `UNKNOWN Mono MSG:  "{\"input\": \"enable-AX1\"}\n"`). | **Definitively rejected** — no longer just six clean misses, now proven via the oracle. |
+| 31-candidate fuzz pass (listed below), sent 3s apart via a scratchpad probe script, checked against the log afterward | **All 31 produced `UNKNOWN Mono MSG`.** None recognized. | **Definitively rejected**, including every keyframe-related guess (`Set Keyframe`, `Keyframe`, `Add Keyframe`), axis-enable guesses (`Enable Axis`, `Disable Axis`, `Axis Enable`, `Axis Disable`, `Toggle Axis`, `Mute Axis`, `Record Axis`, `Solo Axis`), and general editing/transport guesses (`Undo`, `Redo`, `Mark In`, `Mark Out`, `Home`, `End`, `Save`, `Save Scene`, `Toggle Live View`, `Media Layer Toggle`, `Drawing Toggle`, `Grid Toggle`, `Solo Camera`, `Toggle Work Light`, `Step Moco Forward`, `Step Moco Back`, `Insert Camera`, `Return Camera to End`, `Hold Frame`, `3 Step`). |
+
+### Monogram fuzz candidates, round 1 (31, all rejected)
+
+```
+Set Keyframe, Keyframe, Add Keyframe, Enable Axis, Disable Axis, Axis Enable,
+Axis Disable, Toggle Axis, Mute Axis, Record Axis, Solo Axis, Undo, Redo,
+Mark In, Mark Out, Home, End, Save, Save Scene, Toggle Live View,
+Media Layer Toggle, Drawing Toggle, Grid Toggle, Solo Camera, Toggle Work Light,
+Step Moco Forward, Step Moco Back, Insert Camera, Return Camera to End,
+Hold Frame, 3 Step
+```
+
+### Monogram fuzz candidates, round 2 — Hot Keys action names (55, all rejected)
+
+Every action name in `docs/dragonframe-hotkeys-research.md`'s Hot Keys table not already covered by round 1 or by a known `inputs.json` entry, sent verbatim (Title Case, as captured from the Hot Keys UI) plus two extra risky guesses the user pre-authorized. All 55 produced `UNKNOWN Mono MSG`, each cleanly correlated 1:1 by timestamp with its send — no exceptions, no ambiguity:
+
+```
+Shoot 2 Frames, Shoot 3 Frames, Shoot 4 Frames, Shoot Burst, Toggle Preview,
+Live Toggle, Short Play Toggle, Cut Back, Reshoot Frames, Opacity Up,
+Opacity Down, Opacity Up Fine, Opacity Down Fine, Mute, 3 Step Toggle,
+Step by Holds, Play by Tag, Next Camera, Capture Making Of,
+Guide Group #1 Toggle .. #8 Toggle, Media Layer Opacity Up,
+Media Layer Opacity Down, Toggle X-Sheet/Guide Layers, Go to In Point,
+Go to Out Point, Toggle Step by Tag, Show/Hide Hidden Frames, Add Hold,
+Remove Hold, Hold On Still Image, Next Playback Exposure,
+Prev Playback Exposure, Difference with Live, Toggle Focus Controls,
+Toggle Focus Check, Toggle Focus Peaking, Increase Video Size,
+Decrease Video Size, Increase Audio Latency, Decrease Audio Latency,
+View Mirror, View Rotate, View Portrait, Next Panoramic View,
+Script Custom 1, Script Custom 2, Script Custom 3, Script Custom 4
+```
+
+`Cut Back` (hotkey NUM 9 — can remove frames from the timeline) and `Reshoot Frames` (a guess, not a confirmed hotkey name) were included at the user's explicit pre-authorization for this scratch project; both were rejected, so no risk materialized.
+
+**Takeaway**: across both rounds (86 candidates total, plus the original 6 axis-enable guesses = 92), the *only* names Dragonframe's Monogram handler recognizes are the ones already in `inputs.json` plus the dynamic `jog-AXn`/`select-AXn` pair. None of Dragonframe's much larger Hot Keys vocabulary (used for direct keyboard input) leaks into the Monogram protocol under its own action names. This is now fairly strong (not conclusive) evidence that `inputs.json`'s 19 static entries are the complete Monogram-recognized command set — Dragonframe's Monogram integration is a deliberately curated, much smaller surface than its keyboard shortcuts, not a superset or a 1:1 mirror of them.
 
 ## Related Protocols Checked and Ruled Out
 
@@ -137,15 +188,18 @@ This is a genuinely new, third output path alongside OSC and keystroke synthesis
 
 ## Open Questions
 
-1. Whether `inputs.json` is exhaustive of what Dragonframe's WebSocket handler accepts, or just a curated subset for Monogram Creator's UI — unresolved, and probably unresolvable without either finding more undocumented input names empirically or inspecting Dragonframe's own (closed-source) binary.
-2. What `Step` and its declared `[-5, 0]` range actually do, if anything — genuinely unknown after debunking the keyframe hypothesis.
-3. Whether axis enable/disable is settable via *any* Monogram input name — six guesses failed, but not exhaustive.
-4. What `Onion Skin`, `Jog All`, `Audio Character`, and `Audio Shape` actually do when sent — none tested yet, only `Shoot`, `select-AXn`, and `Step` have been.
-5. Whether a full Dragonframe relaunch (vs. just a fresh socket connection) would change any of the above — not tested; all reconnects tested were the app's own background retry, not a cold start.
+1. Whether `inputs.json` is exhaustive of what Dragonframe's WebSocket handler accepts, or just a curated subset for Monogram Creator's UI — still not proven, but now fairly strongly evidenced: 92 candidates tried across three rounds (31 generic guesses, 6 axis-enable guesses, 55 of Dragonframe's own Hot Keys action names) were *all* rejected. Notably, round 2 specifically tried Dragonframe's much larger keyboard-shortcut vocabulary and found none of it recognized by the Monogram handler — the Monogram surface does not mirror or extend the Hot Keys surface, it's a small, independently curated subset. Not conclusive (a wordlist can never prove a negative), but no longer a live "probably a big list we just haven't found" concern.
+2. What precondition(s) `Step`, `Reverse`, `Hi-Res Toggle`, `Onion Skin`, `Audio Character`, and `Audio Shape` need before they produce a visible effect — all six are now confirmed *valid, recognized* commands (never logged `UNKNOWN Mono MSG`), so the open question has narrowed from "do these exist" to "what state does the project need to be in" (e.g. an audio track loaded, a different display mode, an axis actively jogging). Not yet tested.
+3. Whether axis enable/disable is settable via *any* Monogram input name — now effectively closed to "no evidence found": the original six guesses plus eight more axis-enable-shaped names from the fuzz pass (`Enable Axis`, `Disable Axis`, `Axis Enable`, `Axis Disable`, `Toggle Axis`, `Mute Axis`, `Record Axis`, `Solo Axis`) all definitively rejected via the log oracle. Not exhaustive, but the highest-confidence negative result obtained so far.
+4. Set Keyframe — same status as (3): `Set Keyframe`, `Keyframe`, and `Add Keyframe` all definitively rejected via the log oracle. No candidate mechanism remains from wordlist guessing; would need a different approach (e.g. inspecting Monogram Creator's own assignment UI if ever installed, or the closed-source Dragonframe binary) to make further progress.
+5. Whether a full Dragonframe relaunch (vs. just a fresh socket connection) would change any of the above — not tested; all reconnects tested were the app's own background retry (focus-triggered, see Connection above), not a cold start.
+6. ~~User has pre-authorized a second, broader fuzzing round including riskier candidates (e.g. `Cut Back`, `Reshoot Frames`) — not yet run.~~ **Done** — round 2 (55 candidates, including these two) all rejected, see above.
 
 ## How to Reproduce This Testing
 
-A minimal Python listener (using the `websockets` package) bound to `127.0.0.1` **and** `::1` on port 59177 (Dragonframe's connection was observed to prefer IPv6 for `localhost`) will receive Dragonframe's connection in place of Monogram Service, with no Monogram installation needed. Send newline-terminated JSON (`json.dumps(message) + os.linesep`) over the accepted connection to test candidate inputs; log everything received to see Dragonframe's own responses (`setInputColor`, `replaceInputList`). No probe script from this session was preserved in the repo (scratchpad-only); rebuild from the wire format documented above if resuming this investigation.
+A minimal Python listener (using the `websockets` package) bound to `127.0.0.1` **and** `::1` on port 59177 (Dragonframe's connection was observed to prefer IPv6 for `localhost`) will receive Dragonframe's connection in place of Monogram Service, with no Monogram installation needed. Send newline-terminated JSON (`json.dumps(message) + os.linesep`) over the accepted connection to test candidate inputs.
+
+**Preferred method: use the log-file oracle (see above), not the wire response.** Send candidates (a wordlist works fine, spaced a few seconds apart so log lines are attributable), then grep `~/Library/Logs/Dragonframe.txt` for `UNKNOWN Mono MSG` — anything not logged as unknown was recognized. If Dragonframe stops reconnecting mid-run, click its window to bring it to focus; reconnect is focus-triggered, not periodic. No probe script from this session was preserved in the repo (scratchpad-only); rebuild from the wire format documented above if resuming this investigation.
 
 ## References
 
