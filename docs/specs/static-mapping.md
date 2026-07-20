@@ -71,7 +71,7 @@ Traces to `docs/llds/static-mapping.md`.
 ## References
 
 - `docs/llds/static-mapping.md`
-- `~/github/DragonMIDI-vibed/mappings.md` — source table this LLD's map mirrors.
+- Prior prototype — source table this LLD's map mirrors.
 - `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the `gotoPosition` scaling and Manual-function findings behind the OSC Axis (Direct) Target specs.
 - `docs/llds/app-ui.md` — Mapping View, including the fader row's default axis mode (`UI-MAP-011`), how Knob/Mute entries are folded into it rather than shown as their own rows (`UI-MAP-001`), and Solo's single summary row (`UI-MAP-013`).
 - `docs/llds/websocket-output.md` — the WebSocket Output Adapter that consumes `process_websocket()`'s `WebSocketCommand` output.

@@ -74,5 +74,5 @@ The `korg_scene` type is recognized from the specific 13-byte Native Mode Scene-
 
 ## References
 
-- `~/github/DragonMIDI-vibed/dragonmidi/midi_io.py` — source of the Native Mode SysEx handshake and fuzzy device-name matching, reused as validated reference.
-- `~/github/DragonMIDI-vibed/dragonmidi/engine.py` — source of the `korg_scene` SysEx byte pattern and normalized-event shape this LLD adapts.
+- Prior prototype — source of the Native Mode SysEx handshake and fuzzy device-name matching, reused as validated reference.
+- Prior prototype — source of the `korg_scene` SysEx byte pattern and normalized-event shape this LLD adapts.

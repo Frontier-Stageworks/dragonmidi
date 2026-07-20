@@ -2,8 +2,8 @@
 """
 PyInstaller spec file for DragonMIDI - Windows.
 
-No icon yet - drop an assets/dragonmidi.ico in and add `icon='assets/dragonmidi.ico'`
-to the EXE() call below once one exists (see StagehandClient-win.spec for the pattern).
+No icon yet. To add one: drop a .ico in assets/ and add
+`icon='assets/dragonmidi.ico'` to the EXE() call below.
 """
 
 block_cipher = None

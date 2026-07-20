@@ -5,3 +5,10 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Research docs - kept local only, not published to the public repo
+docs/dragonframe-hotkeys-research.md
+docs/dragonframe-messages-research.md
+docs/dragonframe-websocket-research.md
+docs/nanokontrol-mapping-proposal.md
+docs/proposed-mapping.jpg

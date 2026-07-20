@@ -156,7 +156,7 @@ Embedded directly in the main window, as a section below the host/port configura
 
 ## References
 
-- `~/github/DragonMIDI-vibed/dragonmidi/app.py` — source of the proven queue-plus-poll threading pattern and the shutdown sequence this LLD adapts (structure only, not the mapping-editor UI built around it).
+- Prior prototype — source of the queue-plus-poll threading pattern and the shutdown sequence this LLD adapts (structure only, not the mapping-editor UI built around it).
 - `docs/llds/static-mapping.md § Jog Wheel Frame Stepping` and `§ Keystroke Output (Arc Motion Control)` — the two independent outputs the jog wheel's two rows display.
 - `docs/llds/keystroke-output.md` — the `KeyCombo` shape the "Jog Wheel (Arc)" row's Target text is derived from.
 - `docs/llds/static-mapping.md § WebSocket-Targeted Controls` — the Stop/Cycle/Solo/Marker bindings the "WebSocket" Target type and the "Solo 1-8" summary row display.

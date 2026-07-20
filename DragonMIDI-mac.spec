@@ -2,10 +2,10 @@
 """
 PyInstaller spec file for DragonMIDI - macOS .app bundle.
 
-No icon yet - drop an assets/dragonmidi.png in and generate an .icns (see
-StagehandClient-mac.spec / build-mac-client.yml in the stagehand repo for the
-sips/iconutil pattern) once one exists, then set icon='assets/dragonmidi.icns'
-below and in the BUNDLE() call.
+No icon yet. To add one: drop a source PNG in assets/, generate an .icns with
+`sips` (resize to each required size) and `iconutil -c icns` (assemble the
+.iconset into the .icns), then set icon='assets/dragonmidi.icns' below and in
+the BUNDLE() call.
 
 No Info.plist usage-description keys are needed for the keystroke output path
 (macOS Accessibility access is a TCC prompt tied to the app appearing in
@@ -67,7 +67,7 @@ app = BUNDLE(
     coll,
     name='DragonMIDI.app',
     icon=None,
-    bundle_identifier='com.rocketmark.dragonmidi',
+    bundle_identifier='com.frontierstageworks.dragonmidi',
     info_plist={
         'NSHighResolutionCapable': True,
         'CFBundleShortVersionString': '0.1.0',

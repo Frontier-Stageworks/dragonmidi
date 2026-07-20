@@ -41,6 +41,6 @@ Traces to `docs/llds/osc-io.md`.
 ## References
 
 - `docs/llds/osc-io.md`
-- `~/github/DragonMIDI-vibed/dragonmidi/osc.py` — source of the OSC 1.0 encoder this LLD reuses.
+- Prior prototype — source of the OSC 1.0 encoder this LLD reuses.
 - `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the bundle format, single-socket query, and duplicate-response findings behind the Axis Discovery specs.
 - `docs/llds/midi-input.md`, `docs/llds/keystroke-output.md` — the `MidiBackend`/`KeystrokeBackend` precedent `OSC-BACKEND-001`'s `UdpSocket` protocol follows.

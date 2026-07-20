@@ -8,7 +8,7 @@ A second, separate interface, `process_keystroke(event) -> Optional[KeyCombo]`, 
 
 A third interface, `process_websocket(event, now, axis_positions) -> Optional[WebSocketCommand]`, exists for the small number of entries whose Dragonframe function is reachable only through the WebSocket output path (`docs/llds/websocket-output.md`) — Stop, Cycle, Solo 1–8, and Marker ◄/►. Unlike the jog wheel's keystroke output, these controls' WebSocket target **replaces** their prior OSC target rather than firing alongside it — each entry has exactly one target, still matching the HLD's "one target per mapping entry" principle; it's simply a WebSocket target instead of an OSC one for these four. See WebSocket-Targeted Controls below.
 
-Unlike the original static-table design, entries are now editable (add/edit/remove, enable/disable, MIDI-learn) and persisted through a Preset Store, per `docs/high-level-design.md`. The table ships pre-loaded with the nanoKONTROL Studio's opinionated default map (mirroring `DragonMIDI-vibed/mappings.md`), so a user who never opens the mapping view sees identical behavior to a fixed table.
+Unlike the original static-table design, entries are now editable (add/edit/remove, enable/disable, MIDI-learn) and persisted through a Preset Store, per `docs/high-level-design.md`. The table ships pre-loaded with the nanoKONTROL Studio's opinionated default map (mirroring the prior prototype's default map), so a user who never opens the mapping view sees identical behavior to a fixed table.
 
 **Phase scope** (per `docs/high-level-design.md § Delivery Phasing`): this LLD describes the target design. **App Delivery Phase 1** implements the "OSC axis (direct)" target type, as the **default** for the 8 faders, plus **bank derivation** — knobs and the Mute button automatically follow their bank's fader assignment rather than being independently configurable (see Bank Derivation below); Solo is WebSocket-targeted and independent of bank state (see WebSocket-Targeted Controls below). Transport/marker/track buttons and Record/Select are unaffected and keep their existing targets. The jog wheel drives frame-by-frame timeline stepping (see Jog Wheel Frame Stepping below); Return to Zero remains unmapped (see the Opinionated Default Map below). The general editor (MIDI-learn, add/remove, presets, independently retargeting a knob/button) is **App Delivery Phase 2**.
 
@@ -92,7 +92,7 @@ Since the fader defines the axis's usable range (its configured `min`/`max`), Kn
 
 ## Jog Wheel Frame Stepping
 
-The jog wheel (CC 110) reports movement using the nanoKONTROL Studio's KORG sign-magnitude relative encoding, reused byte-for-byte from the prototype's decode (`DragonMIDI-vibed/dragonmidi/engine.py`'s `relative_sign_magnitude` trigger): a message's raw value `1–63` means clockwise rotation by that magnitude, `65–127` means counterclockwise rotation by `raw_value - 64`, and `0` or `64` both mean no movement.
+The jog wheel (CC 110) reports movement using the nanoKONTROL Studio's KORG sign-magnitude relative encoding, reused byte-for-byte from the prior prototype's decode (`relative_sign_magnitude` trigger): a message's raw value `1–63` means clockwise rotation by that magnitude, `65–127` means counterclockwise rotation by `raw_value - 64`, and `0` or `64` both mean no movement.
 
 - **Direction only, magnitude ignored.** Every clockwise message (`1–63`) sends `/dragonframe/stepForward` exactly once; every counterclockwise message (`65–127`) sends `/dragonframe/stepBackward` exactly once. The message's magnitude is not used to send multiple steps or to scale anything — one physical detent is one frame, regardless of how fast the wheel was spun. A message of `0` or `64` produces no OSC output.
 - **No debounce, no dedup.** Unlike button-type entries (`MAP-DEBOUNCE-001`'s 80ms window) or continuous-absolute entries (skip-on-repeated-value), every qualifying jog wheel message fires immediately and independently — each message already represents one discrete physical detent, not a bounce or a resend of an unchanged value. A rapid run of identical raw values (e.g. several `1`s in a row from a fast spin) is several distinct detents, not one repeated reading, and each fires its own step.
@@ -102,7 +102,7 @@ The jog wheel (CC 110) reports movement using the nanoKONTROL Studio's KORG sign
 
 ### Keystroke Output (Arc Motion Control)
 
-The main timeline's `stepForward`/`stepBackward` OSC commands have no effect while the Arc Motion Control workspace is focused — confirmed empirically (`docs/high-level-design.md § Problem`). Dragonframe's only reachable equivalent there is a distinct action, "Step Moco Forward"/"Step Moco Back," with no OSC message of its own, only a Hot Key binding (`Option+Shift+Right`/`Option+Shift+Left` by default).
+The main timeline's `stepForward`/`stepBackward` OSC commands have no effect while the Arc Motion Control workspace is focused (`docs/high-level-design.md § Problem`). Dragonframe's only reachable equivalent there is a distinct action, "Step Moco Forward"/"Step Moco Back," with no OSC message of its own, only a Hot Key binding (`Option+Shift+Right`/`Option+Shift+Left` by default).
 
 - On the same event and using the same sign-magnitude direction decode as the OSC output above, `MappingEngine.process_keystroke()` returns `KeyCombo(frozenset({"alt", "shift"}), "right")` for a clockwise message and `KeyCombo(frozenset({"alt", "shift"}), "left")` for a counterclockwise one; `0`/`64` and any non-jog-wheel event return `None`. `"alt"` is the cross-platform name for the physical key Dragonframe's default binding calls "Option" on macOS.
 - **Both outputs fire for the same message.** A single jog wheel MIDI message produces one `process()` call and one `process_keystroke()` call from the event loop, each independently evaluated — there is no attempt to detect which of the two would actually have an effect (main timeline vs. Arc workspace focused) and suppress the other. The OSC command is a no-op when Arc has focus; the synthesized keystroke is presumably a no-op (or at least harmless) when the main timeline has focus and Arc isn't open. This mirrors `docs/high-level-design.md § Non-Goals`' decision not to build frontmost/focus-detection machinery.
@@ -154,7 +154,7 @@ The engine keeps a small per-control "previous normalized value" map, needed for
 | Decision | Chosen | Alternatives Considered | Rationale |
 |---|---|---|---|
 | Map storage | Editable table, persisted via Preset Store | Static in-code data structure (the original design) | Reversed per the HLD: confirming/correcting a control's assignment was a real, immediate need that a fixed table couldn't satisfy |
-| Continuous axis addressing | Direct axis-name addressing (`gotoPosition`), scoped to faders in Phase 1 | A virtual gamepad (investigated and set aside, `docs/dragonframe-gamepad-research.md`) | Extends the already-working OSC path instead of adding a new OS-level dependency; empirically validated against a real Dragonframe instance |
+| Continuous axis addressing | Direct axis-name addressing (`gotoPosition`), scoped to faders in Phase 1 | A virtual gamepad (blocked by macOS's DriverKit entitlement requirement — see `docs/high-level-design.md § Key Design Decisions`) | Extends the already-working OSC path instead of adding a new OS-level dependency; empirically validated against a real Dragonframe instance |
 | Axis scaling range | User-specified min/max | Attempt to discover the axis's real range | Dragonframe has no `getLimits` over OSC — the range genuinely cannot be read back |
 | Manual-function requirement | Documented as user-facing setup guidance, not enforced by DragonMIDI | Attempt to detect/validate the axis's Function before sending | Function type isn't exposed over OSC in any response; nothing to check against |
 | Axis name entry | Picker restricted to the discovered list, no free text | Allow typing an arbitrary axis name | A typo'd free-text name would silently fail with no detection possible; the discovery mechanism already exists |
@@ -211,8 +211,8 @@ The engine keeps a small per-control "previous normalized value" map, needed for
 
 ## References
 
-- `~/github/DragonMIDI-vibed/mappings.md` — the validated default control-by-control table this LLD's default map mirrors.
-- `~/github/DragonMIDI-vibed/dragonmidi/engine.py` — source of the trigger-evaluation logic (`_evaluate`) and action-building logic (`_build_action`) this LLD adapts.
+- Prior prototype — the validated default control-by-control table this LLD's default map mirrors.
+- Prior prototype — source of the trigger-evaluation logic (`_evaluate`) and action-building logic (`_build_action`) this LLD adapts.
 - `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the `gotoPosition`/`getAllPosition`/Manual-function findings this design is built on.
 - `docs/llds/osc-io.md` — axis discovery (`getAllPosition` parsing) that populates the axis picker for this target type.
 - `docs/llds/keystroke-output.md` — the Keystroke Output Adapter that consumes `process_keystroke()`'s `KeyCombo` output for the jog wheel's Arc Motion Control behavior.

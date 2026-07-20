@@ -2,6 +2,10 @@
 
 DragonMIDI lets you control [Dragonframe](https://www.dragonframe.com/) (stop-motion capture software) with a **KORG nanoKONTROL Studio** MIDI controller. Plug in the controller, launch DragonMIDI, and its faders, knobs, and transport buttons act as physical controls for Dragonframe — playback, shooting, and moving motorized rig axes — instead of reaching for the mouse and keyboard every time.
 
+**Unofficial project:** DragonMIDI is an independent interoperability utility and is not affiliated with, endorsed by, or supported by DZED Systems LLC, KORG, or Monogram. Product names and trademarks are the property of their respective owners. DragonMIDI does not include or redistribute Dragonframe software and requires a separately licensed Dragonframe installation.
+
+**Motion-control safety:** DragonMIDI is not a safety system or a substitute for a physical emergency stop. Test mappings at low speed with the rig's travel area clear before operating connected motors.
+
 ## Quick start
 
 1. **Install it** (see [Installing](#installing) below if you don't already have this set up).
