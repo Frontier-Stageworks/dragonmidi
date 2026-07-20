@@ -104,4 +104,3 @@ Both the Client and the Listener depend only on a small `UdpSocket` protocol (`b
 
 - Prior prototype — source of the OSC 1.0 message encoder reused here.
 - Dragonframe official manual, "Outputting Axis Positions via Open Sound Control (OSC)" (`Using Dragonframe 2025.pdf`) — confirms Dragonframe's OSC Output capability that the Listener depends on.
-- `docs/dragonframe-messages-research.md § Axis Discovery and Direct Addressing` — the bundle format, single-socket query requirement, and duplicate-response findings this LLD's axis-discovery design is built on.

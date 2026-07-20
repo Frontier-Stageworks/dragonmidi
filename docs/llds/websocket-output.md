@@ -2,7 +2,7 @@
 
 ## Context and Design Philosophy
 
-A third, narrower output path alongside OSC (`docs/llds/osc-io.md`) and Keystroke (`docs/llds/keystroke-output.md`), for the small set of Dragonframe functions reachable only through Dragonframe's own outbound WebSocket connection — `E-Stop`, `select-AXn`, `jog-AXn` (`docs/dragonframe-websocket-research.md`, `docs/high-level-design.md § Problem`).
+A third, narrower output path alongside OSC (`docs/llds/osc-io.md`) and Keystroke (`docs/llds/keystroke-output.md`), for the small set of Dragonframe functions reachable only through Dragonframe's own outbound WebSocket connection — `E-Stop`, `select-AXn`, `jog-AXn` (`docs/high-level-design.md § Problem`).
 
 Unlike the OSC Client and Keystroke Output Adapter, this component is a server, not a sender: Dragonframe initiates the connection, at its own startup, to a fixed well-known port. This component's only job is to accept that connection and, on a mapped MIDI event, send the corresponding `{"input": "<name>"}` JSON command over it. It does not implement the general command/discovery protocol Dragonframe's connection is capable of — no `replaceInputList`/`setInputColor` parsing, no dynamic input list, no multi-client support (`docs/high-level-design.md § Non-Goals`).
 
@@ -44,7 +44,7 @@ Matches `OscListener`'s start/stop lifecycle shape, not `KeystrokeOutputAdapter`
 
 ## Connection Handling
 
-- Binds both `127.0.0.1` and `::1` on the given port, at `start()` — not `0.0.0.0`. Dragonframe's own outbound connection to `localhost` resolves to the IPv6 loopback address; an IPv4-only bind misses it (`docs/dragonframe-websocket-research.md`).
+- Binds both `127.0.0.1` and `::1` on the given port, at `start()` — not `0.0.0.0`. Dragonframe's own outbound connection to `localhost` resolves to the IPv6 loopback address; an IPv4-only bind misses it.
 - Accepts a connection only at path `/com.dzed.dragonframe/DragonframeConnection`, enforced via `websockets`' handshake-rejection hook (`process_request`), which returns an HTTP 404 for any other path before a WebSocket connection is ever established. Dragonframe is the only client this component expects. Each rejection is logged once, at debug level, with the requested path and remote address — no spam suppression, since this is a loopback-only server with no realistic exposure to repeated hostile probing.
 - **At most one active connection is tracked, held as a single reference mutated only from code running on the adapter's own event loop thread** — the accept handler that assigns a new connection and the `send()` coroutine that reads it both run there; nothing outside that thread touches the reference directly. Because `asyncio` runs one coroutine step at a time on a single thread, and the "become the active connection" assignment is a single statement with no `await` inside it, this reference can never be read mid-update — no lock is needed.
 - **A new connection replaces the previously active one, and the old connection is explicitly closed** (not merely dereferenced) at the moment of replacement — matches Dragonframe's own reconnect behavior (it closes its old connection before opening a new one) and avoids leaving a stale server-side connection object open after Dragonframe has already moved on.
@@ -54,7 +54,7 @@ Matches `OscListener`'s start/stop lifecycle shape, not `KeystrokeOutputAdapter`
 
 ## Sending a Command
 
-- `send(command)` encodes `command` as newline-delimited JSON (`docs/dragonframe-websocket-research.md`'s wire format) and writes it to the currently active connection, if any.
+- `send(command)` encodes `command` as newline-delimited JSON and writes it to the currently active connection, if any.
 - `operation`/`params` are omitted from the encoded JSON when they hold their defaults (`""`/`()`) — matches the bare `{"input": "<name>"}` shape confirmed for trigger commands; only ranged/incremental commands (`jog-AXn`) need the full three-key shape.
 - **`send()` checks, on the calling thread, whether the event loop is currently running before doing anything else.** If it isn't — never started, `start()` failed to bind, or `stop()` has already run — the call is logged and dropped immediately, without touching `asyncio.run_coroutine_threadsafe` at all. This gives pre-start, post-bind-failure, and post-stop calls the identical observable behavior as "started but no client connected yet": logged and dropped, never a different exception shape.
 - If the loop is running but there is no active connection, the scheduled coroutine finds none and drops the send the same way — logged, not queued, not retried. Matches Keystroke output's silent-fail precedent (`docs/high-level-design.md § Key Design Decisions`); Dragonframe reconnects on its own when it regains OS focus, outside this component's control.
@@ -97,16 +97,18 @@ Matches `OscListener`'s start/stop lifecycle shape, not `KeystrokeOutputAdapter`
 
 ## Open Questions & Future Decisions
 
+### Resolved
+
+1. **Which physical controls map to which WebSocket commands** was not decided in this LLD — it belongs to `static-mapping.md`'s territory (mirrors how `keystroke-output.md` doesn't decide the jog wheel binds to `Step Moco Forward`/`Back`; `static-mapping.md`'s `MAP-JOGKEY-*` specs do). Now committed to specific controls in `static-mapping.md`'s WebSocket-Targeted Controls section (`MAP-WS-001` through `MAP-WS-009`).
+
 ### Deferred
 
-1. **Which physical controls map to which WebSocket commands** is not decided in this LLD — it belongs to `static-mapping.md`'s territory (mirrors how `keystroke-output.md` doesn't decide the jog wheel binds to `Step Moco Forward`/`Back`; `static-mapping.md`'s `MAP-JOGKEY-*` specs do). Candidate bindings are recorded in `docs/nanokontrol-mapping-proposal.md` but not yet committed to specific controls or cascaded into `static-mapping.md`.
-2. Whether a failed WebSocket send should eventually surface on the Status UI is deferred, matching Keystroke output's identical open question.
-3. Whether to detect another process already holding port 59177 ahead of `start()` (rather than only failing the bind) is deferred — out of scope per the HLD's coexistence Non-Goal.
+1. Whether a failed WebSocket send should eventually surface on the Status UI is deferred, matching Keystroke output's identical open question.
+2. Whether to detect another process already holding port 59177 ahead of `start()` (rather than only failing the bind) is deferred — out of scope per the HLD's coexistence Non-Goal.
 
 ## References
 
 - `docs/high-level-design.md § Approach` and `§ Key Design Decisions` — the decision to add this as a third output path, server/client direction, fixed port, and no-status-indicator scope decisions.
 - `docs/llds/keystroke-output.md` — the closest existing precedent for a narrow, secondary output path with silent failure handling.
 - `docs/llds/osc-io.md § Listener (Receive)` — the closest existing precedent for a bound-socket server component with a start/stop lifecycle.
-- `docs/dragonframe-websocket-research.md` — wire format, confirmed/rejected command list, and the dual-stack-bind requirement this design is built on.
-- `docs/nanokontrol-mapping-proposal.md` — candidate control bindings for the confirmed WebSocket commands, not yet cascaded into `static-mapping.md`.
+- `docs/llds/static-mapping.md § WebSocket-Targeted Controls` — the specific control bindings for the WebSocket commands this adapter serves.

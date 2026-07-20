@@ -161,4 +161,4 @@ python -m pytest
 
 Tests use `pytest` and `hypothesis` (property-based tests).
 
-See [`docs/high-level-design.md`](docs/high-level-design.md) for full architecture and phasing rationale, and [`docs/dragonframe-messages-research.md`](docs/dragonframe-messages-research.md) for the research behind Dragonframe's OSC surface.
+See [`docs/high-level-design.md`](docs/high-level-design.md) for full architecture and phasing rationale.
