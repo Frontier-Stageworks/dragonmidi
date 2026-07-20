@@ -2,6 +2,7 @@
 
 @spec UI-THREAD-001
 """
+
 from __future__ import annotations
 
 import queue

@@ -23,6 +23,7 @@ dependencies = [
 dev = [
   "pytest==9.1.1",
   "hypothesis==6.157.0",
+  "ruff==0.15.22",
 ]
 
 [project.scripts]
@@ -33,3 +34,6 @@ packages = ["dragonmidi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 150

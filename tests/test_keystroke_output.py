@@ -3,6 +3,7 @@
 @spec KEY-SEND-001, KEY-SEND-002, KEY-SEND-003, KEY-SEND-004, KEY-SEND-005, KEY-SEND-006
 @spec KEY-BACKEND-001
 """
+
 from __future__ import annotations
 
 from dragonmidi.events import KeyCombo
@@ -26,6 +27,7 @@ class FakeKeystrokeBackend:
 
 
 # --- KEY-SEND-001: press modifiers, then key down/up, then release modifiers ---
+
 
 # @spec KEY-SEND-001
 def test_send_presses_modifiers_then_key_then_releases_in_reverse_modifier_order() -> None:
@@ -81,6 +83,7 @@ def test_send_single_modifier_order_is_fully_deterministic() -> None:
 
 # --- KEY-SEND-002: modifiers always released, even if the key press raises ---
 
+
 # @spec KEY-SEND-002
 def test_send_still_releases_modifiers_when_key_press_raises() -> None:
     backend = FakeKeystrokeBackend(fail_on={"right"})
@@ -107,6 +110,7 @@ def test_send_still_releases_remaining_modifiers_when_one_modifier_press_raises(
 
 # --- KEY-SEND-003: backend failures are caught and logged, never raised ---
 
+
 # @spec KEY-SEND-003
 def test_send_swallows_total_backend_failure_without_raising() -> None:
     backend = FakeKeystrokeBackend(fail_on={"alt", "shift", "right"})
@@ -132,6 +136,7 @@ def test_send_swallows_unrecognized_key_lookup_failure() -> None:
 
 # --- KEY-SEND-004: no debounce or dedup ---
 
+
 # @spec KEY-SEND-004
 def test_send_repeated_identical_combo_performs_the_full_sequence_every_time() -> None:
     backend = FakeKeystrokeBackend()
@@ -147,6 +152,7 @@ def test_send_repeated_identical_combo_performs_the_full_sequence_every_time() -
 
 # --- KEY-SEND-005 / KEY-SEND-006: no frontmost-app check, no permission pre-flight ---
 
+
 # @spec KEY-SEND-005, KEY-SEND-006
 def test_send_requires_no_focus_or_permission_check_to_succeed() -> None:
     # send() takes only a combo - no frontmost-app or permission state is consulted
@@ -160,6 +166,7 @@ def test_send_requires_no_focus_or_permission_check_to_succeed() -> None:
 
 
 # --- KEY-BACKEND-001: swappable backend, not hard-coded to any specific implementation ---
+
 
 # @spec KEY-BACKEND-001
 def test_adapter_works_with_any_object_implementing_press_and_release() -> None:

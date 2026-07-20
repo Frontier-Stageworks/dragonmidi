@@ -14,6 +14,7 @@ opposed to a per-connection handler exception, which `websockets` already
 isolates and which never reaches this code) requires faking internals deep
 enough that the test would no longer exercise real behavior.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -167,9 +168,7 @@ def test_partial_dual_stack_bind_failure_leaves_no_socket_bound(free_tcp_port: i
     blocker.listen(1)
     try:
         results: list[bool] = []
-        adapter = WebSocketOutputAdapter(
-            hosts=("127.0.0.1", "::1"), port=free_tcp_port, on_bind_result=results.append
-        )
+        adapter = WebSocketOutputAdapter(hosts=("127.0.0.1", "::1"), port=free_tcp_port, on_bind_result=results.append)
         adapter.start()
         assert results == [False]
     finally:

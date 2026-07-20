@@ -2,6 +2,7 @@
 
 @spec UI-MONITOR-001, UI-MONITOR-002, UI-MONITOR-003
 """
+
 from __future__ import annotations
 
 from hypothesis import given
@@ -13,6 +14,7 @@ from tests.support import FakeClock
 
 # --- UI-MONITOR-001: never-seen channel is not live ---
 
+
 # @spec UI-MONITOR-001
 def test_fresh_channel_is_quiet_not_live(fake_clock) -> None:
     monitor = SignalMonitor(liveness_window=2.0, clock=fake_clock)
@@ -21,6 +23,7 @@ def test_fresh_channel_is_quiet_not_live(fake_clock) -> None:
 
 
 # --- UI-MONITOR-002: liveness is a strict function of elapsed time vs. window ---
+
 
 # @spec UI-MONITOR-002
 @given(
@@ -59,6 +62,7 @@ def test_repeated_activity_resets_the_liveness_clock(window: float) -> None:
 
 
 # --- UI-MONITOR-003: error flag takes precedence over both live and quiet ---
+
 
 # @spec UI-MONITOR-003
 @given(has_recent_activity=st.booleans(), error=st.booleans())

@@ -194,9 +194,7 @@ class MappingEngine:
         if not was_encoder_mode:
             self._discard_bank_knob_dedup(key)
 
-    def process(
-        self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None
-    ) -> OscMessage | None:
+    def process(self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None) -> OscMessage | None:
         """`axis_positions` is the OSC Listener's most recently observed position per
         axis name (`AxisDiscovery.axes`), if available - used to clamp Knob N's nudges
         against Dragonframe's actual reported position rather than only an internal
@@ -263,9 +261,7 @@ class MappingEngine:
         self._last_fired[key] = now
         return True
 
-    def _process_press(
-        self, key: _Key, event: MidiEvent, now: float, address: str, args: tuple = ()
-    ) -> OscMessage | None:
+    def _process_press(self, key: _Key, event: MidiEvent, now: float, address: str, args: tuple = ()) -> OscMessage | None:
         """Fires on the rising edge (not-pressed -> pressed) only, debounced."""
         if not self._press_edge(key, event, now):
             return None
@@ -360,9 +356,7 @@ class MappingEngine:
             return None
         return _STEP_MOCO_FORWARD if raw < 64 else _STEP_MOCO_BACKWARD
 
-    def process_websocket(
-        self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None
-    ) -> WebSocketCommand | None:
+    def process_websocket(self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None) -> WebSocketCommand | None:
         """Third, independent output path alongside `process()`/`process_keystroke()`,
         for Stop, Cycle, Solo 1-8, and Previous/Next Marker - the WebSocket-targeted
         controls (`docs/llds/static-mapping.md § WebSocket-Targeted Controls`). Each of

@@ -2,6 +2,7 @@
 
 @spec UI-STATUS-001, UI-STATUS-002, UI-STATUS-003, UI-STATUS-004
 """
+
 from __future__ import annotations
 
 from hypothesis import given
@@ -15,6 +16,7 @@ from dragonmidi.status_presenter import (
 )
 
 # --- UI-STATUS-002: label reflects connection status, independent of channel state ---
+
 
 @given(state=st.sampled_from(list(ChannelState)), device_name=st.text(min_size=1, max_size=20))
 # @spec UI-STATUS-002
@@ -35,6 +37,7 @@ def test_disconnected_label_always_shows_waiting_text(state, stale_device_name) 
 
 # --- UI-STATUS-004: dot state and label are independent axes; may disagree ---
 
+
 @given(state=st.sampled_from(list(ChannelState)), connected=st.booleans(), device_name=st.text(min_size=1, max_size=20))
 # @spec UI-STATUS-004
 def test_presenter_never_derives_dot_state_from_connection_status(state, connected: bool, device_name: str) -> None:
@@ -53,6 +56,7 @@ def test_error_dot_can_coexist_with_a_connected_device_name() -> None:
 
 # --- UI-STATUS-003: Dragonframe row shows the listen port ---
 
+
 @given(port=st.integers(min_value=1, max_value=65535), state=st.sampled_from(list(ChannelState)))
 # @spec UI-STATUS-003
 def test_dragonframe_indicator_label_includes_listen_port(port: int, state) -> None:
@@ -62,6 +66,7 @@ def test_dragonframe_indicator_label_includes_listen_port(port: int, state) -> N
 
 
 # --- UI-STATUS-001: both indicators are derived from exactly one Signal Monitor read per channel ---
+
 
 class _CountingMonitor:
     """Wraps a real SignalMonitor and counts calls to .state(), to catch a torn read."""
@@ -78,9 +83,7 @@ class _CountingMonitor:
 # @spec UI-STATUS-001
 def test_snapshot_reads_each_channel_state_exactly_once(fake_clock) -> None:
     monitor = _CountingMonitor(SignalMonitor(liveness_window=2.0, clock=fake_clock))
-    snapshot = compute_status_snapshot(
-        monitor, midi_connected=True, midi_device_name="nanoKONTROL Studio", listen_port=7011
-    )
+    snapshot = compute_status_snapshot(monitor, midi_connected=True, midi_device_name="nanoKONTROL Studio", listen_port=7011)
     assert monitor.calls.count("midi") == 1
     assert monitor.calls.count("dragonframe") == 1
     assert len(monitor.calls) == 2

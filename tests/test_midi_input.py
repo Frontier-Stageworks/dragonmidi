@@ -5,6 +5,7 @@
 @spec MIDI-NATIVE-001, MIDI-NATIVE-002, MIDI-NATIVE-003, MIDI-NATIVE-004
 @spec MIDI-EVT-001, MIDI-EVT-003, MIDI-EVT-004
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -67,6 +68,7 @@ def test_random_strings_without_the_target_substring_never_match(name: str) -> N
 # Native Mode SysEx builder
 # ---------------------------------------------------------------------------
 
+
 @given(channel=st.integers(min_value=0, max_value=15), enter=st.booleans())
 # @spec MIDI-NATIVE-001, MIDI-NATIVE-002
 def test_native_mode_message_encodes_channel_and_direction(channel: int, enter: bool) -> None:
@@ -88,6 +90,7 @@ def test_native_mode_enter_and_exit_differ_only_in_last_byte(channel: int) -> No
 # ---------------------------------------------------------------------------
 # Raw MIDI normalization
 # ---------------------------------------------------------------------------
+
 
 @given(control=st.integers(min_value=0, max_value=127), value=st.integers(min_value=0, max_value=127), channel=st.integers(min_value=0, max_value=15))
 # @spec MIDI-EVT-001
@@ -139,6 +142,7 @@ def test_normalize_unknown_type_returns_none() -> None:
 # ---------------------------------------------------------------------------
 # MidiInputAdapter: fake backend, no hardware required
 # ---------------------------------------------------------------------------
+
 
 class FakeOutputPort:
     def __init__(self, name: str, fail_on_channel: int | None = None) -> None:
@@ -292,7 +296,9 @@ def test_native_mode_enter_sent_to_all_16_channels() -> None:
 # @spec MIDI-NATIVE-002
 def test_native_mode_exit_sent_despite_one_channel_failing_and_port_still_closes() -> None:
     backend = FakeBackend(
-        inputs=["nanoKONTROL Studio"], outputs=["nanoKONTROL Studio"], fail_output_channel=5,
+        inputs=["nanoKONTROL Studio"],
+        outputs=["nanoKONTROL Studio"],
+        fail_output_channel=5,
     )
     adapter = make_adapter(backend)
     adapter.poll_discovery()
@@ -352,9 +358,7 @@ def test_activity_recorded_even_when_normalization_fails() -> None:
     backend = FakeBackend(inputs=["nanoKONTROL Studio"], outputs=[])
     activity_count = {"n": 0}
     events: list = []
-    adapter = make_adapter(
-        backend, on_activity=lambda: activity_count.__setitem__("n", activity_count["n"] + 1), on_event=events.append
-    )
+    adapter = make_adapter(backend, on_activity=lambda: activity_count.__setitem__("n", activity_count["n"] + 1), on_event=events.append)
     adapter.poll_discovery()
     input_port = _get_open_input_port(backend, adapter)
     input_port.callback(SimpleNamespace(type="sysex", data=(0x01, 0x02, 0x03)))  # garbage, fails to normalize

@@ -2,6 +2,7 @@
 
 @spec UI-SHUTDOWN-001
 """
+
 from __future__ import annotations
 
 import threading

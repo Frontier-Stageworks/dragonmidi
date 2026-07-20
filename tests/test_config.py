@@ -2,6 +2,7 @@
 
 @spec UI-CONFIG-001
 """
+
 from __future__ import annotations
 
 from hypothesis import given

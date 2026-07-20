@@ -110,11 +110,7 @@ class _AxisTargetEditor(QWidget):
         if self._axis_combo.isEnabled() != desired_enabled:
             self._axis_combo.setEnabled(desired_enabled)
 
-        if (
-            state.placeholder is not None
-            and not state.current
-            and self._axis_combo.currentText() != _NO_AXIS_SELECTED
-        ):
+        if state.placeholder is not None and not state.current and self._axis_combo.currentText() != _NO_AXIS_SELECTED:
             with _signals_blocked(self._axis_combo):
                 self._axis_combo.setCurrentText(_NO_AXIS_SELECTED)
 
@@ -150,9 +146,7 @@ class MappingView(QWidget):
 
     _COLUMNS = ["Name", "MIDI", "Trigger", "Target type", "Target"]
 
-    def __init__(
-        self, mapping_engine: MappingEngine, axis_discovery: AxisDiscovery, on_rescan: Callable[[], None]
-    ) -> None:
+    def __init__(self, mapping_engine: MappingEngine, axis_discovery: AxisDiscovery, on_rescan: Callable[[], None]) -> None:
         super().__init__()
         self._engine = mapping_engine
         self._axis_discovery = axis_discovery
@@ -169,9 +163,7 @@ class MappingView(QWidget):
             if row.editable:
                 type_combo = QComboBox()
                 type_combo.addItems(["OSC encoder", "OSC axis"])
-                editor = _AxisTargetEditor(
-                    on_axis_change=lambda name, mn, mx, k=row.key: self._on_axis_change(k, name, mn, mx)
-                )
+                editor = _AxisTargetEditor(on_axis_change=lambda name, mn, mx, k=row.key: self._on_axis_change(k, name, mn, mx))
                 type_combo.currentTextChanged.connect(lambda text, k=row.key: self._on_type_changed(k, text))
                 self._table.setCellWidget(row_index, 3, type_combo)
                 self._table.setCellWidget(row_index, 4, editor)

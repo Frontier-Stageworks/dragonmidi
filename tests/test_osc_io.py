@@ -6,6 +6,7 @@
 @spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003, OSC-DISCOVER-004
 @spec OSC-DISCOVER-005, OSC-DISCOVER-006, OSC-DISCOVER-007, OSC-DISCOVER-008, OSC-DISCOVER-009
 """
+
 from __future__ import annotations
 
 import socket
@@ -75,6 +76,7 @@ def _decode_osc_message(data: bytes) -> tuple[str, tuple]:
 
 # --- OSC-CLIENT-001: encoding, verified via an independent round-trip decoder ---
 
+
 # @spec OSC-CLIENT-001
 @given(address=address_strategy, args=st.lists(arg_strategy, max_size=5))
 def test_encode_round_trips_through_independent_decoder(address: str, args: list) -> None:
@@ -103,6 +105,7 @@ def test_encode_rejects_address_without_leading_slash(address: str) -> None:
 
 # --- OSC-CLIENT-002: send failures are caught, logged, and do not propagate ---
 
+
 class _RaisingSocket:
     def sendto(self, data: bytes, addr: tuple[str, int]) -> int:
         raise OSError("simulated network failure")
@@ -128,6 +131,7 @@ def test_client_send_success_does_not_report_error() -> None:
 
 
 # --- OSC-LISTEN-001 / 002: real loopback bind + receive, no mocks ---
+
 
 # @spec OSC-LISTEN-001, OSC-LISTEN-002
 def test_listener_reports_activity_on_real_datagram(free_udp_port: int) -> None:
@@ -155,6 +159,7 @@ def test_listener_does_not_report_activity_before_any_datagram(free_udp_port: in
 
 
 # --- OSC-LISTEN-003 / 005: bind failure surfaced, fresh attempt gets its own result ---
+
 
 # @spec OSC-LISTEN-003
 def test_listener_bind_failure_is_reported_distinctly(free_udp_port: int) -> None:
@@ -186,6 +191,7 @@ def test_listener_bind_succeeds_after_prior_failure_is_released(free_udp_port: i
 
 
 # --- OSC-LISTEN-006: rebind closes the old socket and moves traffic to the new port ---
+
 
 # @spec OSC-LISTEN-006
 def test_rebind_moves_listening_to_the_new_port(free_udp_port: int) -> None:
@@ -222,6 +228,7 @@ def test_rebind_moves_listening_to_the_new_port(free_udp_port: int) -> None:
 
 # --- OSC-CONFIG-001 / 002 ---
 
+
 # @spec OSC-CONFIG-001
 def test_documented_defaults() -> None:
     assert DEFAULT_DRAGONFRAME_HOST == "127.0.0.1"
@@ -253,6 +260,7 @@ def test_validate_ports_allows_distinct_ports(dragonframe_port: int, listen_port
 # ---------------------------------------------------------------------------
 # Axis discovery: decode_osc_packet (bundle-aware decoding)
 # ---------------------------------------------------------------------------
+
 
 def _build_bundle(entries: list[bytes]) -> bytes:
     """Hand-build an OSC 1.0 #bundle wrapping already-encoded message bytes.
@@ -309,6 +317,7 @@ def test_decode_osc_packet_recurses_into_a_nested_bundle() -> None:
 # ---------------------------------------------------------------------------
 # Axis discovery: AxisDiscovery state machine
 # ---------------------------------------------------------------------------
+
 
 def _axis_response_datagram(name: str, position: float) -> bytes:
     return _build_bundle([encode_osc_message(f"/dragonframe/axis/{name}", position)])
@@ -396,6 +405,7 @@ def test_axis_discovery_response_after_timeout_is_still_recorded(fake_clock: Fak
 # ---------------------------------------------------------------------------
 # Axis discovery: OscListener integration (real loopback sockets)
 # ---------------------------------------------------------------------------
+
 
 class _FakeDragonframe:
     """A real UDP socket that replies to whatever address sent it a datagram -

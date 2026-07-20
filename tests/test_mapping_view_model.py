@@ -3,6 +3,7 @@
 @spec UI-MAP-001, UI-MAP-002, UI-MAP-004, UI-MAP-005, UI-MAP-007, UI-MAP-008
 @spec UI-MAP-011, UI-MAP-012, UI-MAP-013
 """
+
 from __future__ import annotations
 
 from hypothesis import given
@@ -31,6 +32,7 @@ WEBSOCKET_ROW_KEYS = [
 
 
 # --- UI-MAP-001: one row per opinionated entry, in table order, except bank members ---
+
 
 def test_build_rows_returns_one_row_per_non_bank_member_entry_in_table_order() -> None:
     engine = MappingEngine()
@@ -64,6 +66,7 @@ def test_build_rows_excludes_individual_solo_cc_keys(cc: int) -> None:
 
 # --- UI-MAP-002: only fader rows are editable ---
 
+
 def test_only_fader_rows_are_marked_editable() -> None:
     engine = MappingEngine()
     rows = build_rows(engine)
@@ -72,6 +75,7 @@ def test_only_fader_rows_are_marked_editable() -> None:
 
 
 # --- Fader row target rendering: default vs. axis-targeted vs. reverted ---
+
 
 @given(number=st.sampled_from(FADER_CCS))
 # @spec UI-MAP-011
@@ -152,6 +156,7 @@ def test_scene_row_shows_osc_action_target_with_no_cc_number() -> None:
 
 # --- UI-MAP-013: WebSocket-targeted rows (Stop, Cycle, Solo 1-8, Marker) ---
 
+
 def test_build_rows_includes_all_websocket_target_rows() -> None:
     engine = MappingEngine()
     rows = {row.key: row for row in build_rows(engine)}
@@ -204,6 +209,7 @@ def test_marker_row_content() -> None:
 
 # --- UI-MAP-012: jog wheel's two additional, non-editable rows ---
 
+
 def test_build_rows_includes_both_jog_wheel_rows() -> None:
     engine = MappingEngine()
     rows = {row.key: row for row in build_rows(engine)}
@@ -237,6 +243,7 @@ def test_jog_wheel_arc_keystroke_row_content() -> None:
 
 # --- MIDI source labels ---
 
+
 @given(number=st.integers(min_value=0, max_value=127))
 def test_midi_source_label_for_cc_controls(number: int) -> None:
     assert midi_source_label(("cc", number)) == f"CC{number}, ch16"
@@ -248,6 +255,7 @@ def test_midi_source_label_for_scene_button() -> None:
 
 # --- UI-MAP-004 / UI-MAP-005: axis picker's three discovery-state renderings ---
 
+
 def test_axis_picker_state_disabled_with_discovering_placeholder_when_never_queried() -> None:
     state = axis_picker_state(configured_name=None, axes=None)
     assert state == AxisPickerState(enabled=False, placeholder="Discovering…", candidates=(), current=None)
@@ -258,11 +266,7 @@ def test_axis_picker_state_disabled_with_no_axes_placeholder_when_queried_empty(
     assert state == AxisPickerState(enabled=False, placeholder="No axes found", candidates=(), current=None)
 
 
-@given(
-    axes=st.dictionaries(
-        st.text(min_size=1, max_size=8), st.floats(allow_nan=False, allow_infinity=False), min_size=1, max_size=10
-    )
-)
+@given(axes=st.dictionaries(st.text(min_size=1, max_size=8), st.floats(allow_nan=False, allow_infinity=False), min_size=1, max_size=10))
 def test_axis_picker_state_enabled_with_sorted_candidates_when_axes_present(axes: dict[str, float]) -> None:
     state = axis_picker_state(configured_name=None, axes=axes)
     assert state.enabled is True
@@ -272,6 +276,7 @@ def test_axis_picker_state_enabled_with_sorted_candidates_when_axes_present(axes
 
 # --- UI-MAP-008: configured name is always carried through as `current`, even if stale ---
 
+
 @given(
     configured_name=st.one_of(st.none(), st.text(min_size=1, max_size=10)),
     axes=st.one_of(
@@ -279,9 +284,7 @@ def test_axis_picker_state_enabled_with_sorted_candidates_when_axes_present(axes
         st.dictionaries(st.text(min_size=1, max_size=10), st.floats(allow_nan=False, allow_infinity=False)),
     ),
 )
-def test_axis_picker_state_always_carries_the_configured_name_through_as_current(
-    configured_name: str | None, axes: dict[str, float] | None
-) -> None:
+def test_axis_picker_state_always_carries_the_configured_name_through_as_current(configured_name: str | None, axes: dict[str, float] | None) -> None:
     state = axis_picker_state(configured_name=configured_name, axes=axes)
     assert state.current == configured_name
 
@@ -295,6 +298,7 @@ def test_axis_picker_state_current_can_be_absent_from_candidates_when_stale() ->
 
 
 # --- UI-MAP-007: min/max field parsing ---
+
 
 @given(value=st.floats(allow_nan=False, allow_infinity=False))
 def test_parse_axis_field_accepts_any_real_number(value: float) -> None:

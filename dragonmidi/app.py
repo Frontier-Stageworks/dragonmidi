@@ -107,9 +107,7 @@ class DragonMidiWindow(QMainWindow):
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Mapping"))
-        self._mapping_view = MappingView(
-            self._mapping, self._axis_discovery, on_rescan=self._osc_listener.rescan
-        )
+        self._mapping_view = MappingView(self._mapping, self._axis_discovery, on_rescan=self._osc_listener.rescan)
         layout.addWidget(self._mapping_view, 1)
 
         self.setCentralWidget(central)

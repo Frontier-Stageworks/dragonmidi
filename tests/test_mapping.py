@@ -12,6 +12,7 @@
 @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005, MAP-WS-006
 @spec MAP-WS-007, MAP-WS-008, MAP-WS-009
 """
+
 from __future__ import annotations
 
 from hypothesis import given
@@ -65,6 +66,7 @@ def scene_event(channel: int, value: int) -> MidiEvent:
 
 # --- MAP-TABLE-001: channel invariant for CC-sourced controls, korg_scene exempt ---
 
+
 @given(
     number=st.sampled_from(FADER_CCS + KNOB_CCS + MUTE_CCS + list(BUTTON_CCS_TO_ADDRESS)),
     channel=st.integers(min_value=0, max_value=15).filter(lambda c: c != CHANNEL),
@@ -88,6 +90,7 @@ def test_scene_button_matches_regardless_of_channel(channel: int, value: int) ->
 
 
 # --- MAP-TABLE-002: fader/knob absolute encoders, distinct-value-only, no debounce ---
+
 
 @given(number=st.sampled_from(FADER_CCS), value=st.integers(min_value=1, max_value=127))
 # @spec MAP-TABLE-002
@@ -139,6 +142,7 @@ def test_absolute_control_sends_every_distinct_value_with_no_debounce(number: in
 
 # --- MAP-TABLE-003: button press-edge, one-shot per transition ---
 
+
 @given(cc=st.sampled_from(list(BUTTON_CCS_TO_ADDRESS)), press_value=st.integers(min_value=1, max_value=127))
 # @spec MAP-TABLE-003
 def test_button_press_edge_fires_expected_address(cc: int, press_value: int) -> None:
@@ -183,6 +187,7 @@ def test_button_holding_at_max_only_fires_once_not_on_every_message(cc: int) -> 
 
 # --- MAP-TABLE-005 / MAP-STATE-001: unmapped controls produce nothing and hold no state ---
 
+
 @given(cc=st.sampled_from(UNMAPPED_CCS), value=st.integers(min_value=0, max_value=127))
 # @spec MAP-TABLE-005
 def test_unmapped_control_produces_no_message(cc: int, value: int) -> None:
@@ -210,6 +215,7 @@ def test_mapped_control_does_allocate_tracked_state(number: int) -> None:
 
 # --- MAP-DEBOUNCE-001: dropped inside window, allowed after ---
 
+
 @given(cc=st.sampled_from(list(BUTTON_CCS_TO_ADDRESS)), gap=st.floats(min_value=0.0, max_value=0.079))
 # @spec MAP-DEBOUNCE-001
 def test_second_press_inside_debounce_window_is_dropped(cc: int, gap: float) -> None:
@@ -233,6 +239,7 @@ def test_second_press_after_debounce_window_fires(cc: int, gap: float) -> None:
 
 
 # --- MAP-STATE-002: control already held before first message behaves as documented ---
+
 
 @given(cc=st.sampled_from(list(BUTTON_CCS_TO_ADDRESS)))
 # @spec MAP-STATE-002
@@ -260,6 +267,7 @@ def test_reset_clears_tracked_state_so_a_prior_press_no_longer_blocks_debounce()
 
 # --- MAP-AXIS-001: gotoPosition scaling formula, continuous, no debounce ---
 
+
 @given(
     number=st.sampled_from(FADER_CCS),
     axis_name=st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=1, max_size=8),
@@ -268,9 +276,7 @@ def test_reset_clears_tracked_state_so_a_prior_press_no_longer_blocks_debounce()
     raw_value=st.integers(min_value=1, max_value=127),
 )
 # @spec MAP-AXIS-001
-def test_axis_target_sends_gotoposition_scaled_into_min_max(
-    number: int, axis_name: str, min_value: float, max_value: float, raw_value: int
-) -> None:
+def test_axis_target_sends_gotoposition_scaled_into_min_max(number: int, axis_name: str, min_value: float, max_value: float, raw_value: int) -> None:
     engine = MappingEngine()
     engine.set_axis_target(("cc", number), axis_name, min_value, max_value)
     result = engine.process(cc_event(number, raw_value), now=0.0)
@@ -318,6 +324,7 @@ def test_axis_target_still_respects_the_channel_16_invariant(number: int, channe
 
 # --- MAP-AXIS-002: no min/max validation, any real pair accepted ---
 
+
 @given(
     number=st.sampled_from(FADER_CCS),
     min_value=st.floats(allow_nan=False, allow_infinity=False, min_value=-1e6, max_value=1e6),
@@ -355,6 +362,7 @@ def test_inverted_min_max_produces_reversed_mapping(number: int, raw_value: int)
 
 # --- MAP-AXIS-003 / MAP-AXIS-006: picker-only at selection time, but no re-validation afterward ---
 
+
 # @spec MAP-AXIS-006
 def test_axis_target_fires_even_for_a_name_no_longer_considered_discovered() -> None:
     # The engine itself has no notion of a "discovered axes" list at all - that's the
@@ -369,6 +377,7 @@ def test_axis_target_fires_even_for_a_name_no_longer_considered_discovered() -> 
 
 
 # --- MAP-AXIS-004: fader-only restriction ---
+
 
 @given(number=st.sampled_from(FADER_CCS))
 # @spec MAP-AXIS-004
@@ -390,6 +399,7 @@ def test_set_axis_target_rejects_non_fader_keys(number: int) -> None:
 
 # --- Target-switch behavior: switching discards prior dedup state for that key ---
 
+
 def test_setting_an_axis_target_discards_prior_encoder_dedup_state() -> None:
     engine = MappingEngine()
     engine.clear_axis_target(("cc", 0))  # explicit OSC encoder mode
@@ -406,6 +416,7 @@ def test_setting_an_axis_target_discards_prior_encoder_dedup_state() -> None:
 
 
 # --- MAP-AXIS-007: clearing an axis target reverts to the opinionated encoder target ---
+
 
 @given(number=st.sampled_from(FADER_CCS))
 # @spec MAP-AXIS-007
@@ -451,6 +462,7 @@ def test_clear_axis_target_on_a_key_with_no_axis_target_is_a_noop(number: int) -
 
 # --- MAP-AXIS-008 / MAP-AXIS-009: faders default to axis mode, no name, no output ---
 
+
 @given(number=st.sampled_from(FADER_CCS), value=st.integers(min_value=1, max_value=127))
 # @spec MAP-AXIS-008, MAP-AXIS-009
 def test_fresh_fader_defaults_to_axis_mode_and_sends_nothing_until_named(number: int, value: int) -> None:
@@ -467,6 +479,7 @@ def test_is_axis_mode_defaults_true_for_every_fader(number: int) -> None:
 
 
 # --- MAP-AXIS-010: axis/encoder mode tracked independently of a chosen name ---
+
 
 @given(number=st.sampled_from(FADER_CCS))
 # @spec MAP-AXIS-010
@@ -517,9 +530,7 @@ def test_knob_first_reading_establishes_baseline_and_sends_nothing(fader_number:
     second_raw=st.integers(min_value=0, max_value=127),
 )
 # @spec MAP-BANK-001
-def test_knob_sends_step_position_as_the_change_since_its_own_last_reading(
-    fader_number: int, first_raw: int, second_raw: int
-) -> None:
+def test_knob_sends_step_position_as_the_change_since_its_own_last_reading(fader_number: int, first_raw: int, second_raw: int) -> None:
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
@@ -781,9 +792,7 @@ def test_knob_clamp_falls_back_to_internal_estimate_when_no_live_reading_for_thi
 
     # axis_positions has no entry for "PAN" - must fall back to the internal estimate
     # (0.0), which is already at the floor, so the negative delta sends nothing.
-    result = engine.process(
-        cc_event(knob_number, 0), now=0.001, axis_positions={"OTHER_AXIS": 999.0}
-    )
+    result = engine.process(cc_event(knob_number, 0), now=0.001, axis_positions={"OTHER_AXIS": 999.0})
     assert result is None
 
 
@@ -1076,6 +1085,7 @@ def test_marker_produces_no_osc_output(cc: int) -> None:
 
 # --- MAP-WS-008: shared press-edge/debounce state with process()'s button entries ---
 
+
 @given(
     cc=st.sampled_from([STOP_CC, CYCLE_CC, PREV_MARKER_CC, NEXT_MARKER_CC] + SOLO_CCS),
     gap=st.floats(min_value=0.0, max_value=0.079),
@@ -1116,6 +1126,7 @@ def test_websocket_control_holding_at_max_only_fires_once(cc: int) -> None:
 
 
 # --- Channel-16 invariant for WebSocket-targeted controls ---
+
 
 @given(
     cc=st.sampled_from([STOP_CC, CYCLE_CC, PREV_MARKER_CC, NEXT_MARKER_CC] + SOLO_CCS),
