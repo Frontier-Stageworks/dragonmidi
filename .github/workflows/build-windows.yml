@@ -22,7 +22,7 @@ jobs:
           pip install -e .
 
       - name: Build with PyInstaller
-        run: pyinstaller DragonMIDI-win.spec --clean --noconfirm
+        run: pyinstaller packaging/DragonMIDI-win.spec --clean --noconfirm
 
       - name: Upload warnings
         uses: actions/upload-artifact@v4

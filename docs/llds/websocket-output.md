@@ -76,7 +76,7 @@ Matches `OscListener`'s start/stop lifecycle shape, not `KeystrokeOutputAdapter`
 |---|---|---|---|
 | Library | `websockets` (asyncio) | Hand-rolled WebSocket server on a raw socket | One more validated dependency vs. hand-rolling handshake/framing — matches `pynput`/`mido` precedent |
 | Bind addresses | `127.0.0.1` + `::1`, not `0.0.0.0` | Bind `0.0.0.0` only (matches `OscListener`) | Dragonframe's outbound connection to `localhost` resolves to IPv6; an IPv4-only bind misses it |
-| Path validation | Accept only `/com.dzed.dragonframe/DragonframeConnection` | Accept any path | Dragonframe is the only expected client; a fixed accepted path is simpler than the general connection-ID scheme a real Monogram Service parses |
+| Path validation | Accept only `/com.dzed.dragonframe/DragonframeConnection` | Accept any path | Dragonframe is the only expected client; a fixed accepted path is simpler than a general connection-ID parsing scheme |
 | Multi-connection handling | New connection replaces the active one, no explicit rejection | Reject a second connection while one is active | Matches Dragonframe's own reconnect behavior (close-then-reopen); no other client is ever expected to connect |
 | Incoming message handling | Received and discarded, no parsing | Parse `replaceInputList`/`setInputColor` for future use | Out of scope per the HLD Non-Goal; nothing this component sends depends on any server-originated message |
 | Send failure / no connection | Log and drop, not queued or retried | Queue until reconnect | Matches Keystroke output's silent-fail precedent; Dragonframe's reconnect timing is outside this component's control |

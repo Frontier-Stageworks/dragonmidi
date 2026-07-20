@@ -12,11 +12,19 @@ No Info.plist usage-description keys are needed for the keystroke output path
 System Settings > Privacy & Security > Accessibility, not an Info.plist key).
 """
 
+import os
+
 block_cipher = None
+# SPECPATH is injected by PyInstaller as this spec file's own directory.
+# Explicit, since dragonmidi is an editable install and PyInstaller's static
+# analysis does not reliably follow the editable-install redirect on its own -
+# without this, the build succeeds but the frozen app fails at runtime with
+# "No module named 'dragonmidi'".
+REPO_ROOT = os.path.join(SPECPATH, "..")
 
 a = Analysis(
     ['pyinstaller_entry.py'],
-    pathex=[],
+    pathex=[REPO_ROOT],
     binaries=[],
     datas=[],
     hiddenimports=[

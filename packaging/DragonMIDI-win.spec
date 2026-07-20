@@ -6,11 +6,19 @@ No icon yet. To add one: drop a .ico in assets/ and add
 `icon='assets/dragonmidi.ico'` to the EXE() call below.
 """
 
+import os
+
 block_cipher = None
+# SPECPATH is injected by PyInstaller as this spec file's own directory.
+# Explicit, since dragonmidi is an editable install and PyInstaller's static
+# analysis does not reliably follow the editable-install redirect on its own -
+# without this, the build succeeds but the frozen app fails at runtime with
+# "No module named 'dragonmidi'".
+REPO_ROOT = os.path.join(SPECPATH, "..")
 
 a = Analysis(
     ['pyinstaller_entry.py'],
-    pathex=[],
+    pathex=[REPO_ROOT],
     binaries=[],
     datas=[],
     hiddenimports=[

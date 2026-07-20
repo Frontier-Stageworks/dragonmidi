@@ -22,7 +22,7 @@ jobs:
           pip install -e .
 
       - name: Build with PyInstaller
-        run: pyinstaller DragonMIDI-mac.spec --clean --noconfirm
+        run: pyinstaller packaging/DragonMIDI-mac.spec --clean --noconfirm
 
       - name: Package .app as zip
         run: |

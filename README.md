@@ -2,7 +2,7 @@
 
 DragonMIDI lets you control [Dragonframe](https://www.dragonframe.com/) (stop-motion capture software) with a **KORG nanoKONTROL Studio** MIDI controller. Plug in the controller, launch DragonMIDI, and its faders, knobs, and transport buttons act as physical controls for Dragonframe — playback, shooting, and moving motorized rig axes — instead of reaching for the mouse and keyboard every time.
 
-**Unofficial project:** DragonMIDI is an independent interoperability utility and is not affiliated with, endorsed by, or supported by DZED Systems LLC, KORG, or Monogram. Product names and trademarks are the property of their respective owners. DragonMIDI does not include or redistribute Dragonframe software and requires a separately licensed Dragonframe installation.
+**Unofficial project:** DragonMIDI is an independent interoperability utility and is not affiliated with, endorsed by, or supported by DZED Systems LLC or KORG. Product names and trademarks are the property of their respective owners. DragonMIDI does not include or redistribute Dragonframe software and requires a separately licensed Dragonframe installation.
 
 **Motion-control safety:** DragonMIDI is not a safety system or a substitute for a physical emergency stop. Test mappings at low speed with the rig's travel area clear before operating connected motors.
 
@@ -146,7 +146,7 @@ Solo/Cycle/Stop/Marker ◄/► use a second connection Dragonframe opens on its 
 - Only faders have their own axis picker. Knobs and Mute automatically follow whichever axis their bank's fader is set to (nudge / zero) — they can't be pointed at a *different* axis independently. Return to Zero isn't mapped to anything.
 - No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
 - Only the KORG nanoKONTROL Studio is supported.
-- If you also run Monogram Creative Console on the same machine, it competes with DragonMIDI for the same network port — only one can have Solo/Cycle/Stop/Marker ◄/► working at a time.
+- If another application also connects to Dragonframe's WebSocket integration on the same local port, only one can have Solo/Cycle/Stop/Marker ◄/► working at a time.
 
 ---
 
