@@ -128,6 +128,17 @@ These four don't require picking an axis name or a min/max range — Solo addres
 
 ## Installing
 
+### Prebuilt app (macOS/Windows)
+
+Download the latest build from [Releases](https://github.com/Frontier-Stageworks/dragonmidi/releases), unzip it (macOS) or run the `.exe` directly (Windows).
+
+These builds aren't code-signed yet, so the OS will flag them as coming from an unidentified developer the first time you open them:
+
+- **Windows:** SmartScreen shows "Windows protected your PC." Click **More info**, then **Run anyway**.
+- **macOS:** Gatekeeper blocks the app outright on first launch. Open **System Settings → Privacy & Security**, scroll to the bottom, and you'll see a blocked-app notice for DragonMIDI — click **Open Anyway**. Launch it again and confirm once more; after that it opens normally.
+
+### From source
+
 Requires Python 3.10 or newer.
 
 ```bash
@@ -167,6 +178,7 @@ Solo/Cycle/Stop/Marker ◄/► use a second connection Dragonframe opens on its 
 ## Current limitations
 
 - Only faders have their own axis picker. Knobs and Mute automatically follow whichever axis their bank's fader is set to (nudge / zero) — they can't be pointed at a *different* axis independently. Return to Zero isn't mapped to anything.
+- Fixed at 8 fader/knob/Mute banks and 8 Solo targets — there's no bank-shift to reach a 9th+ axis.
 - No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
 - Only the KORG nanoKONTROL Studio and nanoKONTROL2 are supported — no other MIDI controllers.
 - The Controller dropdown's selection isn't remembered between restarts — DragonMIDI always starts on nanoKONTROL Studio; switch it back to nanoKONTROL2 each time if that's what you're using.
