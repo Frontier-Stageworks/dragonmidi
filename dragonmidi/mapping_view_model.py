@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .mapping import FADER_KEYS, JOG_WHEEL_CC, OPINIONATED_MAP, MappingEngine, bank_fader_key
+from .mapping import FADER_KEYS, JOG_WHEEL_CC, MappingEngine, bank_fader_key
 
 _Key = tuple[str, "int | None"]
 
@@ -29,11 +29,12 @@ CONTROL_NAMES: dict[_Key, str] = {
 _TRIGGER_LABELS = {"absolute": "Absolute", "press": "Press"}
 
 
-def midi_source_label(key: _Key) -> str:
+def midi_source_label(key: _Key, channel: int) -> str:
+    """@spec UI-MAP-012, UI-MAP-013"""
     kind, number = key
     if kind == "korg_scene":
         return "Native Mode Scene"
-    return f"CC{number}, ch16"
+    return f"CC{number}, ch{channel + 1}"
 
 
 def _format_bound(value: float) -> str:
@@ -48,7 +49,7 @@ def _target_label(key: _Key, engine: MappingEngine) -> tuple[str, str]:
                 bounds = f"{_format_bound(axis.min_value)}-{_format_bound(axis.max_value)}"
                 return "OSC axis", f"{axis.axis_name} ({bounds})"
             return "OSC axis", ""
-    entry = OPINIONATED_MAP[key]
+    entry = engine.profile.opinionated_map[key]
     if entry.address.startswith("/dragonframe/encoderReset/"):
         return "OSC encoder", f"Reset encoder {entry.address.rsplit('/', 1)[-1]}"
     if entry.address.startswith("/dragonframe/encoder/"):
@@ -67,16 +68,18 @@ class RowView:
     editable: bool
 
 
-def _jog_wheel_rows() -> list[RowView]:
+def _jog_wheel_rows(channel: int) -> list[RowView]:
     """The jog wheel isn't an OPINIONATED_MAP entry - its dispatch is special-cased
     in MappingEngine.process()/process_keystroke() (docs/llds/static-mapping.md
     § Jog Wheel Frame Stepping). It has two independent, fixed outputs, so it's
     shown as two read-only rows rather than stretching one row to hold two
-    targets or adding a column that's empty for every other control.
+    targets or adding a column that's empty for every other control. Only called
+    for a profile with has_jog_wheel true (see build_rows below); a profile
+    without one (the nanoKONTROL2) renders neither row.
 
     @spec UI-MAP-012
     """
-    midi_source = midi_source_label(JOG_WHEEL_ROW_KEY)
+    midi_source = midi_source_label(JOG_WHEEL_ROW_KEY, channel)
     return [
         RowView(
             key=JOG_WHEEL_ROW_KEY,
@@ -106,15 +109,17 @@ _PREV_MARKER_ROW_KEY: _Key = ("cc", 61)
 _NEXT_MARKER_ROW_KEY: _Key = ("cc", 62)
 
 
-def _websocket_target_rows() -> list[RowView]:
+def _websocket_target_rows(channel: int) -> list[RowView]:
     """Stop, Cycle, Solo 1-8, and Previous/Next Marker target the WebSocket Output
     Adapter (docs/llds/websocket-output.md), not OSC. Stop/Cycle/Marker were removed
     from OPINIONATED_MAP entirely (MAP-WS-009) and Solo was removed from bank
     derivation (MAP-WS-002), so none of them are reachable via build_rows()'s
-    OPINIONATED_MAP loop below - rendered as fixed rows here instead, the same
+    opinionated-map loop below - rendered as fixed rows here instead, the same
     treatment as the jog wheel's rows for entries that aren't table lookups. Solo
     gets one summary row for all 8 buttons, not eight near-identical rows and not
-    folded into the fader rows (docs/llds/app-ui.md § Mapping View).
+    folded into the fader rows (docs/llds/app-ui.md § Mapping View). Present under
+    both Controller Profiles, unlike the jog wheel/Scene rows - only the channel
+    shown varies.
 
     @spec UI-MAP-001, UI-MAP-013
     """
@@ -122,7 +127,7 @@ def _websocket_target_rows() -> list[RowView]:
         RowView(
             key=_STOP_ROW_KEY,
             name="Stop",
-            midi_source=midi_source_label(_STOP_ROW_KEY),
+            midi_source=midi_source_label(_STOP_ROW_KEY, channel),
             trigger="Press",
             target_type="WebSocket",
             target="E-Stop",
@@ -131,7 +136,7 @@ def _websocket_target_rows() -> list[RowView]:
         RowView(
             key=_CYCLE_ROW_KEY,
             name="Cycle",
-            midi_source=midi_source_label(_CYCLE_ROW_KEY),
+            midi_source=midi_source_label(_CYCLE_ROW_KEY, channel),
             trigger="Press",
             target_type="WebSocket",
             target="select-AXn (cycling)",
@@ -140,7 +145,7 @@ def _websocket_target_rows() -> list[RowView]:
         RowView(
             key=_SOLO_ROW_KEY,
             name="Solo 1-8",
-            midi_source="CC32-39, ch16",
+            midi_source=f"CC32-39, ch{channel + 1}",
             trigger="Press",
             target_type="WebSocket",
             target="select-AX1 – select-AX8 (button N → AXN)",
@@ -149,7 +154,7 @@ def _websocket_target_rows() -> list[RowView]:
         RowView(
             key=_PREV_MARKER_ROW_KEY,
             name="Previous Marker",
-            midi_source=midi_source_label(_PREV_MARKER_ROW_KEY),
+            midi_source=midi_source_label(_PREV_MARKER_ROW_KEY, channel),
             trigger="Press",
             target_type="WebSocket",
             target="Jog All (backward)",
@@ -158,7 +163,7 @@ def _websocket_target_rows() -> list[RowView]:
         RowView(
             key=_NEXT_MARKER_ROW_KEY,
             name="Next Marker",
-            midi_source=midi_source_label(_NEXT_MARKER_ROW_KEY),
+            midi_source=midi_source_label(_NEXT_MARKER_ROW_KEY, channel),
             trigger="Press",
             target_type="WebSocket",
             target="Jog All (forward)",
@@ -168,16 +173,20 @@ def _websocket_target_rows() -> list[RowView]:
 
 
 def build_rows(engine: MappingEngine) -> list[RowView]:
-    """One row per opinionated-map entry, in table order - except Knob/Mute
-    entries, which are bank-derived and folded into their bank's Fader Channel
-    row rather than shown as their own rows (their OSC dispatch is unaffected) -
-    plus the WebSocket-targeted rows (UI-MAP-013) and two further rows for the
-    jog wheel (UI-MAP-012), both appended last.
+    """One row per entry in the active Controller Profile's opinionated map, in
+    table order - except Knob/Mute entries, which are bank-derived and folded into
+    their bank's Fader Channel row rather than shown as their own rows (their OSC
+    dispatch is unaffected) - plus the WebSocket-targeted rows (UI-MAP-013) and,
+    only for a profile with a jog wheel, two further rows for it (UI-MAP-012),
+    both appended last. A profile without a Scene button or jog wheel simply has
+    no such entry/rows to render - not a disabled placeholder, an absence.
 
     @spec UI-MAP-001, UI-MAP-002, UI-MAP-012, UI-MAP-013
     """
+    profile = engine.profile
+    channel = profile.default_channel
     rows = []
-    for key, entry in OPINIONATED_MAP.items():
+    for key, entry in profile.opinionated_map.items():
         if bank_fader_key(key) is not None:
             continue  # Knob/Mute: folded into the Fader Channel row, not its own row
         target_type, target = _target_label(key, engine)
@@ -185,15 +194,16 @@ def build_rows(engine: MappingEngine) -> list[RowView]:
             RowView(
                 key=key,
                 name=CONTROL_NAMES[key],
-                midi_source=midi_source_label(key),
+                midi_source=midi_source_label(key, channel),
                 trigger=_TRIGGER_LABELS[entry.kind],
                 target_type=target_type,
                 target=target,
                 editable=key in FADER_KEYS,
             )
         )
-    rows.extend(_websocket_target_rows())
-    rows.extend(_jog_wheel_rows())
+    rows.extend(_websocket_target_rows(channel))
+    if profile.has_jog_wheel:
+        rows.extend(_jog_wheel_rows(channel))
     return rows
 
 

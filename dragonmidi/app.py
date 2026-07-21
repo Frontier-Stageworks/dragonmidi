@@ -7,6 +7,7 @@ import time
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QGridLayout,
     QLabel,
     QLineEdit,
@@ -17,22 +18,27 @@ from PySide6.QtWidgets import (
 )
 
 from .config import ConfigController, EndpointConfig
+from .controller_profile import ControllerProfile
 from .events import MidiEvent
 from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
-from .mapping import MappingEngine
+from .mapping import NANOKONTROL2_PROFILE, STUDIO_PROFILE, MappingEngine
 from .mapping_widgets import MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
 from .osc_io import AxisDiscovery, OscClient, OscListener
 from .queue_drain import drain_queue
 from .shutdown import run_shutdown_sequence
 from .signal_monitor import SignalMonitor
-from .status_presenter import compute_status_snapshot
+from .status_presenter import compute_status_snapshot, show_nanokontrol2_setup_hint
 from .status_widgets import IndicatorRow
 from .websocket_output import WebSocketOutputAdapter
 
 APP_TITLE = "DragonMIDI"
 DISCOVERY_POLL_MS = 2000
 UI_TICK_MS = 30
+
+# @spec MIDI-PROFILE-001, MIDI-PROFILE-004, UI-PROFILE-001
+CONTROLLER_PROFILES: tuple[ControllerProfile, ...] = (STUDIO_PROFILE, NANOKONTROL2_PROFILE)
+NANOKONTROL2_SETUP_HINT = "Hold SET MARKER + CYCLE while powering on for CC mode"
 
 
 class DragonMidiWindow(QMainWindow):
@@ -43,7 +49,7 @@ class DragonMidiWindow(QMainWindow):
         self._activity_queue: "queue.Queue[str]" = queue.Queue()
         self._midi_queue: "queue.Queue[MidiEvent]" = queue.Queue()
 
-        self._mapping = MappingEngine()
+        self._mapping = MappingEngine(profile=STUDIO_PROFILE)
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._websocket_output = WebSocketOutputAdapter()
         self._monitor = SignalMonitor()
@@ -68,6 +74,7 @@ class DragonMidiWindow(QMainWindow):
             on_connection_change=self._on_midi_connection_change,
             on_error=lambda active: self._monitor.set_error("midi", active),
             on_reset_mapping=self._mapping.reset,
+            profile=STUDIO_PROFILE,
         )
 
         self._build_ui()
@@ -86,6 +93,21 @@ class DragonMidiWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
+
+        profile_form = QGridLayout()
+        profile_form.addWidget(QLabel("Controller"), 0, 0)
+        self._profile_combo = QComboBox()
+        self._profile_combo.addItems([profile.name for profile in CONTROLLER_PROFILES])
+        # Connected after addItems() so populating the combo (index -1 -> 0) doesn't
+        # itself fire a redundant initial profile switch - the engine/adapter already
+        # start on CONTROLLER_PROFILES[0] (nanoKONTROL Studio) from their constructors.
+        self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        profile_form.addWidget(self._profile_combo, 0, 1)
+        layout.addLayout(profile_form)
+
+        self._profile_hint_label = QLabel(NANOKONTROL2_SETUP_HINT)
+        self._profile_hint_label.setVisible(False)
+        layout.addWidget(self._profile_hint_label)
 
         self._midi_row = IndicatorRow("MIDI signal")
         self._dragonframe_row = IndicatorRow("Dragonframe signal")
@@ -117,6 +139,19 @@ class DragonMidiWindow(QMainWindow):
         self._midi_connected = connected
         self._midi_device_name = device_name
 
+    def _on_profile_changed(self, index: int) -> None:
+        """Applies immediately, no Apply step (@spec UI-PROFILE-002): resets the
+        Mapping Engine to the newly-selected profile's map right away, independent
+        of whether a matching device has yet been found, then tells the MIDI Input
+        Adapter to disconnect (if connected) and start matching the new pattern
+        (@spec MIDI-PROFILE-005, MIDI-PROFILE-006).
+        """
+        profile = CONTROLLER_PROFILES[index]
+        self._mapping.set_profile(profile)
+        self._midi.set_profile(profile)
+        self._profile_hint_label.setVisible(show_nanokontrol2_setup_hint(profile.name))  # @spec UI-PROFILE-003
+        self._mapping_view.refresh()
+
     def _on_apply_clicked(self) -> None:
         try:
             self._config.edit(
@@ -145,6 +180,7 @@ class DragonMidiWindow(QMainWindow):
             midi_connected=self._midi_connected,
             midi_device_name=self._midi_device_name,
             listen_port=self._config.applied.listen_port,
+            midi_profile_name=self._midi.profile.name,
         )
         self._midi_row.set_state(snapshot.midi.state, snapshot.midi.label)
         self._dragonframe_row.set_state(snapshot.dragonframe.state, snapshot.dragonframe.label)

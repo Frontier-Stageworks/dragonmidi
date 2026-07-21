@@ -12,11 +12,13 @@ A third gap exists: Dragonframe, at startup, opens an outbound WebSocket connect
 
 DragonMIDI is a clean rebuild: a MIDI-to-OSC bridge for the nanoKONTROL Studio and Dragonframe, with a status UI that shows whether the bridge is alive in both directions, and a mapping view for choosing and confirming what each physical control does.
 
+A second controller, the KORG nanoKONTROL2, is also in scope. It shares the Studio's 8-channel-strip layout (fader/knob/solo/mute) but has no jog wheel, no Scene button, and no Native-Mode-style SysEx handshake — it ships in a fixed-CC "CC mode" selected by a physical button-hold-at-power-on procedure, not something DragonMIDI can request over the wire, and its default CC assignments and MIDI channel differ from the Studio's. Supporting it means the MIDI input and mapping layers can no longer hardcode Studio-only assumptions (a handshake exists, a jog wheel and Scene button exist, channel 16 is the match channel).
+
 ## Approach
 
 A single desktop app with one continuously-running pipeline:
 
-1. **MIDI in** — connect to the nanoKONTROL Studio, request KORG Native Mode so every physical control reports a fixed MIDI message.
+1. **MIDI in** — connect to the selected controller (KORG nanoKONTROL Studio or nanoKONTROL2, picked from a Controller Profile dropdown), requesting KORG Native Mode only when the selected profile defines one (the Studio's fixed-CC handshake; the nanoKONTROL2 has none) so every physical control reports a fixed MIDI message.
 2. **Mapping engine** — an editable table (add/edit/remove entries, enable/disable per control, MIDI-learn, save/load presets) turns each incoming MIDI event into a Dragonframe OSC message. Each entry has exactly one target, chosen per control: an OSC action, an OSC encoder channel, a direct OSC axis (by discovered name, with user-specified min/max scaling), or an arbitrary custom OSC path. Ships pre-loaded with the nanoKONTROL Studio's default map (mirroring the prior prototype's validated default, see References) as its built-in starting preset.
 3. **OSC out** — send the mapped message to Dragonframe's OSC Input port over UDP.
 4. **OSC in** — listen on a local UDP port that Dragonframe's OSC Output preference is pointed at. Any packet's presence is treated as proof Dragonframe is alive and talking back; additionally, responses to a `getAllPosition` query are parsed specifically to discover the current project's axis names, for the mapping view's axis picker.
@@ -34,6 +36,7 @@ A single-person or small-crew stop-motion animator/DP running Dragonframe on the
 ## Goals
 
 - Plug in a nanoKONTROL Studio, launch DragonMIDI, open Dragonframe: both status indicators go live within seconds, no manual configuration required.
+- Selecting a controller from the Controller Profile dropdown (nanoKONTROL Studio or nanoKONTROL2) and plugging in the matching device brings both status indicators live within seconds — the same zero-extra-configuration experience, once the profile is chosen.
 - Every enabled control in the default map produces the exact Dragonframe OSC message documented for it (see References) — faders/knobs as absolute encoders, transport/shoot/mute/black/delete buttons as one-shot commands, mute/solo as encoder resets.
 - DragonMIDI can discover the current Dragonframe project's axis names by querying `getAllPosition` and parsing the per-axis responses.
 - The mapping view shows every control's current MIDI source and target in one place, confirmable at a glance.
@@ -50,7 +53,7 @@ A single-person or small-crew stop-motion animator/DP running Dragonframe on the
 ## Non-Goals
 
 - Interpreting Dragonframe's OSC output beyond liveness and `getAllPosition` responses — other output (motor-position streaming, custom output-event templates) isn't parsed.
-- A device picker: auto-connect stays scoped to the KORG nanoKONTROL Studio by name. MIDI-learn operates on whatever the adapter is already connected to; it doesn't add support for picking among multiple/other controllers.
+- A general MIDI device picker: within a selected Controller Profile, auto-connect stays scoped to that profile's name match — no picking among arbitrary/multiple MIDI ports. The Controller Profile dropdown (nanoKONTROL Studio / nanoKONTROL2) is a closed choice between the two profiles this app ships, not a general controller-picker; MIDI-learn operates on whatever device the currently selected profile is connected to.
 - Dragonframe→controller feedback (LEDs, motorized faders).
 - Multi-instance or bank-switching support — the Scene button maps to Black, not a layer switch.
 - Discovering an axis's practical min/max range automatically — Dragonframe has no `getLimits` over OSC, only `setLimits`. The scaling range for a direct-axis target is entered by the user, not read from Dragonframe.
@@ -67,6 +70,7 @@ This HLD describes the target architecture. It is delivered in phases rather tha
 - **Phase 1 — Axis discovery, direct axis addressing, and bank derivation.** The OSC Listener gains the ability to parse `getAllPosition` responses into a list of axis names. The mapping view lets the user assign each of the 8 faders to a discovered axis name with a min/max scaling range — this is now the fader's default target, not an opt-in alternative. The Mapping Engine sends `gotoPosition` continuously, scaled into that range, on every distinct fader value. Each fader's channel strip forms a **bank**: once a fader has an axis assigned, its bank's knob automatically sends `stepPosition` (a signed nudge relative to center) and its Mute button automatically sends `setZero` — neither is independently configurable. (Solo originally followed the same pattern with `setHome`; superseded in Phase 3 below, where Solo becomes an unconditional WebSocket target instead.) Record/Select keep their existing (unmapped) target untouched in this phase. The jog wheel drives frame-by-frame timeline stepping (`stepForward`/`stepBackward`, one step per detent, direction from the wheel's rotation) rather than motion-control axis input, and additionally synthesizes the "Step Moco Forward"/"Step Moco Back" keystroke on the same detent so stepping also works while the Arc Motion Control workspace is focused, where the OSC commands alone have no effect; Return to Zero remains unmapped.
 - **Phase 2 — The rest of the configuration.** Extend target selection (OSC action/encoder/direct-axis/custom-path) to knobs and buttons; add MIDI-learn, enable/disable, add/remove/duplicate entries, and preset save/load. This is where the mapping view reaches the full editor generality described elsewhere in this document.
 - **Phase 3 — WebSocket output.** Add the WebSocket target type (`E-Stop`, axis select, per-axis jog — the confirmed subset) and the WebSocket Output Adapter that serves it. Independent of Phase 2's OSC/Keystroke target work; can land before or after it.
+- **Phase 4 — nanoKONTROL2 support.** Introduce the Controller Profile abstraction (`docs/llds/midi-input.md`, `docs/llds/static-mapping.md`), a nanoKONTROL2 profile (no handshake, no jog wheel, no Scene button, its own default channel/CC map), and the Controller Profile dropdown in the Status UI (`docs/llds/app-ui.md`). Independent of Phases 1–3's OSC/Keystroke/WebSocket target work — it changes which device profile feeds the same mapping/output pipeline, not the pipeline itself.
 
 Everything below describes the full target architecture; phase boundaries are tracked in the LLDs, not restated per-section here.
 
@@ -84,7 +88,7 @@ flowchart LR
     end
 
     subgraph DragonMIDI app
-        MIDIIN[MIDI Input Adapter\n(Native Mode handshake)]
+        MIDIIN[MIDI Input Adapter\n(per selected Controller Profile)]
         MAP[Mapping Engine\n(editable table, MIDI event -> OSC message / keystroke)]
         STORE[Preset Store\n(load/save mapping files)]
         OSCOUT[OSC Client\nUDP send]
@@ -119,11 +123,15 @@ flowchart LR
 
 **Threading model:** MIDI input arrives on a callback thread; the OSC listener runs its own receive loop/thread. Both push into thread-safe queues that the Qt event loop drains on a timer, avoiding Qt widget access from a non-UI thread.
 
+**Controller Profile:** `MIDIIN` and `MAP` are driven by whichever `ControllerProfile` is currently selected (see Key Design Decisions) — the diagram's boxes are the same regardless of which controller is active; only their internal behavior (handshake yes/no, opinionated map contents, default channel) varies per profile. Switching the dropdown disconnects the current device (releasing Native Mode first, if the outgoing profile had it) and starts discovery for the newly-selected profile's name pattern.
+
 **Status window:**
 
 ```
 +-----------------------------------------------+
 |  DragonMIDI                                    |
+|                                                 |
+|  Controller: [nanoKONTROL Studio ▾]            |
 |                                                 |
 |   ●  MIDI signal        nanoKONTROL Studio      |
 |   ●  Dragonframe signal  127.0.0.1:7011 (listen)|
@@ -166,7 +174,11 @@ Target type is one of: OSC action, OSC encoder channel, OSC axis (direct, picked
 - **Mapping isolated behind one interface.** The mapping engine (MIDI event in, OSC message out) is a pure, swappable component — the editor, persistence, and MIDI-learn sit on top of it without touching MIDI I/O, OSC I/O, or the status indicators.
 - **Mapping editor defaults to the nanoKONTROL Studio's opinionated map** rather than an empty table, so the zero-config experience is unchanged for anyone who never opens the mapping view.
 - **One target per mapping entry, not multiple.** A control drives exactly one target — matches "select what I want each control to do" as a single choice, not a dual-purpose one, and keeps the mapping engine's per-entry logic simple.
-- **Auto-connect to the nanoKONTROL Studio by name, no device picker.** Single-purpose app, one supported controller — scanning MIDI inputs for a name match removes a manual connect step. If the device isn't found, the MIDI indicator stays quiet and the app keeps retrying.
+- **Auto-connect by name within the selected Controller Profile, no general device picker.** Scanning MIDI inputs for a name match removes a manual connect step. If the device isn't found, the MIDI indicator stays quiet and the app keeps retrying.
+- **Controller Profile abstraction, not per-device forked code.** `MidiInputAdapter` and the Mapping Engine are driven by a `ControllerProfile` (device name-match pattern, optional Native-Mode-style handshake, default MIDI channel, feature flags, opinionated default map) rather than hardcoding the nanoKONTROL Studio's quirks throughout. The nanoKONTROL Studio and nanoKONTROL2 are two profile instances; a third controller is a new profile, not a parallel adapter. Chosen over forking the adapter/engine per device (more duplicated boilerplate — discovery polling, bank derivation, WebSocket-targeted controls all repeated) or scattering `if profile == "studio"` conditionals through shared code (doesn't scale past two devices).
+- **Controller selection is an explicit dropdown, not auto-detection.** The user picks nanoKONTROL Studio or nanoKONTROL2 from a Status UI dropdown; auto-connect-by-name then applies only within that profile. This is a closed choice between exactly the two controller families DragonMIDI ships, not a general device picker — see Non-Goals.
+- **nanoKONTROL2's opinionated map omits jog-wheel and Scene-button entries entirely**, rather than including them as disabled/greyed-out placeholders. The nanoKONTROL2 has no jog wheel and no Scene button, so the Studio-only frame-stepping (OSC + Arc keystroke) and Scene→Black mappings simply don't exist as rows in its profile.
+- **nanoKONTROL2's default CC map is carried over unverified, pending hardware confirmation.** Korg's owner's manual documents the physical layout and operation modes but not the actual CC-number table (a separate Parameter Guide has that); the map used is the commonly-documented factory-default CC-mode assignment, explicitly flagged as an unverified assumption until confirmed against real hardware — matching this project's existing pattern of accepting reasonable unverified starting points pending empirical confirmation (e.g. the WebSocket `AXn`-numbering assumption in `docs/llds/static-mapping.md`).
 - **`pynput` for keystroke synthesis, over native platform APIs.** One dependency covers both macOS (via the same Accessibility-permission-gated mechanism as `Quartz`/`CGEvent`) and Windows (via `SendInput` under the hood), matching the existing preference for validated, portable libraries (`mido`+`python-rtmidi` for MIDI) over hand-rolled per-OS code.
 - **Keystroke output fails silently, not as a new status indicator.** Unlike the MIDI Native Mode handshake (surfaced as an *error* state) or the OSC listener bind failure, a missing macOS Accessibility grant or a Windows `SendInput` failure is logged but does not add a third Status UI indicator in this phase — the affected controls are few, and the existing two indicators (MIDI signal, Dragonframe signal) already tell the user whether the *OSC* half of the bridge is healthy. A dedicated indicator is deferred, not ruled out, if more controls come to depend on keystroke output later.
 - **No frontmost-application check before sending a keystroke.** Synthesizing a keystroke without first verifying Dragonframe is the OS-focused app mirrors how the physical keyboard shortcut itself behaves — it also does nothing useful if focus is elsewhere. Adding detection machinery for a single-purpose app used almost exclusively alongside Dragonframe wasn't judged worth the added platform-specific code (`NSWorkspace` on macOS, `GetForegroundWindow` on Windows).
@@ -185,7 +197,9 @@ Target type is one of: OSC action, OSC encoder channel, OSC axis (direct, picked
 - Turning the jog wheel steps the timeline frame-by-frame both on the main Animation/Cinematography timeline (via OSC) and, with Dragonframe as the OS-focused app, inside the Arc Motion Control workspace (via the synthesized "Step Moco Forward"/"Step Moco Back" keystroke) — the latter has no OSC equivalent at all.
 - A control mapped to a WebSocket target (`E-Stop`, `select-AXn`, or `jog-AXn`) sends the corresponding `{"input": "<name>"}` JSON command and Dragonframe recognizes it, verifiable via Dragonframe's debug log (e.g. `HARD STOP` for `E-Stop`).
 - Falsification signal: either indicator lit while its channel has gone silent, or dark while traffic is genuinely flowing, means the liveness design has failed.
+- Selecting nanoKONTROL2 from the Controller Profile dropdown and plugging one in brings the MIDI indicator live and drives Dragonframe via the nanoKONTROL2's default map, with jog-wheel- and Scene-button-only behaviors correctly absent rather than silently no-op.
 
 ## References
 
 - Prior prototype — source of the Native Mode SysEx handshake and the default control mapping.
+- KORG nanoKONTROL2 Owner's Manual — source of the nanoKONTROL2's physical control layout, operation-mode (DAW/CC mode) behavior, and confirmation that no Native-Mode-style handshake exists. Its default CC-number assignments are not in this manual and remain unverified — see Key Design Decisions.

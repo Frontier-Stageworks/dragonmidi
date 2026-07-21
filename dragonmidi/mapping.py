@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .controller_profile import ControllerProfile
 from .events import KeyCombo, MidiEvent, OscMessage, WebSocketCommand
 
-CHANNEL = 15  # zero-indexed MIDI channel 16, the nanoKONTROL Studio's Native Mode channel
+STUDIO_CHANNEL = 15  # zero-indexed MIDI channel 16, the nanoKONTROL Studio's Native Mode channel
+NANOKONTROL2_CHANNEL = 0  # zero-indexed MIDI channel 1, the nanoKONTROL2's factory CC-mode default (unverified - @spec MAP-PROFILE-002)
+CHANNEL = STUDIO_CHANNEL  # backward-compat alias; pre-dates multi-profile support
 DEBOUNCE_SECONDS = 0.080
 
 _Key = tuple[str, "int | None"]
@@ -75,21 +78,62 @@ def _mute_entries() -> dict[_Key, _MapEntry]:
     return {("cc", 48 + i): _MapEntry("press", f"/dragonframe/encoderReset/{i + 1}") for i in range(8)}
 
 
+def _shared_button_entries() -> dict[_Key, _MapEntry]:
+    """Button entries both Controller Profiles' opinionated maps share, identical
+    CC numbers on both devices (@spec MAP-PROFILE-002)."""
+    return {
+        ("cc", 45): _MapEntry("press", "/dragonframe/shoot", args=(1,)),  # Transport Record
+        ("cc", 41): _MapEntry("press", "/dragonframe/play"),
+        ("cc", 43): _MapEntry("press", "/dragonframe/stepBackward"),  # Rewind (<<)
+        ("cc", 44): _MapEntry("press", "/dragonframe/stepForward"),  # Fast Forward (>>)
+        ("cc", 58): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Track
+        ("cc", 59): _MapEntry("press", "/dragonframe/stepForward"),  # Next Track
+    }
+
+
 # Stop, Cycle, Solo 1-8, and Previous/Next Marker are WebSocket-targeted
 # (process_websocket(), @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-006, MAP-WS-007)
 # and deliberately absent from this table - @spec MAP-WS-009.
-OPINIONATED_MAP: dict[_Key, _MapEntry] = {
+OPINIONATED_MAP_STUDIO: dict[_Key, _MapEntry] = {
     **_fader_entries(),
     **_knob_entries(),
     **_mute_entries(),
-    ("cc", 45): _MapEntry("press", "/dragonframe/shoot", args=(1,)),  # Transport Record
-    ("cc", 41): _MapEntry("press", "/dragonframe/play"),
-    ("cc", 43): _MapEntry("press", "/dragonframe/stepBackward"),  # Rewind (<<)
-    ("cc", 44): _MapEntry("press", "/dragonframe/stepForward"),  # Fast Forward (>>)
-    ("cc", 58): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Track
-    ("cc", 59): _MapEntry("press", "/dragonframe/stepForward"),  # Next Track
-    ("korg_scene", None): _MapEntry("press", "/dragonframe/black"),
+    **_shared_button_entries(),
+    ("korg_scene", None): _MapEntry("press", "/dragonframe/black"),  # Studio-only - @spec MAP-PROFILE-003
 }
+OPINIONATED_MAP = OPINIONATED_MAP_STUDIO  # backward-compat alias; pre-dates multi-profile support
+
+# The nanoKONTROL2 has no Scene button and no jog wheel (the jog wheel was never a
+# table entry anyway - its dispatch is special-cased below, gated on has_jog_wheel).
+# @spec MAP-PROFILE-002, MAP-PROFILE-003
+OPINIONATED_MAP_NANOKONTROL2: dict[_Key, _MapEntry] = {
+    **_fader_entries(),
+    **_knob_entries(),
+    **_mute_entries(),
+    **_shared_button_entries(),
+}
+
+# @spec MIDI-PROFILE-002
+STUDIO_PROFILE = ControllerProfile(
+    name="nanoKONTROL Studio",
+    match_substring="nanokontrolstudio",
+    has_native_mode=True,
+    default_channel=STUDIO_CHANNEL,
+    has_jog_wheel=True,
+    has_scene_button=True,
+    opinionated_map=OPINIONATED_MAP_STUDIO,
+)
+
+# @spec MIDI-PROFILE-003
+NANOKONTROL2_PROFILE = ControllerProfile(
+    name="nanoKONTROL2",
+    match_substring="nanokontrol2",
+    has_native_mode=False,
+    default_channel=NANOKONTROL2_CHANNEL,
+    has_jog_wheel=False,
+    has_scene_button=False,
+    opinionated_map=OPINIONATED_MAP_NANOKONTROL2,
+)
 
 
 class MappingEngine:
@@ -106,9 +150,12 @@ class MappingEngine:
     @spec MAP-JOGKEY-006, MAP-JOGKEY-007
     @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005, MAP-WS-006
     @spec MAP-WS-007, MAP-WS-008, MAP-WS-009
+    @spec MAP-PROFILE-001, MAP-PROFILE-002, MAP-PROFILE-003, MAP-PROFILE-004
+    @spec MAP-JOG-000, MAP-JOGKEY-000
     """
 
-    def __init__(self) -> None:
+    def __init__(self, profile: ControllerProfile = STUDIO_PROFILE) -> None:
+        self._profile = profile
         self._previous_value: dict[_Key, float] = {}
         self._pressed_state: dict[_Key, bool] = {}
         self._last_fired: dict[_Key, float] = {}
@@ -130,6 +177,26 @@ class MappingEngine:
         self._pressed_state.clear()
         self._last_fired.clear()
         self._cycle_index = -1
+
+    @property
+    def profile(self) -> ControllerProfile:
+        return self._profile
+
+    def set_profile(self, profile: ControllerProfile) -> None:
+        """Switch the active Controller Profile: swaps the opinionated map and
+        clears every piece of tracked state, including axis assignments and
+        encoder-mode overrides - broader than `reset()`, since the previous
+        profile's per-control configuration is meaningless against a different
+        control set and channel. Independent of whether a matching device has
+        yet been found under the new profile (`MIDI-PROFILE-005`).
+
+        @spec MAP-PROFILE-004
+        """
+        self._profile = profile
+        self.reset()
+        self._axis_targets.clear()
+        self._encoder_mode.clear()
+        self._axis_position.clear()
 
     def tracked_controls(self) -> set[_Key]:
         return set(self._previous_value) | set(self._pressed_state) | set(self._last_fired)
@@ -203,14 +270,16 @@ class MappingEngine:
         @spec MAP-BANK-008
         """
         if event.type == "korg_scene":
+            if not self._profile.has_scene_button:
+                return None  # no Scene button on this profile (e.g. nanoKONTROL2) - @spec MAP-TABLE-001
             key: _Key = ("korg_scene", None)
-            entry = OPINIONATED_MAP.get(key)
+            entry = self._profile.opinionated_map.get(key)
         else:
-            if event.channel != CHANNEL:
+            if event.channel != self._profile.default_channel:
                 return None
             key = (event.type, event.number)
 
-            if key == _JOG_WHEEL_KEY:
+            if self._profile.has_jog_wheel and key == _JOG_WHEEL_KEY:
                 return self._process_jog(event)
 
             if key in FADER_KEYS and self.is_axis_mode(key):
@@ -228,7 +297,7 @@ class MappingEngine:
                 # this control's own opinionated entry below, same as MAP-BANK-004's
                 # "no axis assigned" fallback.
 
-            entry = OPINIONATED_MAP.get(key)
+            entry = self._profile.opinionated_map.get(key)
 
         if entry is None:
             return None
@@ -328,7 +397,7 @@ class MappingEngine:
         65-127 is counterclockwise, 0/64 is no movement. Direction only - magnitude is
         ignored, one message is one step, with no debounce, dedup, or tracked state.
 
-        @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
+        @spec MAP-JOG-000, MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
         """
         raw = event.raw_value
         if raw == 0 or raw == 64:
@@ -346,10 +415,12 @@ class MappingEngine:
         same event; neither suppresses the other. Stateless - allocates and consults
         no per-control state.
 
-        @spec MAP-JOGKEY-001, MAP-JOGKEY-002, MAP-JOGKEY-003, MAP-JOGKEY-004
+        @spec MAP-JOGKEY-000, MAP-JOGKEY-001, MAP-JOGKEY-002, MAP-JOGKEY-003, MAP-JOGKEY-004
         @spec MAP-JOGKEY-005, MAP-JOGKEY-006, MAP-JOGKEY-007
         """
-        if event.type != "cc" or event.number != JOG_WHEEL_CC or event.channel != CHANNEL:
+        if not self._profile.has_jog_wheel:
+            return None  # this profile has no jog wheel (e.g. nanoKONTROL2) - @spec MAP-JOGKEY-000
+        if event.type != "cc" or event.number != JOG_WHEEL_CC or event.channel != self._profile.default_channel:
             return None
         raw = event.raw_value
         if raw == 0 or raw == 64:
@@ -374,7 +445,7 @@ class MappingEngine:
         @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005
         @spec MAP-WS-006, MAP-WS-007, MAP-WS-008, MAP-WS-009
         """
-        if event.type != "cc" or event.channel != CHANNEL:
+        if event.type != "cc" or event.channel != self._profile.default_channel:
             return None
         key: _Key = (event.type, event.number)
 

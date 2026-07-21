@@ -9,7 +9,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from dragonmidi.mapping import FADER_KEYS, OPINIONATED_MAP, MappingEngine, bank_fader_key
+from dragonmidi.mapping import FADER_KEYS, NANOKONTROL2_PROFILE, OPINIONATED_MAP, OPINIONATED_MAP_NANOKONTROL2, MappingEngine, bank_fader_key
 from dragonmidi.mapping_view_model import (
     JOG_WHEEL_ARC_ROW_KEY,
     JOG_WHEEL_ROW_KEY,
@@ -244,13 +244,13 @@ def test_jog_wheel_arc_keystroke_row_content() -> None:
 # --- MIDI source labels ---
 
 
-@given(number=st.integers(min_value=0, max_value=127))
-def test_midi_source_label_for_cc_controls(number: int) -> None:
-    assert midi_source_label(("cc", number)) == f"CC{number}, ch16"
+@given(number=st.integers(min_value=0, max_value=127), channel=st.integers(min_value=0, max_value=15))
+def test_midi_source_label_for_cc_controls(number: int, channel: int) -> None:
+    assert midi_source_label(("cc", number), channel) == f"CC{number}, ch{channel + 1}"
 
 
 def test_midi_source_label_for_scene_button() -> None:
-    assert midi_source_label(("korg_scene", None)) == "Native Mode Scene"
+    assert midi_source_label(("korg_scene", None), channel=15) == "Native Mode Scene"
 
 
 # --- UI-MAP-004 / UI-MAP-005: axis picker's three discovery-state renderings ---
@@ -316,3 +316,37 @@ def _not_a_float(text: str) -> bool:
 @given(text=st.text(max_size=12).filter(_not_a_float))
 def test_parse_axis_field_rejects_unparseable_text(text: str) -> None:
     assert parse_axis_field(text) is None
+
+
+# --- Controller Profile-driven rows: nanoKONTROL2 omits jog wheel/Scene rows ---
+
+
+def test_build_rows_for_nanokontrol2_omits_jog_wheel_rows() -> None:
+    engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
+    rows = {row.key: row for row in build_rows(engine)}
+    assert JOG_WHEEL_ROW_KEY not in rows
+    assert JOG_WHEEL_ARC_ROW_KEY not in rows
+
+
+def test_build_rows_for_nanokontrol2_omits_scene_row() -> None:
+    engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
+    rows = {row.key: row for row in build_rows(engine)}
+    assert ("korg_scene", None) not in rows
+
+
+def test_build_rows_for_nanokontrol2_includes_only_its_own_map_entries() -> None:
+    engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
+    rows = build_rows(engine)
+    expected_keys = [key for key in OPINIONATED_MAP_NANOKONTROL2 if bank_fader_key(key) is None]
+    row_keys = [row.key for row in rows]
+    # Same WebSocket rows as the Studio (both profiles have Stop/Cycle/Solo/Marker),
+    # but no jog wheel rows appended - has_jog_wheel is false for this profile.
+    assert row_keys == [*expected_keys, *WEBSOCKET_ROW_KEYS]
+
+
+def test_build_rows_for_nanokontrol2_shows_its_own_channel() -> None:
+    engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
+    rows = {row.key: row for row in build_rows(engine)}
+    assert rows[("cc", 41)].midi_source == "CC41, ch1"  # Play, channel 0 zero-indexed -> "ch1"
+    assert rows[("cc", 42)].midi_source == "CC42, ch1"  # Stop (WebSocket row)
+    assert rows[("solo_websocket", None)].midi_source == "CC32-39, ch1"

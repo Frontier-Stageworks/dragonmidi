@@ -1,9 +1,15 @@
 """Tests for the MIDI Input Adapter (docs/specs/midi-input.md).
 
+Fuzzy device-name matching itself (MIDI-CONN-002) is tested against
+`ControllerProfile.matches()` directly in `test_controller_profile.py`, not here -
+this file exercises `MidiInputAdapter`'s use of a profile's `matches()`/
+`has_native_mode`, not the matching logic in isolation.
+
 @spec MIDI-CONN-001, MIDI-CONN-002, MIDI-CONN-003, MIDI-CONN-004, MIDI-CONN-005
 @spec MIDI-CONN-006, MIDI-CONN-007
-@spec MIDI-NATIVE-001, MIDI-NATIVE-002, MIDI-NATIVE-003, MIDI-NATIVE-004
+@spec MIDI-NATIVE-001, MIDI-NATIVE-002, MIDI-NATIVE-003, MIDI-NATIVE-004, MIDI-NATIVE-005
 @spec MIDI-EVT-001, MIDI-EVT-003, MIDI-EVT-004
+@spec MIDI-PROFILE-004, MIDI-PROFILE-005, MIDI-PROFILE-006, MIDI-PROFILE-007
 """
 
 from __future__ import annotations
@@ -14,55 +20,8 @@ from typing import Callable
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from dragonmidi.midi_input import MidiInputAdapter, is_nanokontrol_studio, native_mode_message, normalize_raw
-
-
-# ---------------------------------------------------------------------------
-# Fuzzy device-name matching
-# ---------------------------------------------------------------------------
-
-TARGET = "nanoKONTROL Studio"
-SEPARATORS = ["", " ", "-", "_", "  "]
-UNRELATED_NAMES = [
-    "Launchpad Mini MK3",
-    "Komplete Kontrol S49",
-    "USB MIDI Device",
-    "",
-    "IAC Driver Bus 1",
-    "nanoKEY Studio",  # deliberately close but not a match: no "kontrol"
-]
-
-
-@given(
-    prefix=st.sampled_from(["", "KORG ", "korg "]),
-    sep1=st.sampled_from(SEPARATORS),
-    casing=st.sampled_from([str.lower, str.upper, str.title, lambda s: s]),
-    suffix=st.sampled_from(["", " SLIDER/KNOB", " Port 1", "-1"]),
-)
-# @spec MIDI-CONN-002
-def test_real_device_name_variants_all_match(prefix, sep1, casing, suffix) -> None:
-    name = f"{prefix}nano{sep1}KONTROL{sep1}Studio{suffix}"
-    name = casing(name)
-    assert is_nanokontrol_studio(name)
-
-
-@given(name=st.sampled_from(UNRELATED_NAMES))
-# @spec MIDI-CONN-002
-def test_unrelated_device_names_never_match(name: str) -> None:
-    assert not is_nanokontrol_studio(name)
-
-
-@given(name=st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126), max_size=30))
-@example("")
-# @spec MIDI-CONN-002
-def test_random_strings_without_the_target_substring_never_match(name: str) -> None:
-    import re
-
-    normalized = re.sub(r"[^a-z0-9]+", "", name.lower())
-    if "nanokontrolstudio" in normalized:
-        return  # hypothesis got unlucky and generated a real match; not a counterexample
-    assert not is_nanokontrol_studio(name)
-
+from dragonmidi.mapping import NANOKONTROL2_PROFILE, STUDIO_PROFILE
+from dragonmidi.midi_input import MidiInputAdapter, native_mode_message, normalize_raw
 
 # ---------------------------------------------------------------------------
 # Native Mode SysEx builder
@@ -210,6 +169,7 @@ def make_adapter(backend, **overrides):
         on_connection_change=lambda connected, name: None,
         on_error=lambda active: None,
         on_reset_mapping=lambda: None,
+        profile=STUDIO_PROFILE,
     )
     defaults.update(overrides)
     return MidiInputAdapter(backend, **defaults)
@@ -379,3 +339,109 @@ def _get_open_input_port(backend: FakeBackend, adapter: MidiInputAdapter) -> Fak
     # The adapter stores the live input port internally; tests reach in to drive its
     # callback directly, simulating an incoming MIDI message from the hardware thread.
     return adapter._input_port
+
+
+# ---------------------------------------------------------------------------
+# Controller Profiles: nanoKONTROL2 (no Native Mode), profile switching
+# ---------------------------------------------------------------------------
+
+
+# @spec MIDI-CONN-002, MIDI-PROFILE-003
+def test_poll_discovery_matches_nanokontrol2_under_that_profile() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL2"], outputs=["nanoKONTROL2"])
+    adapter = make_adapter(backend, profile=NANOKONTROL2_PROFILE)
+    adapter.poll_discovery()
+    assert adapter.connected
+    assert adapter.device_name == "nanoKONTROL2"
+
+
+# @spec MIDI-CONN-002
+def test_studio_profile_does_not_match_nanokontrol2_device() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL2"], outputs=[])
+    adapter = make_adapter(backend, profile=STUDIO_PROFILE)
+    adapter.poll_discovery()
+    assert not adapter.connected
+
+
+# @spec MIDI-NATIVE-005
+def test_nanokontrol2_connect_never_opens_an_output_port_or_sends_sysex() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL2"], outputs=["nanoKONTROL2"])
+    adapter = make_adapter(backend, profile=NANOKONTROL2_PROFILE)
+    adapter.poll_discovery()
+    assert adapter.connected
+    assert backend.open_output_calls == []
+
+
+# @spec MIDI-NATIVE-005
+def test_nanokontrol2_connect_never_sets_error_flag_even_with_no_matching_output() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL2"], outputs=[])  # no matching output at all
+    errors: list[bool] = []
+    adapter = make_adapter(backend, profile=NANOKONTROL2_PROFILE, on_error=errors.append)
+    adapter.poll_discovery()
+    assert adapter.connected
+    assert errors == [False]  # only the unconditional pre-attempt clear; never set to True
+
+
+# @spec MIDI-NATIVE-005
+def test_nanokontrol2_disconnect_is_a_clean_no_op_for_native_mode() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL2"], outputs=["nanoKONTROL2"])
+    adapter = make_adapter(backend, profile=NANOKONTROL2_PROFILE)
+    adapter.poll_discovery()
+    adapter.disconnect()
+    assert not adapter.connected
+    assert backend.open_output_calls == []  # never opened, so nothing to close either
+
+
+# @spec MIDI-PROFILE-004
+def test_adapter_profile_property_reflects_constructor_argument() -> None:
+    backend = FakeBackend()
+    adapter = make_adapter(backend, profile=NANOKONTROL2_PROFILE)
+    assert adapter.profile is NANOKONTROL2_PROFILE
+
+
+# @spec MIDI-PROFILE-006
+def test_set_profile_disconnects_current_device_and_switches_pattern() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL Studio"], outputs=["nanoKONTROL Studio"])
+    connections: list[tuple[bool, str | None]] = []
+    adapter = make_adapter(backend, profile=STUDIO_PROFILE, on_connection_change=lambda c, n: connections.append((c, n)))
+    adapter.poll_discovery()
+    assert adapter.connected
+
+    adapter.set_profile(NANOKONTROL2_PROFILE)
+    assert not adapter.connected
+    assert adapter.profile is NANOKONTROL2_PROFILE
+    assert connections[-1] == (False, None)
+
+    # Future discovery now matches the new profile's device, not the Studio's,
+    # even though the (still-plugged-in) Studio is still enumerated.
+    backend.inputs = ["nanoKONTROL Studio", "nanoKONTROL2"]
+    backend.outputs = ["nanoKONTROL2"]
+    adapter.poll_discovery()
+    assert adapter.connected
+    assert adapter.device_name == "nanoKONTROL2"
+
+
+# @spec MIDI-PROFILE-006
+def test_set_profile_with_nothing_connected_just_switches_pattern() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL2"], outputs=["nanoKONTROL2"])
+    adapter = make_adapter(backend, profile=STUDIO_PROFILE)
+    adapter.set_profile(NANOKONTROL2_PROFILE)  # nothing connected yet - no disconnect side effects
+    assert not adapter.connected
+    adapter.poll_discovery()
+    assert adapter.connected
+    assert adapter.device_name == "nanoKONTROL2"
+
+
+# @spec MIDI-PROFILE-007
+def test_set_profile_is_a_no_op_while_busy() -> None:
+    backend = FakeBackend(inputs=["nanoKONTROL Studio"], outputs=["nanoKONTROL Studio"])
+    adapter = make_adapter(backend, profile=STUDIO_PROFILE)
+    adapter.poll_discovery()
+    assert adapter.connected
+
+    def reentrant_switch() -> None:
+        adapter.set_profile(NANOKONTROL2_PROFILE)  # fires mid-tick; must be dropped, not raced
+
+    backend.reentry_hook = reentrant_switch
+    adapter.poll_discovery()  # device already connected -> this tick just re-checks presence
+    assert adapter.profile is STUDIO_PROFILE  # the reentrant switch above was a no-op

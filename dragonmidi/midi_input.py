@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-import re
 from typing import Any, Callable, Protocol
 
+from .controller_profile import ControllerProfile
 from .events import MidiEvent
-
-
-def is_nanokontrol_studio(name: str) -> bool:
-    """@spec MIDI-CONN-002"""
-    normalized = re.sub(r"[^a-z0-9]+", "", name.lower())
-    return "nanokontrolstudio" in normalized
 
 
 def native_mode_message(channel: int, enter: bool) -> list[int]:
@@ -185,12 +179,14 @@ class MidoBackend:
 
 
 class MidiInputAdapter:
-    """Discovers, connects to, and manages Native Mode for a nanoKONTROL Studio.
+    """Discovers, connects to, and (when the active Controller Profile has one)
+    manages Native Mode for a supported KORG nanoKONTROL controller.
 
     @spec MIDI-CONN-001, MIDI-CONN-002, MIDI-CONN-003, MIDI-CONN-004, MIDI-CONN-005
     @spec MIDI-CONN-006, MIDI-CONN-007
-    @spec MIDI-NATIVE-001, MIDI-NATIVE-002, MIDI-NATIVE-003, MIDI-NATIVE-004
+    @spec MIDI-NATIVE-001, MIDI-NATIVE-002, MIDI-NATIVE-003, MIDI-NATIVE-004, MIDI-NATIVE-005
     @spec MIDI-EVT-001, MIDI-EVT-003, MIDI-EVT-004
+    @spec MIDI-PROFILE-004, MIDI-PROFILE-005, MIDI-PROFILE-006, MIDI-PROFILE-007
     """
 
     def __init__(
@@ -201,6 +197,7 @@ class MidiInputAdapter:
         on_connection_change: Callable[[bool, str | None], None],
         on_error: Callable[[bool], None],
         on_reset_mapping: Callable[[], None],
+        profile: ControllerProfile,
     ) -> None:
         self._backend = backend
         self._on_activity = on_activity
@@ -208,6 +205,7 @@ class MidiInputAdapter:
         self._on_connection_change = on_connection_change
         self._on_error = on_error
         self._on_reset_mapping = on_reset_mapping
+        self._profile = profile
 
         self._input_port: Any = None
         self._output_port: Any = None
@@ -215,6 +213,30 @@ class MidiInputAdapter:
 
         self.connected = False
         self.device_name: str | None = None
+
+    @property
+    def profile(self) -> ControllerProfile:
+        return self._profile
+
+    def set_profile(self, profile: ControllerProfile) -> None:
+        """Switch the active Controller Profile: disconnect the current device
+        (if any, releasing Native Mode first when the outgoing profile had it),
+        then start matching future discovery polls against the new profile's
+        pattern. Shares `poll_discovery()`/`connect()`/`disconnect()`'s `_busy`
+        reentrancy guard, so a switch landing mid-operation is a no-op rather
+        than racing an in-flight connect/disconnect.
+
+        @spec MIDI-PROFILE-006, MIDI-PROFILE-007
+        """
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            if self.connected:
+                self.disconnect()
+            self._profile = profile
+        finally:
+            self._busy = False
 
     def poll_discovery(self) -> None:
         # The busy flag is held for the *entire* tick, including the list_inputs()
@@ -235,7 +257,7 @@ class MidiInputAdapter:
                 return
 
             ports = self._backend.list_inputs()
-            matches = [name for name in ports if is_nanokontrol_studio(name)]
+            matches = [name for name in ports if self._profile.matches(name)]
             if matches:
                 self.connect(matches[0])
         finally:
@@ -248,13 +270,18 @@ class MidiInputAdapter:
         self.device_name = port_name
         self._on_connection_change(True, port_name)
         self._on_reset_mapping()
-        self._enable_native_mode(port_name)
+        if self._profile.has_native_mode:
+            self._enable_native_mode(port_name)
+        # A profile with no Native Mode (e.g. nanoKONTROL2) skips the handshake
+        # entirely: no output port is opened, no SysEx is sent, and the error flag
+        # (already cleared above) is never set on this connection's behalf - there
+        # is nothing to fail - @spec MIDI-NATIVE-005.
 
     def _match_output(self, input_name: str) -> str | None:
         outputs = self._backend.list_outputs()
         if input_name in outputs:
             return input_name
-        candidates = [name for name in outputs if is_nanokontrol_studio(name)]
+        candidates = [name for name in outputs if self._profile.matches(name)]
         return candidates[0] if candidates else None
 
     def _enable_native_mode(self, port_name: str) -> None:

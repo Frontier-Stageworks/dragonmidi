@@ -4,8 +4,6 @@ from dataclasses import dataclass
 
 from .signal_monitor import ChannelState, SignalMonitor
 
-_WAITING_LABEL = "Waiting for nanoKONTROL Studio…"
-
 
 @dataclass(frozen=True)
 class IndicatorViewModel:
@@ -19,9 +17,14 @@ class StatusSnapshot:
     dragonframe: IndicatorViewModel
 
 
-def midi_indicator(state: ChannelState, connected: bool, device_name: str | None) -> IndicatorViewModel:
-    """@spec UI-STATUS-002, UI-STATUS-004"""
-    label = device_name if connected and device_name else _WAITING_LABEL
+def midi_indicator(state: ChannelState, connected: bool, device_name: str | None, profile_name: str) -> IndicatorViewModel:
+    """`profile_name` is the currently-selected Controller Profile's display name
+    (e.g. "nanoKONTROL Studio", "nanoKONTROL2"), used only for the not-yet-connected
+    waiting text - once connected, the label always shows the actual device name.
+
+    @spec UI-STATUS-002, UI-STATUS-004
+    """
+    label = device_name if connected and device_name else f"Waiting for {profile_name}…"
     return IndicatorViewModel(state=state, label=label)
 
 
@@ -30,11 +33,21 @@ def dragonframe_indicator(state: ChannelState, listen_port: int) -> IndicatorVie
     return IndicatorViewModel(state=state, label=f"127.0.0.1:{listen_port} (listen)")
 
 
+def show_nanokontrol2_setup_hint(profile_name: str) -> bool:
+    """Whether the Controller Profile dropdown's one-line nanoKONTROL2 setup hint
+    (docs/llds/app-ui.md § Status UI) should be visible for the given profile name.
+
+    @spec UI-PROFILE-003
+    """
+    return profile_name == "nanoKONTROL2"
+
+
 def compute_status_snapshot(
     monitor: SignalMonitor,
     midi_connected: bool,
     midi_device_name: str | None,
     listen_port: int,
+    midi_profile_name: str,
 ) -> StatusSnapshot:
     """Reads each channel's Signal Monitor state exactly once per call.
 
@@ -43,6 +56,6 @@ def compute_status_snapshot(
     midi_state = monitor.state("midi")
     dragonframe_state = monitor.state("dragonframe")
     return StatusSnapshot(
-        midi=midi_indicator(midi_state, midi_connected, midi_device_name),
+        midi=midi_indicator(midi_state, midi_connected, midi_device_name, midi_profile_name),
         dragonframe=dragonframe_indicator(dragonframe_state, listen_port),
     )

@@ -1,6 +1,6 @@
 # DragonMIDI
 
-DragonMIDI lets you control [Dragonframe](https://www.dragonframe.com/) (stop-motion capture software) with a **KORG nanoKONTROL Studio** MIDI controller. Plug in the controller, launch DragonMIDI, and its faders, knobs, and transport buttons act as physical controls for Dragonframe — playback, shooting, and moving motorized rig axes — instead of reaching for the mouse and keyboard every time.
+DragonMIDI lets you control [Dragonframe](https://www.dragonframe.com/) (stop-motion capture software) with a **KORG nanoKONTROL Studio** or **nanoKONTROL2** MIDI controller. Plug in the controller, launch DragonMIDI, and its faders, knobs, and transport buttons act as physical controls for Dragonframe — playback, shooting, and moving motorized rig axes — instead of reaching for the mouse and keyboard every time.
 
 **Unofficial project:** DragonMIDI is an independent interoperability utility and is not affiliated with, endorsed by, or supported by DZED Systems LLC or KORG. Product names and trademarks are the property of their respective owners. DragonMIDI does not include or redistribute Dragonframe software and requires a separately licensed Dragonframe installation.
 
@@ -10,15 +10,37 @@ DragonMIDI lets you control [Dragonframe](https://www.dragonframe.com/) (stop-mo
 
 1. **Install it** (see [Installing](#installing) below if you don't already have this set up).
 2. **Turn on OSC in Dragonframe** (see [Configuring Dragonframe](#configuring-dragonframe) below) — a one-time setup per machine.
-3. **Plug in your nanoKONTROL Studio**, then run:
+3. **Plug in your controller** — see [Using a nanoKONTROL Studio](#using-a-nanokontrol-studio) or [Using a nanoKONTROL2](#using-a-nanokontrol2) for anything device-specific — then run:
    ```bash
    dragonmidi
    ```
-4. A window opens showing two status lights and a table of every control. Once both lights turn green, you're connected and every control below is live.
+4. A window opens with a **Controller** dropdown at the top (defaults to nanoKONTROL Studio) — pick whichever one you plugged in. Below that: two status lights and a table of every control. Once both lights turn green, you're connected and every control below is live.
+
+## Using a nanoKONTROL Studio
+
+Nothing device-specific to do — plug it in, pick it in the Controller dropdown (the default), and DragonMIDI auto-detects it and puts it into Native Mode automatically over MIDI. It has the full control set described below, including the jog wheel and Scene button.
+
+## Using a nanoKONTROL2
+
+The nanoKONTROL2 needs a one-time manual step DragonMIDI can't do for you: putting it into **CC mode**.
+
+1. Unplug the nanoKONTROL2's USB cable if it's connected.
+2. Hold down the **SET MARKER** and **CYCLE** buttons.
+3. While still holding both, plug the USB cable back in (or otherwise power it on).
+
+It remembers CC mode across power cycles, so this is normally a one-time step per unit — unless something else (a DAW's own setup routine) later switches it into one of its other operating modes, in which case you'd repeat the steps above. DragonMIDI shows this same reminder in the status window whenever nanoKONTROL2 is selected in the Controller dropdown, so you don't need to remember it.
+
+If you've previously customized this unit's control assignments (e.g. with Korg's Kontrol Editor) and want to start fresh, you can restore its factory defaults by holding **PREV TRACK + NEXT TRACK + CYCLE** while powering it on.
+
+A few differences from the Studio:
+
+- **No jog wheel and no Scene button** — the nanoKONTROL2 doesn't have either control, so frame-stepping via the wheel and the Scene→Black mapping aren't available. Every other control in the table below behaves the same as on the Studio.
+- **No handshake to fail**, unlike the Studio's Native Mode — the MIDI status light can only show green (working) or gray (quiet) for a nanoKONTROL2, never amber. If it's plugged in, in CC mode, and selected in the dropdown but the light stays gray, double-check your OS actually sees the device (check your system's MIDI/audio device list).
+- **CC-number mapping is carried over from the Studio's**, using commonly-documented factory-default values — this hasn't yet been confirmed against a real nanoKONTROL2 over MIDI. If a control doesn't do what the table below says it should, that mismatch is the most likely reason; please open an issue with what you're seeing.
 
 ## What each control does by default
 
-DragonMIDI ships with a ready-to-use set of defaults — no setup required to start using the transport/shoot/marker buttons. This is the "Mapping" table you'll see in the app window:
+DragonMIDI ships with a ready-to-use set of defaults — no setup required to start using the transport/shoot/marker buttons. This is the "Mapping" table you'll see in the app window. It's written from the nanoKONTROL Studio's control layout; the nanoKONTROL2's table is identical except it has no **Jog wheel**, **Return to Zero**, or **Scene button** rows — it has neither the jog wheel assembly nor the Scene button (see [Using a nanoKONTROL2](#using-a-nanokontrol2) above). Every other row below applies to both.
 
 | Control | What it does in Dragonframe |
 |---|---|
@@ -50,11 +72,12 @@ You don't need to memorize this — the app's window shows this same table live,
 
 When you run `dragonmidi`, you'll see:
 
-- **MIDI signal** — lights up when your nanoKONTROL Studio is actively sending input.
+- **Controller** — a dropdown to pick nanoKONTROL Studio or nanoKONTROL2. Defaults to nanoKONTROL Studio; switching it takes effect immediately (disconnects whichever device was connected and starts looking for the other one). When nanoKONTROL2 is selected, a reminder about getting it into CC mode appears right below (see [Using a nanoKONTROL2](#using-a-nanokontrol2)).
+- **MIDI signal** — lights up when your selected controller is actively sending input.
 - **Dragonframe signal** — lights up when Dragonframe is talking back to DragonMIDI. This is the one to watch to confirm the two apps are actually connected, not just that DragonMIDI is running.
 - Each light is one of three colors:
   - 🟢 **Green** — working, recent activity.
-  - 🟠 **Amber** — a real problem (the controller's handshake failed, or DragonMIDI couldn't open its network port).
+  - 🟠 **Amber** — a real problem (the controller's handshake failed, or DragonMIDI couldn't open its network port). The nanoKONTROL2 has no handshake to fail, so its MIDI light only ever shows green or gray, never amber.
   - ⚪ **Gray** — quiet. Normal if nothing's happening right now; not an error.
 - Below the lights: the network address DragonMIDI sends to and listens on, with an **Apply** button if you ever need to change them (most people never will).
 - Below that: the **Mapping** table described above.
@@ -145,7 +168,9 @@ Solo/Cycle/Stop/Marker ◄/► use a second connection Dragonframe opens on its 
 
 - Only faders have their own axis picker. Knobs and Mute automatically follow whichever axis their bank's fader is set to (nudge / zero) — they can't be pointed at a *different* axis independently. Return to Zero isn't mapped to anything.
 - No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
-- Only the KORG nanoKONTROL Studio is supported.
+- Only the KORG nanoKONTROL Studio and nanoKONTROL2 are supported — no other MIDI controllers.
+- The Controller dropdown's selection isn't remembered between restarts — DragonMIDI always starts on nanoKONTROL Studio; switch it back to nanoKONTROL2 each time if that's what you're using.
+- The nanoKONTROL2's CC-number mapping hasn't yet been confirmed against real hardware (see [Using a nanoKONTROL2](#using-a-nanokontrol2)).
 - If another application also connects to Dragonframe's WebSocket integration on the same local port, only one can have Solo/Cycle/Stop/Marker ◄/► working at a time.
 
 ---
