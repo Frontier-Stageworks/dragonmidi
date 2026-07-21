@@ -17,7 +17,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Callable
 
-from hypothesis import example, given
+from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.mapping import NANOKONTROL2_PROFILE, STUDIO_PROFILE
