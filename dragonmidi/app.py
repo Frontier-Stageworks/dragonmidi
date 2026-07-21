@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import time
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -39,6 +41,15 @@ UI_TICK_MS = 30
 # @spec MIDI-PROFILE-001, MIDI-PROFILE-004, UI-PROFILE-001
 CONTROLLER_PROFILES: tuple[ControllerProfile, ...] = (STUDIO_PROFILE, NANOKONTROL2_PROFILE)
 NANOKONTROL2_SETUP_HINT = "Hold SET MARKER + CYCLE while powering on for CC mode"
+
+
+def _asset_path(filename: str) -> str | None:
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS  # type: ignore[attr-defined]
+    else:
+        base = os.path.join(os.path.dirname(__file__), "..", "assets")
+    path = os.path.normpath(os.path.join(base, filename))
+    return path if os.path.exists(path) else None
 
 
 class DragonMidiWindow(QMainWindow):
@@ -212,6 +223,9 @@ class DragonMidiWindow(QMainWindow):
 
 def run() -> None:
     app = QApplication(sys.argv)
+    icon_path = _asset_path("dragonmidi.png")
+    if icon_path:
+        app.setWindowIcon(QIcon(icon_path))
     window = DragonMidiWindow()
     window.show()
     sys.exit(app.exec())

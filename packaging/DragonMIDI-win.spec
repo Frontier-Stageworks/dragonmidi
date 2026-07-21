@@ -1,9 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller spec file for DragonMIDI - Windows.
-
-No icon yet. To add one: drop a .ico in assets/ and add
-`icon='assets/dragonmidi.ico'` to the EXE() call below.
 """
 
 import os
@@ -20,7 +17,10 @@ a = Analysis(
     ['pyinstaller_entry.py'],
     pathex=[REPO_ROOT],
     binaries=[],
-    datas=[],
+    datas=[
+        (os.path.join(REPO_ROOT, 'assets/dragonmidi.ico'), '.'),
+        (os.path.join(REPO_ROOT, 'assets/dragonmidi.png'), '.'),
+    ],
     hiddenimports=[
         'mido.backends.rtmidi',
         'pynput.keyboard._win32',
@@ -59,4 +59,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=os.path.join(REPO_ROOT, 'assets/dragonmidi.ico'),
 )

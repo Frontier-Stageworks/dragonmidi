@@ -2,10 +2,9 @@
 """
 PyInstaller spec file for DragonMIDI - macOS .app bundle.
 
-No icon yet. To add one: drop a source PNG in assets/, generate an .icns with
-`sips` (resize to each required size) and `iconutil -c icns` (assemble the
-.iconset into the .icns), then set icon='assets/dragonmidi.icns' below and in
-the BUNDLE() call.
+Icon: assets/dragonmidi.icns (generated from assets/dragonmidi.png by the CI
+      workflow; not committed - create locally with the iconutil steps in
+      .github/workflows/build-mac.yml if building manually).
 
 No Info.plist usage-description keys are needed for the keystroke output path
 (macOS Accessibility access is a TCC prompt tied to the app appearing in
@@ -26,7 +25,10 @@ a = Analysis(
     ['pyinstaller_entry.py'],
     pathex=[REPO_ROOT],
     binaries=[],
-    datas=[],
+    datas=[
+        (os.path.join(REPO_ROOT, 'assets/dragonmidi.png'), '.'),
+        (os.path.join(REPO_ROOT, 'assets/dragonmidi.icns'), '.'),
+    ],
     hiddenimports=[
         'mido.backends.rtmidi',
         'pynput.keyboard._darwin',
@@ -74,7 +76,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='DragonMIDI.app',
-    icon=None,
+    icon=os.path.join(REPO_ROOT, 'assets/dragonmidi.icns'),
     bundle_identifier='com.frontierstageworks.dragonmidi',
     info_plist={
         'NSHighResolutionCapable': True,
