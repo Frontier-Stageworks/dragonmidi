@@ -187,3 +187,9 @@ python -m pytest
 Tests use `pytest` and `hypothesis` (property-based tests).
 
 See [`docs/high-level-design.md`](docs/high-level-design.md) for full architecture and phasing rationale.
+
+---
+
+## Acknowledgments
+
+Our app icon uses a glyph from [Phosphor Icons](https://phosphoricons.com/).
