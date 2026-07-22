@@ -36,7 +36,7 @@ A few differences from the Studio:
 
 - **No jog wheel and no Scene button** — the nanoKONTROL2 doesn't have either control, so frame-stepping via the wheel and the Scene→Black mapping aren't available. Every other control in the table below behaves the same as on the Studio.
 - **No handshake to fail**, unlike the Studio's Native Mode — the MIDI status light can only show green (working) or gray (quiet) for a nanoKONTROL2, never amber. If it's plugged in, in CC mode, and selected in the dropdown but the light stays gray, double-check your OS actually sees the device (check your system's MIDI/audio device list).
-- **CC-number mapping is carried over from the Studio's**, using commonly-documented factory-default values — this hasn't yet been confirmed against a real nanoKONTROL2 over MIDI. If a control doesn't do what the table below says it should, that mismatch is the most likely reason; please open an issue with what you're seeing.
+- **CC-number mapping is carried over from the Studio's**, using commonly-documented factory-default values, confirmed working on a real nanoKONTROL2. If a control still doesn't do what the table below says it should on your unit, please open an issue with what you're seeing.
 
 ## What each control does by default
 
@@ -182,7 +182,6 @@ Solo/Cycle/Stop/Marker ◄/► use a second connection Dragonframe opens on its 
 - No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
 - Only the KORG nanoKONTROL Studio and nanoKONTROL2 are supported — no other MIDI controllers.
 - The Controller dropdown's selection isn't remembered between restarts — DragonMIDI always starts on nanoKONTROL Studio; switch it back to nanoKONTROL2 each time if that's what you're using.
-- The nanoKONTROL2's CC-number mapping hasn't yet been confirmed against real hardware (see [Using a nanoKONTROL2](#using-a-nanokontrol2)).
 - If another application also connects to Dragonframe's WebSocket integration on the same local port, only one can have Solo/Cycle/Stop/Marker ◄/► working at a time.
 
 ---
