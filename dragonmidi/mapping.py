@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping, Sequence
 
 from .controller_profile import ControllerProfile
 from .events import KeyCombo, MidiEvent, OscMessage, WebSocketCommand
@@ -12,9 +13,6 @@ DEBOUNCE_SECONDS = 0.080
 
 _Key = tuple[str, "int | None"]
 
-# @spec MAP-AXIS-004
-FADER_KEYS: frozenset[_Key] = frozenset(("cc", i) for i in range(8))
-
 # @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003
 JOG_WHEEL_CC = 110
 _JOG_WHEEL_KEY: _Key = ("cc", JOG_WHEEL_CC)
@@ -23,33 +21,7 @@ _JOG_WHEEL_KEY: _Key = ("cc", JOG_WHEEL_CC)
 _STEP_MOCO_FORWARD = KeyCombo(frozenset({"alt", "shift"}), "right")
 _STEP_MOCO_BACKWARD = KeyCombo(frozenset({"alt", "shift"}), "left")
 
-# WebSocket-targeted controls - @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-006, MAP-WS-007
-_STOP_KEY: _Key = ("cc", 42)
-_CYCLE_KEY: _Key = ("cc", 46)
-_PREV_MARKER_KEY: _Key = ("cc", 61)
-_NEXT_MARKER_KEY: _Key = ("cc", 62)
-_SOLO_BANK_OFFSET = 32
-_SOLO_KEYS: frozenset[_Key] = frozenset(("cc", _SOLO_BANK_OFFSET + i) for i in range(8))
-
-# Bank membership: Bank N = Fader N, Knob N, Mute N (Record N/Select N excluded, no
-# matching per-axis action exists for them - @spec MAP-BANK-006). Solo N is not a bank
-# member here - it's an unconditional WebSocket target regardless of Fader N's axis
-# state (@spec MAP-WS-002), so it's excluded from bank_fader_key()'s offsets below.
-_KNOB_BANK_OFFSET = 16
-_MUTE_BANK_OFFSET = 48
 _KNOB_STEP_SCALE = 0.1  # axis position units per one MIDI raw-value increment
-
-
-def bank_fader_key(key: _Key) -> "_Key | None":
-    """Given a Knob/Mute key, return its bank's Fader key. `None` if `key`
-    is not a bank member (a fader itself, Solo, a button/scene, or the jog wheel)."""
-    kind, number = key
-    if kind != "cc" or number is None:
-        return None
-    for offset in (_KNOB_BANK_OFFSET, _MUTE_BANK_OFFSET):
-        if offset <= number < offset + 8:
-            return ("cc", number - offset)
-    return None
 
 
 @dataclass(frozen=True)
@@ -66,74 +38,259 @@ class _AxisTarget:
     max_value: float
 
 
-def _fader_entries() -> dict[_Key, _MapEntry]:
-    return {("cc", i): _MapEntry("absolute", f"/dragonframe/encoder/{i + 1}") for i in range(8)}
+class ControlsConfigError(ValueError):
+    """Raised when a Controller Profile config file's `controls:` block is invalid.
+
+    @spec MAP-CONFIG-006, MAP-CONFIG-007
+    """
 
 
-def _knob_entries() -> dict[_Key, _MapEntry]:
-    return {("cc", 16 + i): _MapEntry("absolute", f"/dragonframe/encoder/{9 + i}") for i in range(8)}
+@dataclass(frozen=True)
+class ControlsConfig:
+    """The parsed `controls:` block of a Controller Profile config file
+    (`docs/llds/static-mapping.md § Controller Profile Config Schema`).
+
+    @spec MAP-CONFIG-002
+    """
+
+    faders: tuple[int, ...]
+    knobs: tuple[int, ...]
+    mutes: tuple[int, ...]
+    solos: tuple[int, ...]
+    transport: Mapping[str, int]
+    jog_wheel: "int | None"
 
 
-def _mute_entries() -> dict[_Key, _MapEntry]:
-    return {("cc", 48 + i): _MapEntry("press", f"/dragonframe/encoderReset/{i + 1}") for i in range(8)}
+@dataclass(frozen=True)
+class WebSocketKeys:
+    """CC-sourced keys for the WebSocket-targeted controls (Stop, Cycle, Solo 1-8,
+    Previous/Next Marker), per active Controller Profile - no longer fixed module
+    constants, since a config's CC numbers for these need not match the
+    nanoKONTROL family's.
+
+    @spec MAP-CONFIG-005
+    """
+
+    stop: "_Key | None"
+    cycle: "_Key | None"
+    previous_marker: "_Key | None"
+    next_marker: "_Key | None"
+    solos: tuple[_Key, ...]
 
 
-def _shared_button_entries() -> dict[_Key, _MapEntry]:
-    """Button entries both Controller Profiles' opinionated maps share, identical
-    CC numbers on both devices (@spec MAP-PROFILE-002)."""
+# Bank membership: Bank N = Fader N, Knob N, Mute N (Record N/Select N excluded, no
+# matching per-axis action exists for them - @spec MAP-BANK-006). Solo N is not a bank
+# member - it's an unconditional WebSocket target regardless of Fader N's axis state
+# (@spec MAP-WS-002). Determined by positional index (Bank N = index N-1 in each of
+# faders/knobs/mutes), not CC arithmetic - a config's knobs/mutes CCs need not be
+# arithmetically related to its faders' (edge audit 2026-07-22).
+_TRANSPORT_OSC_TARGETS: dict[str, tuple[str, str, tuple]] = {
+    "record": ("press", "/dragonframe/shoot", (1,)),
+    "play": ("press", "/dragonframe/play", ()),
+    "rewind": ("press", "/dragonframe/stepBackward", ()),
+    "fast_forward": ("press", "/dragonframe/stepForward", ()),
+    "previous_track": ("press", "/dragonframe/stepBackward", ()),
+    "next_track": ("press", "/dragonframe/stepForward", ()),
+}
+
+_TRANSPORT_DISPLAY_NAMES: dict[str, str] = {
+    "record": "Transport Record",
+    "play": "Play",
+    "rewind": "Rewind",
+    "fast_forward": "Fast Forward",
+    "previous_track": "Previous Track",
+    "next_track": "Next Track",
+}
+
+
+def _fader_entries(ccs: Sequence[int]) -> dict[_Key, _MapEntry]:
+    return {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{i + 1}") for i, cc in enumerate(ccs)}
+
+
+def _knob_entries(ccs: Sequence[int]) -> dict[_Key, _MapEntry]:
+    return {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{9 + i}") for i, cc in enumerate(ccs)}
+
+
+def _mute_entries(ccs: Sequence[int]) -> dict[_Key, _MapEntry]:
+    return {("cc", cc): _MapEntry("press", f"/dragonframe/encoderReset/{i + 1}") for i, cc in enumerate(ccs)}
+
+
+def _transport_entries(transport: Mapping[str, int]) -> dict[_Key, _MapEntry]:
+    """Only the OSC-targeted transport roles - stop/cycle/previous_marker/next_marker
+    are WebSocket-targeted (`build_websocket_keys`) and deliberately excluded here
+    (@spec MAP-WS-009, MAP-CONFIG-005)."""
+    entries: dict[_Key, _MapEntry] = {}
+    for name, (kind, address, args) in _TRANSPORT_OSC_TARGETS.items():
+        cc = transport.get(name)
+        if cc is not None:
+            entries[("cc", cc)] = _MapEntry(kind, address, args=args)
+    return entries
+
+
+def validate_controls_config(controls: ControlsConfig, has_jog_wheel: bool) -> None:
+    """@spec MAP-CONFIG-006, MAP-CONFIG-007"""
+    for field_name in ("faders", "knobs", "mutes", "solos"):
+        values = getattr(controls, field_name)
+        if len(values) != 8:
+            raise ControlsConfigError(f"'{field_name}' must have exactly 8 entries, got {len(values)}")
+    if has_jog_wheel and controls.jog_wheel is None:
+        raise ControlsConfigError("has_jog_wheel is true but 'jog_wheel' CC is missing")
+
+
+def build_opinionated_map(controls: ControlsConfig, has_scene_button: bool) -> dict[_Key, _MapEntry]:
+    """Synthesizes an opinionated map from a profile's declared CC numbers, replacing
+    the old per-profile hardcoded literal dicts (@spec MAP-CONFIG-001).
+
+    @spec MAP-CONFIG-002, MAP-CONFIG-004
+    """
+    entries: dict[_Key, _MapEntry] = {
+        **_fader_entries(controls.faders),
+        **_knob_entries(controls.knobs),
+        **_mute_entries(controls.mutes),
+        **_transport_entries(controls.transport),
+    }
+    if has_scene_button:
+        entries[("korg_scene", None)] = _MapEntry("press", "/dragonframe/black")
+    return entries
+
+
+def build_websocket_keys(controls: ControlsConfig) -> WebSocketKeys:
+    """@spec MAP-CONFIG-005"""
+
+    def _key(name: str) -> "_Key | None":
+        cc = controls.transport.get(name)
+        return ("cc", cc) if cc is not None else None
+
+    return WebSocketKeys(
+        stop=_key("stop"),
+        cycle=_key("cycle"),
+        previous_marker=_key("previous_marker"),
+        next_marker=_key("next_marker"),
+        solos=tuple(("cc", cc) for cc in controls.solos),
+    )
+
+
+def build_bank_membership(controls: ControlsConfig) -> "dict[str, object]":
+    """Positional (not CC-arithmetic) Fader<->Knob/Mute pairing: Bank N = index N-1
+    in each of `faders`/`knobs`/`mutes`. Returns the four pieces `ControllerProfile`
+    stores directly (`fader_keys`, `knob_to_fader`, `mute_to_fader`, `fader_to_knob`)."""
+    fader_keys = frozenset(("cc", cc) for cc in controls.faders)
+    knob_to_fader = {("cc", knob_cc): ("cc", fader_cc) for fader_cc, knob_cc in zip(controls.faders, controls.knobs)}
+    mute_to_fader = {("cc", mute_cc): ("cc", fader_cc) for fader_cc, mute_cc in zip(controls.faders, controls.mutes)}
+    fader_to_knob = {fader_key: knob_key for knob_key, fader_key in knob_to_fader.items()}
     return {
-        ("cc", 45): _MapEntry("press", "/dragonframe/shoot", args=(1,)),  # Transport Record
-        ("cc", 41): _MapEntry("press", "/dragonframe/play"),
-        ("cc", 43): _MapEntry("press", "/dragonframe/stepBackward"),  # Rewind (<<)
-        ("cc", 44): _MapEntry("press", "/dragonframe/stepForward"),  # Fast Forward (>>)
-        ("cc", 58): _MapEntry("press", "/dragonframe/stepBackward"),  # Previous Track
-        ("cc", 59): _MapEntry("press", "/dragonframe/stepForward"),  # Next Track
+        "fader_keys": fader_keys,
+        "knob_to_fader": knob_to_fader,
+        "mute_to_fader": mute_to_fader,
+        "fader_to_knob": fader_to_knob,
     }
 
 
-# Stop, Cycle, Solo 1-8, and Previous/Next Marker are WebSocket-targeted
-# (process_websocket(), @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-006, MAP-WS-007)
-# and deliberately absent from this table - @spec MAP-WS-009.
-OPINIONATED_MAP_STUDIO: dict[_Key, _MapEntry] = {
-    **_fader_entries(),
-    **_knob_entries(),
-    **_mute_entries(),
-    **_shared_button_entries(),
-    ("korg_scene", None): _MapEntry("press", "/dragonframe/black"),  # Studio-only - @spec MAP-PROFILE-003
-}
-OPINIONATED_MAP = OPINIONATED_MAP_STUDIO  # backward-compat alias; pre-dates multi-profile support
+def build_control_names(controls: ControlsConfig, has_scene_button: bool) -> dict[_Key, str]:
+    """Mapping View display names built from the active profile's config, replacing
+    the old module-level CC-keyed `CONTROL_NAMES` literal in `mapping_view_model.py`."""
+    names: dict[_Key, str] = {("cc", cc): f"Fader Channel {i + 1}" for i, cc in enumerate(controls.faders)}
+    for name, cc in controls.transport.items():
+        label = _TRANSPORT_DISPLAY_NAMES.get(name)
+        if label is not None:
+            names[("cc", cc)] = label
+    if has_scene_button:
+        names[("korg_scene", None)] = "Scene"
+    return names
 
-# The nanoKONTROL2 has no Scene button and no jog wheel (the jog wheel was never a
-# table entry anyway - its dispatch is special-cased below, gated on has_jog_wheel).
-# @spec MAP-PROFILE-002, MAP-PROFILE-003
-OPINIONATED_MAP_NANOKONTROL2: dict[_Key, _MapEntry] = {
-    **_fader_entries(),
-    **_knob_entries(),
-    **_mute_entries(),
-    **_shared_button_entries(),
+
+def build_profile(
+    *,
+    name: str,
+    match_substring: str,
+    has_native_mode: bool,
+    default_channel: int,
+    has_jog_wheel: bool,
+    has_scene_button: bool,
+    controls: ControlsConfig,
+    setup_hint: "str | None" = None,
+) -> ControllerProfile:
+    """Assembles a `ControllerProfile` from a `ControlsConfig`, validating it first
+    and deriving every controls-dependent field (opinionated map, WebSocket keys,
+    bank membership, display names) the same way for a bundled/hardcoded profile
+    (below) or one loaded from a config file (`controller_profile_loader.py`)."""
+    validate_controls_config(controls, has_jog_wheel)
+    bank = build_bank_membership(controls)
+    return ControllerProfile(
+        name=name,
+        match_substring=match_substring,
+        has_native_mode=has_native_mode,
+        default_channel=default_channel,
+        has_jog_wheel=has_jog_wheel,
+        has_scene_button=has_scene_button,
+        opinionated_map=build_opinionated_map(controls, has_scene_button),
+        websocket_keys=build_websocket_keys(controls),
+        setup_hint=setup_hint,
+        control_names=build_control_names(controls, has_scene_button),
+        **bank,
+    )
+
+
+_SHARED_TRANSPORT: dict[str, int] = {
+    "record": 45,
+    "play": 41,
+    "stop": 42,
+    "rewind": 43,
+    "fast_forward": 44,
+    "cycle": 46,
+    "previous_marker": 61,
+    "next_marker": 62,
+    "previous_track": 58,
+    "next_track": 59,
 }
+
+# The bundled profiles' controls, mirroring `dragonmidi/controllers/*.yaml`
+# (@spec MAP-CONFIG-003's migration invariant: these must synthesize maps
+# byte-identical to this project's pre-Phase-5 hardcoded constants).
+STUDIO_CONTROLS = ControlsConfig(
+    faders=tuple(range(8)),
+    knobs=tuple(range(16, 24)),
+    mutes=tuple(range(48, 56)),
+    solos=tuple(range(32, 40)),
+    transport=dict(_SHARED_TRANSPORT),
+    jog_wheel=JOG_WHEEL_CC,
+)
+
+NANOKONTROL2_CONTROLS = ControlsConfig(
+    faders=tuple(range(8)),
+    knobs=tuple(range(16, 24)),
+    mutes=tuple(range(48, 56)),
+    solos=tuple(range(32, 40)),
+    transport=dict(_SHARED_TRANSPORT),
+    jog_wheel=None,
+)
 
 # @spec MIDI-PROFILE-002
-STUDIO_PROFILE = ControllerProfile(
+STUDIO_PROFILE = build_profile(
     name="nanoKONTROL Studio",
     match_substring="nanokontrolstudio",
     has_native_mode=True,
     default_channel=STUDIO_CHANNEL,
     has_jog_wheel=True,
     has_scene_button=True,
-    opinionated_map=OPINIONATED_MAP_STUDIO,
+    controls=STUDIO_CONTROLS,
 )
 
 # @spec MIDI-PROFILE-003
-NANOKONTROL2_PROFILE = ControllerProfile(
+NANOKONTROL2_PROFILE = build_profile(
     name="nanoKONTROL2",
     match_substring="nanokontrol2",
     has_native_mode=False,
     default_channel=NANOKONTROL2_CHANNEL,
     has_jog_wheel=False,
     has_scene_button=False,
-    opinionated_map=OPINIONATED_MAP_NANOKONTROL2,
+    controls=NANOKONTROL2_CONTROLS,
+    setup_hint="Hold SET MARKER + CYCLE while powering on for CC mode",
 )
+
+OPINIONATED_MAP_STUDIO: dict[_Key, _MapEntry] = STUDIO_PROFILE.opinionated_map
+OPINIONATED_MAP = OPINIONATED_MAP_STUDIO  # backward-compat alias; pre-dates multi-profile support
+OPINIONATED_MAP_NANOKONTROL2: dict[_Key, _MapEntry] = NANOKONTROL2_PROFILE.opinionated_map
 
 
 class MappingEngine:
@@ -207,8 +364,9 @@ class MappingEngine:
 
     def _discard_bank_knob_dedup(self, fader_key: _Key) -> None:
         """@spec MAP-BANK-007"""
-        knob_key = ("cc", fader_key[1] + _KNOB_BANK_OFFSET)
-        self._previous_value.pop(knob_key, None)
+        knob_key = self._profile.fader_to_knob.get(fader_key)
+        if knob_key is not None:
+            self._previous_value.pop(knob_key, None)
 
     def enter_axis_mode(self, key: _Key) -> None:
         """Switch a fader into OSC axis (direct) mode without selecting a name yet.
@@ -216,7 +374,7 @@ class MappingEngine:
 
         @spec MAP-AXIS-010
         """
-        if key not in FADER_KEYS:
+        if key not in self._profile.fader_keys:
             raise ValueError(f"OSC axis (direct) mode is only available for fader controls, got {key!r}")
         was_encoder_mode = key in self._encoder_mode
         self._encoder_mode.discard(key)
@@ -229,7 +387,7 @@ class MappingEngine:
 
         @spec MAP-AXIS-002, MAP-AXIS-004
         """
-        if key not in FADER_KEYS:
+        if key not in self._profile.fader_keys:
             raise ValueError(f"OSC axis (direct) target is only available for fader controls, got {key!r}")
         was_encoder_mode = key in self._encoder_mode
         self._encoder_mode.discard(key)
@@ -282,13 +440,13 @@ class MappingEngine:
             if self._profile.has_jog_wheel and key == _JOG_WHEEL_KEY:
                 return self._process_jog(event)
 
-            if key in FADER_KEYS and self.is_axis_mode(key):
+            if key in self._profile.fader_keys and self.is_axis_mode(key):
                 axis_target = self._axis_targets.get(key)
                 if axis_target is not None:
                     return self._process_axis_target(key, event, axis_target)
                 return None  # axis mode, no name chosen yet - @spec MAP-AXIS-009
 
-            fader_key = bank_fader_key(key)
+            fader_key = self._profile.bank_fader_key(key)
             if fader_key is not None and self.is_axis_mode(fader_key):
                 axis_target = self._axis_targets.get(fader_key)
                 if axis_target is not None:
@@ -357,9 +515,8 @@ class MappingEngine:
         axis_positions: "dict[str, float] | None",
     ) -> OscMessage | None:
         """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-005, MAP-BANK-008"""
-        _, number = key
         axis_path = f"/dragonframe/axis/{axis_target.axis_name}"
-        if _KNOB_BANK_OFFSET <= number < _KNOB_BANK_OFFSET + 8:
+        if key in self._profile.knob_to_fader:
             previous = self._previous_value.get(key)
             self._previous_value[key] = event.raw_value
             if previous is None:
@@ -448,19 +605,23 @@ class MappingEngine:
         if event.type != "cc" or event.channel != self._profile.default_channel:
             return None
         key: _Key = (event.type, event.number)
+        ws_keys = self._profile.websocket_keys
 
-        if key == _STOP_KEY:
+        if ws_keys is None:
+            return None  # profile declares no WebSocket-targeted keys at all
+
+        if key == ws_keys.stop:
             if not self._press_edge(key, event, now):
                 return None
             return WebSocketCommand("E-Stop")
 
-        if key in _SOLO_KEYS:
+        if key in ws_keys.solos:
             if not self._press_edge(key, event, now):
                 return None
-            axis_number = event.number - _SOLO_BANK_OFFSET + 1
+            axis_number = ws_keys.solos.index(key) + 1
             return WebSocketCommand(f"select-AX{axis_number}")
 
-        if key == _CYCLE_KEY:
+        if key == ws_keys.cycle:
             if not self._press_edge(key, event, now):
                 return None
             axis_count = len(axis_positions or {})
@@ -469,12 +630,12 @@ class MappingEngine:
             self._cycle_index = (self._cycle_index + 1) % axis_count
             return WebSocketCommand(f"select-AX{self._cycle_index + 1}")
 
-        if key == _PREV_MARKER_KEY:
+        if key == ws_keys.previous_marker:
             if not self._press_edge(key, event, now):
                 return None
             return WebSocketCommand("Jog All", operation="+", params=(-1,))
 
-        if key == _NEXT_MARKER_KEY:
+        if key == ws_keys.next_marker:
             if not self._press_edge(key, event, now):
                 return None
             return WebSocketCommand("Jog All", operation="+", params=(1,))

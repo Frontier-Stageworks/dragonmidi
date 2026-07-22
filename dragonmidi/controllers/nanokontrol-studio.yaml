@@ -1,0 +1,30 @@
+# Bundled Controller Profile: KORG nanoKONTROL Studio.
+#
+# Mirrors dragonmidi/mapping.py's STUDIO_CONTROLS exactly - the migration invariant
+# (docs/specs/static-mapping.md § MAP-CONFIG-003) requires this file to synthesize
+# the same opinionated map as that Python constant.
+
+name: "nanoKONTROL Studio"
+match_substring: "nanokontrolstudio"
+has_native_mode: true
+default_channel: 16 # 1-based; MIDI channel 16 (0-based 15), the Native Mode output channel
+has_jog_wheel: true
+has_scene_button: true
+
+controls:
+  faders: [0, 1, 2, 3, 4, 5, 6, 7]
+  knobs: [16, 17, 18, 19, 20, 21, 22, 23]
+  mutes: [48, 49, 50, 51, 52, 53, 54, 55]
+  solos: [32, 33, 34, 35, 36, 37, 38, 39]
+  transport:
+    record: 45
+    play: 41
+    stop: 42
+    rewind: 43
+    fast_forward: 44
+    cycle: 46
+    previous_marker: 61
+    next_marker: 62
+    previous_track: 58
+    next_track: 59
+  jog_wheel: 110

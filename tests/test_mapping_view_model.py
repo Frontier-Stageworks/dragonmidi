@@ -9,7 +9,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from dragonmidi.mapping import FADER_KEYS, NANOKONTROL2_PROFILE, OPINIONATED_MAP, OPINIONATED_MAP_NANOKONTROL2, MappingEngine, bank_fader_key
+from dragonmidi.mapping import NANOKONTROL2_PROFILE, OPINIONATED_MAP, OPINIONATED_MAP_NANOKONTROL2, STUDIO_PROFILE, MappingEngine
 from dragonmidi.mapping_view_model import (
     JOG_WHEEL_ARC_ROW_KEY,
     JOG_WHEEL_ROW_KEY,
@@ -37,7 +37,7 @@ WEBSOCKET_ROW_KEYS = [
 def test_build_rows_returns_one_row_per_non_bank_member_entry_in_table_order() -> None:
     engine = MappingEngine()
     rows = build_rows(engine)
-    expected_keys = [key for key in OPINIONATED_MAP if bank_fader_key(key) is None]
+    expected_keys = [key for key in OPINIONATED_MAP if STUDIO_PROFILE.bank_fader_key(key) is None]
     row_keys = [row.key for row in rows]
     # The WebSocket-targeted rows (UI-MAP-013) and the two jog wheel rows
     # (UI-MAP-012) are appended after every opinionated-map row, since none of
@@ -51,7 +51,7 @@ def test_build_rows_excludes_knob_mute_rows() -> None:
     rows = build_rows(engine)
     row_keys = {row.key for row in rows}
     for key in OPINIONATED_MAP:
-        if bank_fader_key(key) is not None:
+        if STUDIO_PROFILE.bank_fader_key(key) is not None:
             assert key not in row_keys
 
 
@@ -71,7 +71,7 @@ def test_only_fader_rows_are_marked_editable() -> None:
     engine = MappingEngine()
     rows = build_rows(engine)
     for row in rows:
-        assert row.editable == (row.key in FADER_KEYS)
+        assert row.editable == (row.key in STUDIO_PROFILE.fader_keys)
 
 
 # --- Fader row target rendering: default vs. axis-targeted vs. reverted ---
@@ -337,7 +337,7 @@ def test_build_rows_for_nanokontrol2_omits_scene_row() -> None:
 def test_build_rows_for_nanokontrol2_includes_only_its_own_map_entries() -> None:
     engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
     rows = build_rows(engine)
-    expected_keys = [key for key in OPINIONATED_MAP_NANOKONTROL2 if bank_fader_key(key) is None]
+    expected_keys = [key for key in OPINIONATED_MAP_NANOKONTROL2 if NANOKONTROL2_PROFILE.bank_fader_key(key) is None]
     row_keys = [row.key for row in rows]
     # Same WebSocket rows as the Studio (both profiles have Stop/Cycle/Solo/Marker),
     # but no jog wheel rows appended - has_jog_wheel is false for this profile.

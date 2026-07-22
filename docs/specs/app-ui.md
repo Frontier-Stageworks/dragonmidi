@@ -10,9 +10,10 @@ Traces to `docs/llds/app-ui.md`.
 
 ## Controller Profile Selector
 
-- [x] **UI-PROFILE-001**: The system shall display a Controller Profile dropdown offering "nanoKONTROL Studio" and "nanoKONTROL2," defaulting to "nanoKONTROL Studio" on launch (`MIDI-PROFILE-004`, see `docs/specs/midi-input.md`).
+- [x] **UI-PROFILE-001**: The system shall display a Controller Profile dropdown populated from the discovered, merged Controller Profile list (`PROFILE-LOAD-001`/`003`/`004`, see `docs/specs/midi-input.md`), defaulting the active selection to the profile named "nanoKONTROL Studio" on launch (`MIDI-PROFILE-004`) regardless of that list's display order.
 - [x] **UI-PROFILE-002**: When the user changes the Controller Profile dropdown, the system shall apply the change immediately, with no separate Apply step (`MIDI-PROFILE-005`/`006`, see `docs/specs/midi-input.md`).
-- [x] **UI-PROFILE-003**: While the nanoKONTROL2 profile is selected, the system shall display a one-line setup hint beneath the dropdown ("Hold SET MARKER + CYCLE while powering on for CC mode"); no equivalent hint shall be shown while the nanoKONTROL Studio profile is selected.
+- [x] **UI-PROFILE-003**: While the active Controller Profile's `setup_hint` is present and non-empty (`PROFILE-LOAD-009`, see `docs/specs/midi-input.md`), the system shall display it verbatim as a one-line hint beneath the dropdown; while it is absent or empty, no hint line shall be shown.
+- [x] **UI-PROFILE-004**: While the config-file failure count (`PROFILE-LOAD-011`, see `docs/specs/midi-input.md`) is greater than zero, the system shall display a one-line, count-only indicator near the Controller Profile dropdown (e.g. "2 controller config files failed to load"), independent of and able to be shown simultaneously with the `UI-PROFILE-003` setup hint; while the count is zero, no such indicator shall be shown. This indicator shall not display individual file names or error messages in the main window.
 
 ## Status UI
 
@@ -49,3 +50,4 @@ Traces to `docs/llds/app-ui.md`.
 - `docs/llds/app-ui.md`
 - `docs/llds/static-mapping.md § WebSocket-Targeted Controls`, `docs/specs/static-mapping.md § WebSocket-Targeted Controls` — the `MAP-WS-*` specs behind `UI-MAP-001`'s and `UI-MAP-013`'s WebSocket target display.
 - `docs/llds/midi-input.md § Controller Profiles`, `docs/specs/midi-input.md § Controller Profiles` — the `MIDI-PROFILE-*` specs the `UI-PROFILE-*` dropdown specs drive and read from.
+- `docs/specs/midi-input.md § Controller Profile Loading` — the `PROFILE-LOAD-*` specs `UI-PROFILE-001`'s dropdown population and `UI-PROFILE-003`'s setup-hint display now depend on.

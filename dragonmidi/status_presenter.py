@@ -33,13 +33,28 @@ def dragonframe_indicator(state: ChannelState, listen_port: int) -> IndicatorVie
     return IndicatorViewModel(state=state, label=f"127.0.0.1:{listen_port} (listen)")
 
 
-def show_nanokontrol2_setup_hint(profile_name: str) -> bool:
-    """Whether the Controller Profile dropdown's one-line nanoKONTROL2 setup hint
-    (docs/llds/app-ui.md § Status UI) should be visible for the given profile name.
+def show_setup_hint(setup_hint: "str | None") -> bool:
+    """Whether the Controller Profile dropdown's one-line setup hint
+    (docs/llds/app-ui.md § Status UI) should be visible, given the active profile's
+    `setup_hint` field. Generalizes the prior nanoKONTROL2-only name check - any
+    profile with non-empty `setup_hint` shows its own hint text verbatim.
 
     @spec UI-PROFILE-003
     """
-    return profile_name == "nanoKONTROL2"
+    return bool(setup_hint)
+
+
+def config_load_failure_label(failure_count: int) -> "str | None":
+    """Count-only Status UI indicator for Controller Profile config files that
+    failed to load (`PROFILE-LOAD-011`, see docs/specs/midi-input.md) - deliberately
+    not a log viewer or per-file detail, per the HLD's "no log pane" Non-Goal.
+
+    @spec UI-PROFILE-004
+    """
+    if failure_count <= 0:
+        return None
+    noun = "file" if failure_count == 1 else "files"
+    return f"{failure_count} controller config {noun} failed to load"
 
 
 def compute_status_snapshot(

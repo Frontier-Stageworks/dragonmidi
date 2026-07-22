@@ -17,6 +17,7 @@ dependencies = [
   "PySide6==6.11.1",
   "pynput==1.8.2",
   "websockets==16.1.1",
+  "PyYAML==6.0.3",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,9 @@ dragonmidi = "dragonmidi.app:run"
 
 [tool.setuptools]
 packages = ["dragonmidi"]
+
+[tool.setuptools.package-data]
+dragonmidi = ["controllers/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

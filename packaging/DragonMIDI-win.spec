@@ -20,6 +20,7 @@ a = Analysis(
     datas=[
         (os.path.join(REPO_ROOT, 'assets/dragonmidi.ico'), '.'),
         (os.path.join(REPO_ROOT, 'assets/dragonmidi.png'), '.'),
+        (os.path.join(REPO_ROOT, 'dragonmidi/controllers'), 'dragonmidi/controllers'),
     ],
     hiddenimports=[
         'mido.backends.rtmidi',

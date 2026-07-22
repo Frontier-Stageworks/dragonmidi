@@ -4,6 +4,7 @@ import os
 import queue
 import sys
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
@@ -21,26 +22,24 @@ from PySide6.QtWidgets import (
 
 from .config import ConfigController, EndpointConfig
 from .controller_profile import ControllerProfile
+from .controller_profile_loader import load_controller_profiles
 from .events import MidiEvent
 from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
-from .mapping import NANOKONTROL2_PROFILE, STUDIO_PROFILE, MappingEngine
+from .mapping import MappingEngine
 from .mapping_widgets import MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
 from .osc_io import AxisDiscovery, OscClient, OscListener
 from .queue_drain import drain_queue
 from .shutdown import run_shutdown_sequence
 from .signal_monitor import SignalMonitor
-from .status_presenter import compute_status_snapshot, show_nanokontrol2_setup_hint
+from .status_presenter import compute_status_snapshot, config_load_failure_label, show_setup_hint
 from .status_widgets import IndicatorRow
 from .websocket_output import WebSocketOutputAdapter
 
 APP_TITLE = "DragonMIDI"
 DISCOVERY_POLL_MS = 2000
 UI_TICK_MS = 30
-
-# @spec MIDI-PROFILE-001, MIDI-PROFILE-004, UI-PROFILE-001
-CONTROLLER_PROFILES: tuple[ControllerProfile, ...] = (STUDIO_PROFILE, NANOKONTROL2_PROFILE)
-NANOKONTROL2_SETUP_HINT = "Hold SET MARKER + CYCLE while powering on for CC mode"
+DEFAULT_PROFILE_NAME = "nanoKONTROL Studio"
 
 
 def _asset_path(filename: str) -> str | None:
@@ -52,15 +51,44 @@ def _asset_path(filename: str) -> str | None:
     return path if os.path.exists(path) else None
 
 
+def _bundled_controllers_dir() -> Path:
+    """@spec PROFILE-LOAD-001 (bundled-folder resolution, same frozen-vs-dev branch
+    as `_asset_path`)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "dragonmidi" / "controllers"  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent / "controllers"
+
+
+def _user_controllers_dir() -> Path:
+    """@spec PROFILE-LOAD-001"""
+    return Path.home() / "Documents" / "DragonMIDI" / "controllers"
+
+
+def _default_profile(profiles: tuple[ControllerProfile, ...]) -> ControllerProfile:
+    """@spec MIDI-PROFILE-004"""
+    for profile in profiles:
+        if profile.name == DEFAULT_PROFILE_NAME:
+            return profile
+    return profiles[0]  # accepted fallback if even the bundled Studio profile failed to load
+
+
 class DragonMidiWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
 
+        # Discovered once per launch, before anything else - @spec PROFILE-LOAD-001.
+        # Deliberately not module-level: a bare `import dragonmidi.app` (e.g. from a
+        # test or tool) must not have the side effect of touching the real filesystem
+        # (creating/seeding the user-local controllers folder, @spec PROFILE-LOAD-007).
+        self._load_result = load_controller_profiles(bundled_dir=_bundled_controllers_dir(), user_dir=_user_controllers_dir())
+        self._controller_profiles: tuple[ControllerProfile, ...] = self._load_result.profiles
+        self._default_profile = _default_profile(self._controller_profiles)
+
         self._activity_queue: "queue.Queue[str]" = queue.Queue()
         self._midi_queue: "queue.Queue[MidiEvent]" = queue.Queue()
 
-        self._mapping = MappingEngine(profile=STUDIO_PROFILE)
+        self._mapping = MappingEngine(profile=self._default_profile)
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._websocket_output = WebSocketOutputAdapter()
         self._monitor = SignalMonitor()
@@ -85,7 +113,7 @@ class DragonMidiWindow(QMainWindow):
             on_connection_change=self._on_midi_connection_change,
             on_error=lambda active: self._monitor.set_error("midi", active),
             on_reset_mapping=self._mapping.reset,
-            profile=STUDIO_PROFILE,
+            profile=self._default_profile,
         )
 
         self._build_ui()
@@ -105,20 +133,29 @@ class DragonMidiWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
 
+        default_index = next(i for i, p in enumerate(self._controller_profiles) if p is self._default_profile)
+
         profile_form = QGridLayout()
         profile_form.addWidget(QLabel("Controller"), 0, 0)
         self._profile_combo = QComboBox()
-        self._profile_combo.addItems([profile.name for profile in CONTROLLER_PROFILES])
-        # Connected after addItems() so populating the combo (index -1 -> 0) doesn't
-        # itself fire a redundant initial profile switch - the engine/adapter already
-        # start on CONTROLLER_PROFILES[0] (nanoKONTROL Studio) from their constructors.
+        self._profile_combo.addItems([profile.name for profile in self._controller_profiles])
+        # setCurrentIndex() before connecting the signal, so selecting the default
+        # profile (which may not be index 0 - the dropdown lists user-local profiles
+        # first, @spec PROFILE-LOAD-004) doesn't itself fire a redundant initial
+        # profile switch - the engine/adapter already start on self._default_profile
+        # from their constructors.
+        self._profile_combo.setCurrentIndex(default_index)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         profile_form.addWidget(self._profile_combo, 0, 1)
         layout.addLayout(profile_form)
 
-        self._profile_hint_label = QLabel(NANOKONTROL2_SETUP_HINT)
-        self._profile_hint_label.setVisible(False)
+        self._profile_hint_label = QLabel(self._default_profile.setup_hint or "")
+        self._profile_hint_label.setVisible(show_setup_hint(self._default_profile.setup_hint))
         layout.addWidget(self._profile_hint_label)
+
+        load_failure_text = config_load_failure_label(len(self._load_result.failures))
+        if load_failure_text is not None:
+            layout.addWidget(QLabel(load_failure_text))
 
         self._midi_row = IndicatorRow("MIDI signal")
         self._dragonframe_row = IndicatorRow("Dragonframe signal")
@@ -157,10 +194,11 @@ class DragonMidiWindow(QMainWindow):
         Adapter to disconnect (if connected) and start matching the new pattern
         (@spec MIDI-PROFILE-005, MIDI-PROFILE-006).
         """
-        profile = CONTROLLER_PROFILES[index]
+        profile = self._controller_profiles[index]
         self._mapping.set_profile(profile)
         self._midi.set_profile(profile)
-        self._profile_hint_label.setVisible(show_nanokontrol2_setup_hint(profile.name))  # @spec UI-PROFILE-003
+        self._profile_hint_label.setText(profile.setup_hint or "")
+        self._profile_hint_label.setVisible(show_setup_hint(profile.setup_hint))  # @spec UI-PROFILE-003
         self._mapping_view.refresh()
 
     def _on_apply_clicked(self) -> None:

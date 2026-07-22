@@ -1,6 +1,6 @@
 """Tests for the Status UI's pure presentation logic (docs/specs/app-ui.md § Status UI).
 
-@spec UI-STATUS-001, UI-STATUS-002, UI-STATUS-003, UI-STATUS-004
+@spec UI-STATUS-001, UI-STATUS-002, UI-STATUS-003, UI-STATUS-004, UI-PROFILE-003, UI-PROFILE-004
 """
 
 from __future__ import annotations
@@ -11,9 +11,10 @@ from hypothesis import strategies as st
 from dragonmidi.signal_monitor import ChannelState, SignalMonitor
 from dragonmidi.status_presenter import (
     compute_status_snapshot,
+    config_load_failure_label,
     dragonframe_indicator,
     midi_indicator,
-    show_nanokontrol2_setup_hint,
+    show_setup_hint,
 )
 
 # --- UI-STATUS-002: label reflects connection status, independent of channel state ---
@@ -118,16 +119,54 @@ def test_snapshot_waiting_label_reflects_selected_profile_when_disconnected(fake
     assert snapshot.midi.label == "Waiting for nanoKONTROL2…"
 
 
-# --- UI-PROFILE-003: nanoKONTROL2 setup hint visibility ---
+# --- UI-PROFILE-003: setup hint visibility is config-driven, not name-keyed ---
+# Generalizes the prior nanoKONTROL2-only `show_nanokontrol2_setup_hint` (PROFILE-LOAD-009):
+# visibility now depends solely on whether the active profile's `setup_hint` field is
+# non-empty, regardless of which profile that happens to be.
 
 
 # @spec UI-PROFILE-003
-def test_setup_hint_shown_only_for_nanokontrol2() -> None:
-    assert show_nanokontrol2_setup_hint("nanoKONTROL2") is True
-    assert show_nanokontrol2_setup_hint("nanoKONTROL Studio") is False
+def test_setup_hint_shown_when_present() -> None:
+    assert show_setup_hint("Hold SET MARKER + CYCLE while powering on for CC mode") is True
 
 
-@given(name=st.text(min_size=1, max_size=20).filter(lambda n: n != "nanoKONTROL2"))
 # @spec UI-PROFILE-003
-def test_setup_hint_hidden_for_any_other_profile_name(name: str) -> None:
-    assert show_nanokontrol2_setup_hint(name) is False
+def test_setup_hint_hidden_when_absent_or_empty() -> None:
+    assert show_setup_hint(None) is False
+    assert show_setup_hint("") is False
+
+
+@given(text=st.text(min_size=1, max_size=40))
+# @spec UI-PROFILE-003
+def test_setup_hint_shown_for_any_nonempty_text_regardless_of_profile_identity(text: str) -> None:
+    assert show_setup_hint(text) is True
+
+
+# --- UI-PROFILE-004: config load-failure count indicator ---
+
+
+# @spec UI-PROFILE-004
+def test_load_failure_label_absent_when_count_is_zero() -> None:
+    assert config_load_failure_label(0) is None
+
+
+# @spec UI-PROFILE-004
+def test_load_failure_label_uses_correct_singular_and_plural_noun() -> None:
+    assert config_load_failure_label(1) == "1 controller config file failed to load"
+    assert config_load_failure_label(2) == "2 controller config files failed to load"
+
+
+@given(count=st.integers(min_value=1, max_value=50))
+# @spec UI-PROFILE-004
+def test_load_failure_label_present_and_mentions_the_count_for_any_positive_count(count: int) -> None:
+    label = config_load_failure_label(count)
+    assert label is not None
+    assert str(count) in label
+
+
+# @spec UI-PROFILE-004
+def test_load_failure_label_and_setup_hint_are_independent() -> None:
+    # Both can be non-empty/shown at the same time - the two answer different
+    # questions and neither implies anything about the other (docs/llds/app-ui.md).
+    assert show_setup_hint("Hold SET MARKER + CYCLE") is True
+    assert config_load_failure_label(1) is not None

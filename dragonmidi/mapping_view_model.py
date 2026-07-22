@@ -2,29 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .mapping import FADER_KEYS, JOG_WHEEL_CC, MappingEngine, bank_fader_key
+from .mapping import JOG_WHEEL_CC, MappingEngine
 
 _Key = tuple[str, "int | None"]
 
 # @spec UI-MAP-012
 JOG_WHEEL_ROW_KEY: _Key = ("cc", JOG_WHEEL_CC)
 JOG_WHEEL_ARC_ROW_KEY: _Key = ("jog_wheel_keystroke", None)
-
-
-def _numbered(prefix: str, start_cc: int, count: int) -> dict[_Key, str]:
-    return {("cc", start_cc + i): f"{prefix} {i + 1}" for i in range(count)}
-
-
-CONTROL_NAMES: dict[_Key, str] = {
-    **_numbered("Fader Channel", 0, 8),
-    ("cc", 45): "Transport Record",
-    ("cc", 41): "Play",
-    ("cc", 43): "Rewind",
-    ("cc", 44): "Fast Forward",
-    ("cc", 58): "Previous Track",
-    ("cc", 59): "Next Track",
-    ("korg_scene", None): "Scene",
-}
 
 _TRIGGER_LABELS = {"absolute": "Absolute", "press": "Press"}
 
@@ -42,7 +26,7 @@ def _format_bound(value: float) -> str:
 
 
 def _target_label(key: _Key, engine: MappingEngine) -> tuple[str, str]:
-    if key in FADER_KEYS:
+    if key in engine.profile.fader_keys:
         if engine.is_axis_mode(key):
             axis = engine.axis_target(key)
             if axis is not None:
@@ -102,14 +86,10 @@ def _jog_wheel_rows(channel: int) -> list[RowView]:
     ]
 
 
-_STOP_ROW_KEY: _Key = ("cc", 42)
-_CYCLE_ROW_KEY: _Key = ("cc", 46)
-_SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for CC32-39
-_PREV_MARKER_ROW_KEY: _Key = ("cc", 61)
-_NEXT_MARKER_ROW_KEY: _Key = ("cc", 62)
+_SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for all 8 Solo CCs
 
 
-def _websocket_target_rows(channel: int) -> list[RowView]:
+def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
     """Stop, Cycle, Solo 1-8, and Previous/Next Marker target the WebSocket Output
     Adapter (docs/llds/websocket-output.md), not OSC. Stop/Cycle/Marker were removed
     from OPINIONATED_MAP entirely (MAP-WS-009) and Solo was removed from bank
@@ -117,59 +97,81 @@ def _websocket_target_rows(channel: int) -> list[RowView]:
     opinionated-map loop below - rendered as fixed rows here instead, the same
     treatment as the jog wheel's rows for entries that aren't table lookups. Solo
     gets one summary row for all 8 buttons, not eight near-identical rows and not
-    folded into the fader rows (docs/llds/app-ui.md § Mapping View). Present under
-    both Controller Profiles, unlike the jog wheel/Scene rows - only the channel
-    shown varies.
+    folded into the fader rows (docs/llds/app-ui.md § Mapping View). Present for any
+    profile that declares these keys (`ControllerProfile.websocket_keys`) - a profile
+    that omits one (e.g. no `cycle` in its `controls:` block) simply has no row for
+    it, the same "absent, not disabled" treatment used elsewhere.
 
-    @spec UI-MAP-001, UI-MAP-013
+    @spec UI-MAP-001, UI-MAP-013, MAP-CONFIG-005
     """
-    return [
-        RowView(
-            key=_STOP_ROW_KEY,
-            name="Stop",
-            midi_source=midi_source_label(_STOP_ROW_KEY, channel),
-            trigger="Press",
-            target_type="WebSocket",
-            target="E-Stop",
-            editable=False,
-        ),
-        RowView(
-            key=_CYCLE_ROW_KEY,
-            name="Cycle",
-            midi_source=midi_source_label(_CYCLE_ROW_KEY, channel),
-            trigger="Press",
-            target_type="WebSocket",
-            target="select-AXn (cycling)",
-            editable=False,
-        ),
-        RowView(
-            key=_SOLO_ROW_KEY,
-            name="Solo 1-8",
-            midi_source=f"CC32-39, ch{channel + 1}",
-            trigger="Press",
-            target_type="WebSocket",
-            target="select-AX1 – select-AX8 (button N → AXN)",
-            editable=False,
-        ),
-        RowView(
-            key=_PREV_MARKER_ROW_KEY,
-            name="Previous Marker",
-            midi_source=midi_source_label(_PREV_MARKER_ROW_KEY, channel),
-            trigger="Press",
-            target_type="WebSocket",
-            target="Jog All (backward)",
-            editable=False,
-        ),
-        RowView(
-            key=_NEXT_MARKER_ROW_KEY,
-            name="Next Marker",
-            midi_source=midi_source_label(_NEXT_MARKER_ROW_KEY, channel),
-            trigger="Press",
-            target_type="WebSocket",
-            target="Jog All (forward)",
-            editable=False,
-        ),
-    ]
+    channel = engine.profile.default_channel
+    ws_keys = engine.profile.websocket_keys
+    rows: list[RowView] = []
+    if ws_keys is None:
+        return rows
+
+    if ws_keys.stop is not None:
+        rows.append(
+            RowView(
+                key=ws_keys.stop,
+                name="Stop",
+                midi_source=midi_source_label(ws_keys.stop, channel),
+                trigger="Press",
+                target_type="WebSocket",
+                target="E-Stop",
+                editable=False,
+            )
+        )
+    if ws_keys.cycle is not None:
+        rows.append(
+            RowView(
+                key=ws_keys.cycle,
+                name="Cycle",
+                midi_source=midi_source_label(ws_keys.cycle, channel),
+                trigger="Press",
+                target_type="WebSocket",
+                target="select-AXn (cycling)",
+                editable=False,
+            )
+        )
+    if ws_keys.solos:
+        solo_ccs = sorted(number for _, number in ws_keys.solos)
+        rows.append(
+            RowView(
+                key=_SOLO_ROW_KEY,
+                name="Solo 1-8",
+                midi_source=f"CC{solo_ccs[0]}-{solo_ccs[-1]}, ch{channel + 1}",
+                trigger="Press",
+                target_type="WebSocket",
+                target="select-AX1 – select-AX8 (button N → AXN)",
+                editable=False,
+            )
+        )
+    if ws_keys.previous_marker is not None:
+        rows.append(
+            RowView(
+                key=ws_keys.previous_marker,
+                name="Previous Marker",
+                midi_source=midi_source_label(ws_keys.previous_marker, channel),
+                trigger="Press",
+                target_type="WebSocket",
+                target="Jog All (backward)",
+                editable=False,
+            )
+        )
+    if ws_keys.next_marker is not None:
+        rows.append(
+            RowView(
+                key=ws_keys.next_marker,
+                name="Next Marker",
+                midi_source=midi_source_label(ws_keys.next_marker, channel),
+                trigger="Press",
+                target_type="WebSocket",
+                target="Jog All (forward)",
+                editable=False,
+            )
+        )
+    return rows
 
 
 def build_rows(engine: MappingEngine) -> list[RowView]:
@@ -187,21 +189,21 @@ def build_rows(engine: MappingEngine) -> list[RowView]:
     channel = profile.default_channel
     rows = []
     for key, entry in profile.opinionated_map.items():
-        if bank_fader_key(key) is not None:
+        if profile.bank_fader_key(key) is not None:
             continue  # Knob/Mute: folded into the Fader Channel row, not its own row
         target_type, target = _target_label(key, engine)
         rows.append(
             RowView(
                 key=key,
-                name=CONTROL_NAMES[key],
+                name=profile.control_names[key],
                 midi_source=midi_source_label(key, channel),
                 trigger=_TRIGGER_LABELS[entry.kind],
                 target_type=target_type,
                 target=target,
-                editable=key in FADER_KEYS,
+                editable=key in profile.fader_keys,
             )
         )
-    rows.extend(_websocket_target_rows(channel))
+    rows.extend(_websocket_target_rows(engine))
     if profile.has_jog_wheel:
         rows.extend(_jog_wheel_rows(channel))
     return rows
