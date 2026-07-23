@@ -311,14 +311,16 @@ class MappingView(QWidget):
 
         rescan_button = QPushButton("Rescan axes")
         rescan_button.clicked.connect(on_rescan)
-        rescan_row = QHBoxLayout()
-        rescan_row.addWidget(rescan_button)
-        rescan_row.addStretch(1)
+        # Shares a row with the Group indicator, pushed to the far right
+        # (2026-07-23, user's explicit choice) - the indicator keeps its own
+        # centered layout within the stretch-1 space to its left.
+        group_and_rescan_row = QHBoxLayout()
+        group_and_rescan_row.addWidget(self._group_indicator, 1)
+        group_and_rescan_row.addWidget(rescan_button)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self._group_indicator)
+        layout.addLayout(group_and_rescan_row)
         layout.addWidget(self._table)
-        layout.addLayout(rescan_row)
 
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -338,6 +340,17 @@ class MappingView(QWidget):
         for column in range(self._table.columnCount()):
             width += self._table.columnWidth(column)
         return width
+
+    def table_height_hint(self) -> int:
+        """Total height needed to show the Group indicator/Rescan row and every
+        table row without clipping/scrolling (2026-07-23, user's explicit
+        choice) - `QTableWidget.sizeHint()` doesn't scale with row count, so the
+        main window can't rely on it (the same reason `table_width_hint()`
+        above exists); used by the main window to size itself on first show."""
+        table_height = self._table.horizontalHeader().height() + self._table.frameWidth() * 2
+        for row in range(self._table.rowCount()):
+            table_height += self._table.rowHeight(row)
+        return self._group_indicator.sizeHint().height() + self.layout().spacing() + table_height
 
     def _on_axis_change(self, key, group: int, name: str, min_value: float, max_value: float) -> None:
         self._engine.set_axis_target(key, group, name, min_value, max_value)

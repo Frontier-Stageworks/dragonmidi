@@ -6,12 +6,11 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -43,6 +42,7 @@ APP_TITLE = "DragonMIDI"
 DISCOVERY_POLL_MS = 2000
 UI_TICK_MS = 30
 DEFAULT_PROFILE_NAME = "nanoKONTROL Studio"
+_REPO_URL = "https://github.com/Frontier-Stageworks/dragonmidi"
 # Fixed maximum widths for the host/port fields (2026-07-23, user's explicit
 # choice) - sized to their longest realistic content (an IPv4 address/short
 # hostname, and a 5-digit port number) rather than stretching to fill the row.
@@ -51,6 +51,9 @@ _PORT_FIELD_MAX_WIDTH = 55
 # Bounded the same way as the host/port fields - a controller name has no
 # reason to claim more than this much width (2026-07-23, user's explicit choice).
 _CONTROLLER_COMBO_MAX_WIDTH = 250
+# Fixed width for the "Sending to"/"Listen port" labels so both rows' fields
+# start at the same x position regardless of label text length.
+_NETWORK_LABEL_WIDTH = 90
 
 # Evokes the app icon's own light/dark grey palette (2026-07-23, user's explicit
 # choice, superseding the initial cream/mustard pass) - colors sampled directly
@@ -220,11 +223,10 @@ class DragonMidiWindow(QMainWindow):
         layout.addWidget(title_label)
 
         top_row = QHBoxLayout()
-        top_row.addWidget(self._build_status_group())
-        top_row.addWidget(self._build_configuration_group())
+        top_row.addWidget(self._build_status_group(), alignment=Qt.AlignTop)
+        top_row.addWidget(self._build_configuration_group(), alignment=Qt.AlignTop)
         layout.addLayout(top_row)
 
-        layout.addWidget(QLabel("Mapping"))
         self._mapping_view = MappingView(
             self._mapping,
             self._axis_discovery,
@@ -233,8 +235,23 @@ class DragonMidiWindow(QMainWindow):
         )
         layout.addWidget(self._mapping_view, 1)
 
+        footer_label = QLabel(f'Developed by Frontier Stageworks · MIT License · <a href="{_REPO_URL}">{_REPO_URL}</a>')
+        footer_label.setOpenExternalLinks(True)
+        footer_label.setAlignment(Qt.AlignCenter)
+        footer_label.setStyleSheet("font-size: 11px;")
+        layout.addWidget(footer_label)
+
         self.setCentralWidget(central)
-        self.resize(self._mapping_view.table_width_hint() + 60, 700)
+        # QTableWidget.sizeHint() doesn't scale with row count, so Qt's own
+        # central.sizeHint() under-reports how tall the window needs to be to
+        # show every fader row without scrolling (2026-07-23, user's explicit
+        # choice) - isolate everything *except* the Mapping View (which Qt sizes
+        # correctly on its own) and substitute the Mapping View's own explicit
+        # height hint (`table_height_hint()`, the same fix `table_width_hint()`
+        # already applies for width) in its place.
+        central.adjustSize()
+        chrome_height = central.sizeHint().height() - self._mapping_view.sizeHint().height()
+        self.resize(self._mapping_view.table_width_hint() + 60, chrome_height + self._mapping_view.table_height_hint())
 
     def _build_status_group(self) -> QGroupBox:
         group = QGroupBox("Status")
@@ -250,12 +267,17 @@ class DragonMidiWindow(QMainWindow):
         """Controller selection and network settings share one "Configuration"
         panel, side-by-side with Status (2026-07-23, user's explicit choice) -
         both are settings a user sets and rarely revisits, unlike Status's
-        continuously-live indicators."""
+        continuously-live indicators. Deliberately compact (user's explicit
+        choice): Controller dropdown and the Configuration button share one row,
+        Apply shares the "Sending to" row rather than getting its own, and a
+        trailing stretch keeps the box's rendered height at its content's
+        natural size rather than whatever height its `Qt.AlignTop`-aligned
+        sibling forces the row to."""
         group = QGroupBox("Configuration")
         layout = QVBoxLayout(group)
 
-        combo_row = QHBoxLayout()
-        combo_row.addWidget(QLabel("Controller"))
+        controller_row = QHBoxLayout()
+        controller_row.addWidget(QLabel("Controller"))
         self._profile_combo = QComboBox()
         self._profile_combo.addItems([profile.name for profile in self._controller_profiles])
         self._profile_combo.setMaximumWidth(_CONTROLLER_COMBO_MAX_WIDTH)
@@ -267,17 +289,14 @@ class DragonMidiWindow(QMainWindow):
         # from their constructors.
         self._profile_combo.setCurrentIndex(default_index)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
-        combo_row.addWidget(self._profile_combo)
-        combo_row.addStretch(1)
-        layout.addLayout(combo_row)
+        controller_row.addWidget(self._profile_combo)
 
         self._configuration_dialog = ConfigurationDialog(self._mapping)
         configuration_button = QPushButton("Configuration…")
         configuration_button.clicked.connect(self._on_configuration_clicked)
-        configuration_row = QHBoxLayout()
-        configuration_row.addWidget(configuration_button)
-        configuration_row.addStretch(1)
-        layout.addLayout(configuration_row)
+        controller_row.addWidget(configuration_button)
+        controller_row.addStretch(1)
+        layout.addLayout(controller_row)
 
         self._profile_hint_label = QLabel(self._default_profile.setup_hint or "")
         self._profile_hint_label.setVisible(show_setup_hint(self._default_profile.setup_hint))
@@ -287,32 +306,34 @@ class DragonMidiWindow(QMainWindow):
         if load_failure_text is not None:
             layout.addWidget(QLabel(load_failure_text))
 
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+        sending_to_label = QLabel("Sending to")
+        sending_to_label.setFixedWidth(_NETWORK_LABEL_WIDTH)
+        listen_port_label = QLabel("Listen port")
+        listen_port_label.setFixedWidth(_NETWORK_LABEL_WIDTH)
 
-        sending_to_container = QWidget()
-        sending_to_row = QHBoxLayout(sending_to_container)
-        sending_to_row.setContentsMargins(0, 0, 0, 0)
+        sending_to_row = QHBoxLayout()
+        sending_to_row.addWidget(sending_to_label)
         self._host_edit = QLineEdit(self._config.applied.host)
         self._host_edit.setMaximumWidth(_HOST_FIELD_MAX_WIDTH)
         self._df_port_edit = QLineEdit(str(self._config.applied.dragonframe_port))
         self._df_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
         sending_to_row.addWidget(self._host_edit)
         sending_to_row.addWidget(self._df_port_edit)
-        form.addRow("Sending to", sending_to_container)
-
-        self._listen_port_edit = QLineEdit(str(self._config.applied.listen_port))
-        self._listen_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
-        form.addRow("Listen port", self._listen_port_edit)
-        layout.addLayout(form)
-
+        sending_to_row.addStretch(1)
         apply_button = QPushButton("Apply")
         apply_button.clicked.connect(self._on_apply_clicked)
-        apply_row = QHBoxLayout()
-        apply_row.addWidget(apply_button)
-        apply_row.addStretch(1)
-        layout.addLayout(apply_row)
+        sending_to_row.addWidget(apply_button)
+        layout.addLayout(sending_to_row)
 
+        listen_port_row = QHBoxLayout()
+        listen_port_row.addWidget(listen_port_label)
+        self._listen_port_edit = QLineEdit(str(self._config.applied.listen_port))
+        self._listen_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
+        listen_port_row.addWidget(self._listen_port_edit)
+        listen_port_row.addStretch(1)
+        layout.addLayout(listen_port_row)
+
+        layout.addStretch(1)
         return group
 
     def _on_midi_connection_change(self, connected: bool, device_name: str | None) -> None:
