@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Mapping, Sequence
 
 from .controller_profile import ControllerProfile
 from .events import KeyCombo, MidiEvent, OscMessage, WebSocketCommand
@@ -58,7 +58,7 @@ class ControlsConfig:
     mutes: tuple[int, ...]
     solos: tuple[int, ...]
     transport: Mapping[str, int]
-    jog_wheel: "int | None"
+    jog_wheel: int | None
 
 
 @dataclass(frozen=True)
@@ -71,10 +71,10 @@ class WebSocketKeys:
     @spec MAP-CONFIG-005
     """
 
-    stop: "_Key | None"
-    cycle: "_Key | None"
-    previous_marker: "_Key | None"
-    next_marker: "_Key | None"
+    stop: _Key | None
+    cycle: _Key | None
+    previous_marker: _Key | None
+    next_marker: _Key | None
     solos: tuple[_Key, ...]
 
 
@@ -87,8 +87,8 @@ class GroupKeys:
     @spec MAP-GROUP-003
     """
 
-    previous: "_Key | None"
-    next: "_Key | None"
+    previous: _Key | None
+    next: _Key | None
 
 
 # Bank membership: Bank N = Fader N, Knob N, Mute N (Record N/Select N excluded, no
@@ -171,7 +171,7 @@ def build_opinionated_map(controls: ControlsConfig, has_scene_button: bool) -> d
 def build_websocket_keys(controls: ControlsConfig) -> WebSocketKeys:
     """@spec MAP-CONFIG-005"""
 
-    def _key(name: str) -> "_Key | None":
+    def _key(name: str) -> _Key | None:
         cc = controls.transport.get(name)
         return ("cc", cc) if cc is not None else None
 
@@ -184,7 +184,7 @@ def build_websocket_keys(controls: ControlsConfig) -> WebSocketKeys:
     )
 
 
-def build_bank_membership(controls: ControlsConfig) -> "dict[str, object]":
+def build_bank_membership(controls: ControlsConfig) -> dict[str, object]:
     """Positional (not CC-arithmetic) Fader<->Knob/Mute pairing: Bank N = index N-1
     in each of `faders`/`knobs`/`mutes`. Returns the five pieces `ControllerProfile`
     stores directly (`fader_keys`, `knob_to_fader`, `mute_to_fader`, `fader_to_knob`,
@@ -208,7 +208,7 @@ def build_bank_membership(controls: ControlsConfig) -> "dict[str, object]":
 def build_group_keys(controls: ControlsConfig) -> GroupKeys:
     """@spec MAP-GROUP-003, MAP-GROUP-006"""
 
-    def _key(name: str) -> "_Key | None":
+    def _key(name: str) -> _Key | None:
         cc = controls.transport.get(name)
         return ("cc", cc) if cc is not None else None
 
@@ -237,7 +237,7 @@ def build_profile(
     has_jog_wheel: bool,
     has_scene_button: bool,
     controls: ControlsConfig,
-    setup_hint: "str | None" = None,
+    setup_hint: str | None = None,
 ) -> ControllerProfile:
     """Assembles a `ControllerProfile` from a `ControlsConfig`, validating it first
     and deriving every controls-dependent field (opinionated map, WebSocket keys,
@@ -494,7 +494,7 @@ class MappingEngine:
             self._previous_value.pop(key, None)
             self._axis_position.pop(key, None)
 
-    def load_group_axis_targets(self, bank_axes: "dict[int, dict[int, dict]]") -> None:
+    def load_group_axis_targets(self, bank_axes: dict[int, dict[int, dict]]) -> None:
         """Bulk-populate `_group_axis_targets` directly from the Preset Store's
         validated, JSON-native shape (`{bank_index: {group_index: {"axis_name",
         "min", "max"}}}`), translating Bank index -> fader key via
@@ -514,7 +514,7 @@ class MappingEngine:
             for group, entry in groups.items():
                 self._group_axis_targets[(fader_key, group)] = _AxisTarget(entry["axis_name"], entry["min"], entry["max"])
 
-    def dump_group_axis_targets(self) -> "dict[int, dict[int, dict]]":
+    def dump_group_axis_targets(self) -> dict[int, dict[int, dict]]:
         """Reverse of `load_group_axis_targets`, for the Preset Store to write out.
 
         @spec MAP-STORE-002
@@ -532,7 +532,7 @@ class MappingEngine:
             }
         return result
 
-    def process(self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None) -> OscMessage | None:
+    def process(self, event: MidiEvent, now: float, axis_positions: dict[str, float] | None = None) -> OscMessage | None:
         """`axis_positions` is the OSC Listener's most recently observed position per
         axis name (`AxisDiscovery.axes`), if available - used to clamp Knob N's nudges
         against Dragonframe's actual reported position rather than only an internal
@@ -640,7 +640,7 @@ class MappingEngine:
         now: float,
         fader_key: _Key,
         axis_target: _AxisTarget,
-        axis_positions: "dict[str, float] | None",
+        axis_positions: dict[str, float] | None,
     ) -> OscMessage | None:
         """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-005, MAP-BANK-008"""
         axis_path = f"/dragonframe/axis/{axis_target.axis_name}"
@@ -712,7 +712,7 @@ class MappingEngine:
             return None
         return _STEP_MOCO_FORWARD if raw < 64 else _STEP_MOCO_BACKWARD
 
-    def process_websocket(self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None) -> WebSocketCommand | None:
+    def process_websocket(self, event: MidiEvent, now: float, axis_positions: dict[str, float] | None = None) -> WebSocketCommand | None:
         """Third, independent output path alongside `process()`/`process_keystroke()`,
         for Stop, Cycle, Solo 1-8, and Previous/Next Marker - the WebSocket-targeted
         controls (`docs/llds/static-mapping.md § WebSocket-Targeted Controls`). Each of

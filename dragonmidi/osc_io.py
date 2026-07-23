@@ -4,7 +4,8 @@ import socket
 import struct
 import threading
 import time
-from typing import Any, Callable, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 # @spec OSC-CONFIG-001
 DEFAULT_DRAGONFRAME_HOST = "127.0.0.1"
@@ -24,7 +25,7 @@ class UdpSocket(Protocol):
     """
 
     def bind(self, address: tuple[str, int]) -> None: ...
-    def settimeout(self, value: "float | None") -> None: ...
+    def settimeout(self, value: float | None) -> None: ...
     def sendto(self, data: bytes, address: tuple[str, int]) -> int: ...
     def recvfrom(self, bufsize: int) -> tuple[bytes, Any]: ...
     def close(self) -> None: ...
@@ -181,7 +182,7 @@ class OscClient:
         self,
         host: str = DEFAULT_DRAGONFRAME_HOST,
         port: int = DEFAULT_DRAGONFRAME_PORT,
-        sock: "UdpSocket | None" = None,
+        sock: UdpSocket | None = None,
         on_error: Callable[[Exception], None] | None = None,
     ) -> None:
         self.host = host
@@ -222,7 +223,7 @@ class OscListener:
         port: int,
         on_activity: Callable[[], None],
         on_bind_result: Callable[[bool], None] | None = None,
-        axis_discovery: "AxisDiscovery | None" = None,
+        axis_discovery: AxisDiscovery | None = None,
         dragonframe_host: str | None = None,
         dragonframe_port: int | None = None,
         socket_factory: Callable[[], UdpSocket] = _real_udp_socket,
@@ -234,7 +235,7 @@ class OscListener:
         self._dragonframe_host = dragonframe_host
         self._dragonframe_port = dragonframe_port
         self._socket_factory = socket_factory
-        self._socket: "UdpSocket | None" = None
+        self._socket: UdpSocket | None = None
         self._thread: threading.Thread | None = None
         self._running = False
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 
 def _normalize(name: str) -> str:
@@ -38,14 +39,14 @@ class ControllerProfile:
     opinionated_map: Mapping[Any, Any]
     websocket_keys: Any = None
     group_keys: Any = None  # @spec MAP-GROUP-003; built by mapping.build_group_keys()
-    setup_hint: "str | None" = None
+    setup_hint: str | None = None
     # Bank membership - positional, not CC-arithmetic (@spec MAP-CONFIG-008):
-    fader_keys: "frozenset[Any]" = frozenset()
+    fader_keys: frozenset[Any] = frozenset()
     knob_to_fader: Mapping[Any, Any] = None  # type: ignore[assignment]
     mute_to_fader: Mapping[Any, Any] = None  # type: ignore[assignment]
     fader_to_knob: Mapping[Any, Any] = None  # type: ignore[assignment]
     control_names: Mapping[Any, str] = None  # type: ignore[assignment]
-    bank_fader_keys: "tuple[Any, ...]" = ()  # ordered, index 0 = Bank 1 (@spec MAP-STORE-001)
+    bank_fader_keys: tuple[Any, ...] = ()  # ordered, index 0 = Bank 1 (@spec MAP-STORE-001)
 
     def __post_init__(self) -> None:
         # Frozen dataclass - can't assign fields directly; enforce empty-dict

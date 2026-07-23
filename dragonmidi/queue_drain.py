@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import queue
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from typing import TypeVar
 
 T = TypeVar("T")
 
 
-def drain_queue(q: "queue.Queue[T]", handler: Callable[[T], None]) -> int:
+def drain_queue(q: queue.Queue[T], handler: Callable[[T], None]) -> int:
     """Fully drain a queue on every call, with no per-call cap.
 
     @spec UI-THREAD-001

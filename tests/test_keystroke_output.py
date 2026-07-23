@@ -11,7 +11,7 @@ from dragonmidi.keystroke_output import KeystrokeOutputAdapter
 
 
 class FakeKeystrokeBackend:
-    def __init__(self, fail_on: "set[str] | None" = None) -> None:
+    def __init__(self, fail_on: set[str] | None = None) -> None:
         self.calls: list[tuple[str, str]] = []
         self._fail_on = fail_on or set()
 

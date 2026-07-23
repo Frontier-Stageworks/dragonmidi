@@ -41,3 +41,10 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 150
+
+[tool.ruff.lint]
+# Explicit allowlist, not ruff's built-in default - matching the sibling
+# Stagehand project's pattern, so a ruff upgrade can't silently expand what's
+# linted (ruff 0.16.0 raised its unconfigured-default rule count from ~61 to
+# ~415, which is what motivated pinning this down explicitly).
+select = ["E", "F", "W"]

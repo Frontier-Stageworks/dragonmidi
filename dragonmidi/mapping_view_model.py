@@ -278,12 +278,12 @@ def build_configuration_rows(engine: MappingEngine) -> list[RowView]:
 @dataclass(frozen=True)
 class AxisPickerState:
     enabled: bool
-    placeholder: "str | None"
+    placeholder: str | None
     candidates: tuple[str, ...]
-    current: "str | None"
+    current: str | None
 
 
-def axis_picker_state(configured_name: "str | None", axes: "dict[str, float] | None") -> AxisPickerState:
+def axis_picker_state(configured_name: str | None, axes: dict[str, float] | None) -> AxisPickerState:
     """Renders the axis-name picker's three discovery states, always carrying
     the row's configured name through as `current` regardless of whether it's
     still a live candidate.
@@ -297,7 +297,7 @@ def axis_picker_state(configured_name: "str | None", axes: "dict[str, float] | N
     return AxisPickerState(enabled=True, placeholder=None, candidates=tuple(sorted(axes)), current=configured_name)
 
 
-def group_axis_picker_states(engine: MappingEngine, key: _Key, axes: "dict[str, float] | None") -> tuple[AxisPickerState, ...]:
+def group_axis_picker_states(engine: MappingEngine, key: _Key, axes: dict[str, float] | None) -> tuple[AxisPickerState, ...]:
     """The 5 per-Group axis-picker states for one fader row (leftmost = Group 1).
     All 5 share the same discovered-name candidate list, since axis discovery is
     project-wide, not per-Group - only each picker's `current` selection varies.
@@ -326,7 +326,7 @@ def active_group_lights(engine: MappingEngine) -> tuple[bool, ...]:
     return tuple(group == engine.active_group for group in range(1, 6))
 
 
-def parse_axis_field(text: str) -> "float | None":
+def parse_axis_field(text: str) -> float | None:
     """@spec UI-MAP-007"""
     try:
         return float(text)

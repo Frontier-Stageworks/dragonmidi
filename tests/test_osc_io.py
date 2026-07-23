@@ -250,7 +250,7 @@ class _BlockingOnceSocket:
     def bind(self, address: tuple[str, int]) -> None:
         pass
 
-    def settimeout(self, value: "float | None") -> None:
+    def settimeout(self, value: float | None) -> None:
         pass
 
     def sendto(self, data: bytes, address: tuple[str, int]) -> int:
@@ -285,7 +285,7 @@ def test_stop_drops_a_datagram_whose_receive_was_already_in_flight() -> None:
         # recvfrom() is still blocked at this point, so stop()'s own
         # thread.join(timeout=1.0) will time out and return without the thread
         # actually having exited yet, exactly like the real race on Linux CI.
-        background_thread = listener._thread  # noqa: SLF001 - test-only reach-in
+        background_thread = listener._thread  # test-only reach-in
         assert background_thread is not None
 
         listener.stop()  # flips _running False; the fake's close() does NOT unblock recvfrom()
@@ -508,7 +508,7 @@ class _FakeDragonframe:
             self._socket.settimeout(0.2)
             try:
                 data, addr = self._socket.recvfrom(65536)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

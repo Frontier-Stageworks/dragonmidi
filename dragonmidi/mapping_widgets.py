@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Callable, Iterator
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -277,7 +277,7 @@ class MappingView(QWidget):
         mapping_engine: MappingEngine,
         axis_discovery: AxisDiscovery,
         on_rescan: Callable[[], None],
-        on_group_axis_changed: "Callable[[], None] | None" = None,
+        on_group_axis_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self._engine = mapping_engine

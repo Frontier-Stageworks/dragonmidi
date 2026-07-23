@@ -17,7 +17,7 @@ from dragonmidi.queue_drain import drain_queue
 @settings(max_examples=50)
 # @spec UI-THREAD-001
 def test_drain_delivers_every_item_in_order_with_no_cap(items: list[int]) -> None:
-    q: "queue.Queue[int]" = queue.Queue()
+    q: queue.Queue[int] = queue.Queue()
     for item in items:
         q.put(item)
 
@@ -31,7 +31,7 @@ def test_drain_delivers_every_item_in_order_with_no_cap(items: list[int]) -> Non
 
 # @spec UI-THREAD-001
 def test_draining_an_already_empty_queue_calls_handler_zero_times() -> None:
-    q: "queue.Queue[int]" = queue.Queue()
+    q: queue.Queue[int] = queue.Queue()
     calls = []
     count = drain_queue(q, calls.append)
     assert count == 0
@@ -40,7 +40,7 @@ def test_draining_an_already_empty_queue_calls_handler_zero_times() -> None:
 
 # @spec UI-THREAD-001
 def test_second_drain_after_first_finds_nothing_new() -> None:
-    q: "queue.Queue[int]" = queue.Queue()
+    q: queue.Queue[int] = queue.Queue()
     q.put(1)
     q.put(2)
     first_pass: list[int] = []
@@ -56,7 +56,7 @@ def test_second_drain_after_first_finds_nothing_new() -> None:
 def test_item_enqueued_by_the_handler_mid_drain_is_picked_up_in_the_same_pass() -> None:
     # A "full drain, no cap" strategy keeps consuming until the queue reports empty,
     # so an item enqueued by the handler itself must still be caught in this same call.
-    q: "queue.Queue[int]" = queue.Queue()
+    q: queue.Queue[int] = queue.Queue()
     q.put(1)
     seen: list[int] = []
 

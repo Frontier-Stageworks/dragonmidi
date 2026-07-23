@@ -16,7 +16,7 @@ def _file_path(configurations_dir: Path, profile_name: str) -> Path:
     return configurations_dir / f"{profile_name}.json"
 
 
-def _parse_index(raw: object, low: int, high: int) -> "int | None":
+def _parse_index(raw: object, low: int, high: int) -> int | None:
     try:
         value = int(raw)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -26,7 +26,7 @@ def _parse_index(raw: object, low: int, high: int) -> "int | None":
     return value
 
 
-def _validate_entry(entry: object) -> "dict[str, object] | None":
+def _validate_entry(entry: object) -> dict[str, object] | None:
     if not isinstance(entry, dict):
         return None
     axis_name = entry.get("axis_name")
@@ -41,7 +41,7 @@ def _validate_entry(entry: object) -> "dict[str, object] | None":
     return {"axis_name": axis_name, "min": float(min_value), "max": float(max_value)}
 
 
-def load_group_axis_targets(configurations_dir: Path, profile_name: str) -> "dict[int, dict[int, dict]]":
+def load_group_axis_targets(configurations_dir: Path, profile_name: str) -> dict[int, dict[int, dict]]:
     """Loads and validates a Controller Profile's persisted (Bank, Group)
     axis-assignment table. Bounds-checks each entry's Bank index (1-8) and Group
     index (1-5) before use - closing a negative-indexing bug an unvalidated Bank
@@ -84,7 +84,7 @@ def load_group_axis_targets(configurations_dir: Path, profile_name: str) -> "dic
     return result
 
 
-def save_group_axis_targets(configurations_dir: Path, profile_name: str, bank_axes: "dict[int, dict[int, dict]]") -> None:
+def save_group_axis_targets(configurations_dir: Path, profile_name: str, bank_axes: dict[int, dict[int, dict]]) -> None:
     """Writes a Controller Profile's complete (Bank, Group) axis-assignment table,
     replacing any previous contents entirely (full rewrite, not a diff/merge).
     Creates `configurations_dir` if it doesn't exist. Fails silently on a write

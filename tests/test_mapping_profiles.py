@@ -21,7 +21,7 @@ from dragonmidi.mapping import (
     MappingEngine,
 )
 
-FADER_CCS = list(range(0, 8))
+FADER_CCS = list(range(8))
 KNOB_CCS = list(range(16, 24))
 MUTE_CCS = list(range(48, 56))
 BUTTON_CCS_TO_ADDRESS = {

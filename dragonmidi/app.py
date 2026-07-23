@@ -96,8 +96,8 @@ class DragonMidiWindow(QMainWindow):
         self._controller_profiles: tuple[ControllerProfile, ...] = self._load_result.profiles
         self._default_profile = _default_profile(self._controller_profiles)
 
-        self._activity_queue: "queue.Queue[str]" = queue.Queue()
-        self._midi_queue: "queue.Queue[MidiEvent]" = queue.Queue()
+        self._activity_queue: queue.Queue[str] = queue.Queue()
+        self._midi_queue: queue.Queue[MidiEvent] = queue.Queue()
 
         self._mapping = MappingEngine(profile=self._default_profile)
         # @spec MAP-STORE-002: load the default profile's persisted (Bank, Group)
@@ -292,7 +292,7 @@ class DragonMidiWindow(QMainWindow):
         if command is not None:
             self._websocket_output.send(command)
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override signature
+    def closeEvent(self, event) -> None:
         run_shutdown_sequence(
             [
                 self._midi.disconnect,

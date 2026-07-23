@@ -14,8 +14,8 @@ this file exercises `MidiInputAdapter`'s use of a profile's `matches()`/
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Callable
 
 from hypothesis import given
 from hypothesis import strategies as st

@@ -5,7 +5,8 @@ import json
 import logging
 import os
 import threading
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import websockets.asyncio.server as ws_server
 
@@ -52,15 +53,15 @@ class WebSocketOutputAdapter:
         self,
         hosts: tuple[str, ...] = DEFAULT_HOSTS,
         port: int = DEFAULT_PORT,
-        on_bind_result: "Callable[[bool], None] | None" = None,
+        on_bind_result: Callable[[bool], None] | None = None,
     ) -> None:
         self._hosts = hosts
         self._port = port
         self._on_bind_result = on_bind_result
-        self._loop: "asyncio.AbstractEventLoop | None" = None
-        self._thread: "threading.Thread | None" = None
-        self._server: "Server | None" = None
-        self._connection: "ServerConnection | None" = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._server: Server | None = None
+        self._connection: ServerConnection | None = None
         self._stopping = False
 
     def start(self) -> None:
@@ -95,7 +96,7 @@ class WebSocketOutputAdapter:
             ready.set()
             try:
                 loop.run_forever()
-            except BaseException:  # noqa: BLE001 - top-level accept-loop crash, WS-RUNTIME-002
+            except BaseException:  # top-level accept-loop crash, WS-RUNTIME-002
                 logger.exception("WebSocketOutputAdapter accept loop crashed")
             finally:
                 self._loop = None
@@ -111,7 +112,7 @@ class WebSocketOutputAdapter:
         if self._on_bind_result is not None:
             self._on_bind_result(ok)
 
-    async def _bind(self) -> "Server":
+    async def _bind(self) -> Server:
         return await ws_server.serve(
             self._handler,
             self._hosts,
@@ -119,7 +120,7 @@ class WebSocketOutputAdapter:
             process_request=self._process_request,
         )
 
-    def _process_request(self, connection: "ServerConnection", request: "Request") -> "Response | None":
+    def _process_request(self, connection: ServerConnection, request: Request) -> Response | None:
         """@spec WS-CONN-002, WS-CONN-003"""
         if request.path != CONNECTION_PATH:
             logger.debug(
@@ -130,19 +131,19 @@ class WebSocketOutputAdapter:
             return connection.respond(404, "not found")
         return None
 
-    async def _handler(self, connection: "ServerConnection") -> None:
+    async def _handler(self, connection: ServerConnection) -> None:
         """@spec WS-CONN-004, WS-CONN-005, WS-CONN-006"""
         previous = self._connection
         self._connection = connection
         if previous is not None:
             try:
                 await previous.close()
-            except Exception:  # noqa: BLE001 - best-effort teardown of the superseded connection
+            except Exception:  # best-effort teardown of the superseded connection
                 logger.debug("WebSocketOutputAdapter: error closing superseded connection", exc_info=True)
         try:
             async for _ in connection:
                 pass  # discard every message Dragonframe sends - WS-CONN-006
-        except Exception:  # noqa: BLE001 - connection dropped/errored, nothing to act on
+        except Exception:  # connection dropped/errored, nothing to act on
             pass
         finally:
             if self._connection is connection:
@@ -160,7 +161,7 @@ class WebSocketOutputAdapter:
             if self._connection is not None:
                 try:
                     await self._connection.close()
-                except Exception:  # noqa: BLE001 - best-effort close during shutdown
+                except Exception:  # best-effort close during shutdown
                     pass
                 self._connection = None
             if self._server is not None:
@@ -197,5 +198,5 @@ class WebSocketOutputAdapter:
             return
         try:
             await connection.send(_encode(command))
-        except Exception:  # noqa: BLE001 - a failed send must not interrupt other output paths
+        except Exception:  # a failed send must not interrupt other output paths
             logger.exception("WebSocketOutputAdapter: send failed for %r", command)

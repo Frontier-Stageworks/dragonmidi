@@ -38,13 +38,13 @@ class _FakeDragonframeClient:
     """
 
     def __init__(self, port: int, path: str = CONNECTION_PATH, host: str = "127.0.0.1") -> None:
-        self._received: "queue.Queue[str]" = queue.Queue()
+        self._received: queue.Queue[str] = queue.Queue()
         self._loop = asyncio.new_event_loop()
         self._connected = threading.Event()
         self._closed = threading.Event()
         self._connect_error: list[BaseException] = []
         self._ws = None
-        self._main_task: "asyncio.Task | None" = None
+        self._main_task: asyncio.Task | None = None
         self._thread = threading.Thread(target=self._run, args=(host, port, path), daemon=True)
         self._thread.start()
         if not self._connected.wait(timeout=2.0):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Callable
 
 from .osc_io import (
     DEFAULT_DRAGONFRAME_HOST,

@@ -24,7 +24,7 @@ from hypothesis import strategies as st
 from dragonmidi.events import KeyCombo, MidiEvent, WebSocketCommand
 from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, ControlsConfig, MappingEngine, build_profile
 
-FADER_CCS = list(range(0, 8))  # CC 0-7 -> encoder 1-8
+FADER_CCS = list(range(8))  # CC 0-7 -> encoder 1-8
 KNOB_CCS = list(range(16, 24))  # CC 16-23 -> encoder 9-16
 MUTE_CCS = list(range(48, 56))  # CC 48-55 -> encoderReset 1-8
 SOLO_CCS = list(range(32, 40))  # CC 32-39 -> WebSocket select-AX1..8 (MAP-WS-002), not OSC
@@ -1077,7 +1077,7 @@ def test_cycle_advances_through_axes_and_wraps() -> None:
     axes = {"PAN": 0.0, "TILT": 0.0, "ZOOM": 0.0}
     clock = [0.0]
 
-    def press() -> "WebSocketCommand | None":
+    def press() -> WebSocketCommand | None:
         clock[0] += 1.0  # each press well outside the 80ms debounce window
         engine.process_websocket(cc_event(CYCLE_CC, 0), now=clock[0])
         return engine.process_websocket(cc_event(CYCLE_CC, 127), now=clock[0], axis_positions=axes)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 
 def run_shutdown_sequence(steps: list[Callable[[], None]], timeout: float = 5.0) -> list[BaseException | None]:

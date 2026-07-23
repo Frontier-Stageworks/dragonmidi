@@ -29,7 +29,7 @@ from dragonmidi.mapping_view_model import (
     parse_axis_field,
 )
 
-FADER_CCS = list(range(0, 8))
+FADER_CCS = list(range(8))
 PREV_TRACK_CC = 58
 NEXT_TRACK_CC = 59
 WEBSOCKET_ROW_KEYS = [

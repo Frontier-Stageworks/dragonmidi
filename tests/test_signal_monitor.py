@@ -11,7 +11,6 @@ from hypothesis import strategies as st
 from dragonmidi.signal_monitor import ChannelState, SignalMonitor
 from tests.support import FakeClock
 
-
 # --- UI-MONITOR-001: never-seen channel is not live ---
 
 
