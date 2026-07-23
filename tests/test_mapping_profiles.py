@@ -248,7 +248,19 @@ def test_set_profile_wipes_axis_assignment() -> None:
 
     engine.set_profile(NANOKONTROL2_PROFILE)
     assert engine.axis_target(("cc", 0), 1) is None
-    assert engine.is_axis_mode(("cc", 0))  # reverted to the (default) axis mode, no encoder-mode override lingering
+
+
+# @spec MAP-PROFILE-004, MAP-AXIS-010
+def test_set_profile_resets_the_engine_wide_fader_mode_to_axis() -> None:
+    # The engine-wide fader mode (2026-07-23 reversal) is reset by a profile switch the
+    # same way the per-fader flag it replaced was - no lingering encoder-mode override
+    # survives into the newly-selected profile.
+    engine = MappingEngine()
+    engine.set_fader_mode(axis=False)
+    assert engine.is_axis_mode() is False
+
+    engine.set_profile(NANOKONTROL2_PROFILE)
+    assert engine.is_axis_mode() is True
 
 
 # @spec MAP-PROFILE-004

@@ -1,7 +1,9 @@
-"""Tests for the Mapping View's pure-Python logic (docs/specs/app-ui.md § Mapping View).
+"""Tests for the Mapping View's and Configuration Dialog's pure-Python logic
+(docs/specs/app-ui.md § Mapping View, § Configuration Dialog).
 
 @spec UI-MAP-001, UI-MAP-002, UI-MAP-004, UI-MAP-005, UI-MAP-007, UI-MAP-008
-@spec UI-MAP-011, UI-MAP-012, UI-MAP-013, UI-MAP-014, UI-MAP-015, UI-MAP-016, UI-MAP-017
+@spec UI-MAP-011, UI-MAP-014, UI-MAP-015, UI-MAP-017
+@spec UI-CFGDLG-002, UI-CFGDLG-006, UI-CFGDLG-007, UI-CFGDLG-008, UI-CFGDLG-009
 """
 
 from __future__ import annotations
@@ -10,27 +12,30 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.events import MidiEvent
-from dragonmidi.mapping import CHANNEL, NANOKONTROL2_PROFILE, OPINIONATED_MAP, OPINIONATED_MAP_NANOKONTROL2, STUDIO_PROFILE, MappingEngine
+from dragonmidi.mapping import CHANNEL, NANOKONTROL2_PROFILE, STUDIO_PROFILE, MappingEngine
 from dragonmidi.mapping_view_model import (
     JOG_WHEEL_ARC_ROW_KEY,
     JOG_WHEEL_ROW_KEY,
+    KNOB_ROW_KEY,
+    MUTE_ROW_KEY,
+    SOLO_ROW_KEY,
     AxisPickerState,
     active_group_lights,
     axis_picker_state,
-    build_rows,
+    build_configuration_rows,
+    build_fader_rows,
     group_axis_picker_states,
     midi_source_label,
     parse_axis_field,
 )
 
 FADER_CCS = list(range(0, 8))
-SOLO_CCS = list(range(32, 40))
 PREV_TRACK_CC = 58
 NEXT_TRACK_CC = 59
 WEBSOCKET_ROW_KEYS = [
     ("cc", 42),  # Stop
     ("cc", 46),  # Cycle
-    ("solo_websocket", None),  # Solo 1-8 summary row
+    SOLO_ROW_KEY,
     ("cc", 61),  # Previous Marker
     ("cc", 62),  # Next Marker
 ]
@@ -52,183 +57,166 @@ def cc_event_for_track(number: int, value: int, channel: int = CHANNEL) -> MidiE
     )
 
 
-# --- UI-MAP-001: one row per opinionated entry, in table order, except bank members ---
+# --- UI-MAP-001: Mapping View is fader rows only, one per Bank, in Bank order ---
 
 
-def test_build_rows_returns_one_row_per_non_bank_member_entry_in_table_order() -> None:
+def test_build_fader_rows_returns_exactly_the_eight_bank_fader_keys_in_order() -> None:
     engine = MappingEngine()
-    rows = build_rows(engine)
-    expected_keys = [key for key in OPINIONATED_MAP if STUDIO_PROFILE.bank_fader_key(key) is None]
-    row_keys = [row.key for row in rows]
-    # The WebSocket-targeted rows (UI-MAP-013), the two jog wheel rows (UI-MAP-012),
-    # and the two Group-switch rows (UI-MAP-016) are appended after every
-    # opinionated-map row, since none of them are themselves OPINIONATED_MAP entries
-    # as of Phase 6 (Previous/Next Track were removed from it, MAP-GROUP-003).
-    assert row_keys[: len(expected_keys)] == expected_keys
-    assert row_keys[len(expected_keys) :] == [*WEBSOCKET_ROW_KEYS, JOG_WHEEL_ROW_KEY, JOG_WHEEL_ARC_ROW_KEY, *GROUP_SWITCH_ROW_KEYS]
+    rows = build_fader_rows(engine)
+    assert [row.key for row in rows] == list(STUDIO_PROFILE.bank_fader_keys)
 
 
-def test_build_rows_excludes_knob_mute_rows() -> None:
+def test_build_fader_rows_are_all_editable() -> None:
     engine = MappingEngine()
-    rows = build_rows(engine)
+    rows = build_fader_rows(engine)
+    assert all(row.editable for row in rows)
+
+
+def test_build_fader_rows_shows_name_and_midi_source() -> None:
+    engine = MappingEngine()
+    rows = {row.key: row for row in build_fader_rows(engine)}
+    row = rows[("cc", 0)]
+    assert row.name == STUDIO_PROFILE.control_names[("cc", 0)]
+    assert row.midi_source == "CC0, ch16"
+
+
+# --- UI-CFGDLG-002: Configuration Dialog excludes the Fader row entirely ---
+
+
+def test_build_configuration_rows_excludes_every_fader_key() -> None:
+    engine = MappingEngine()
+    rows = build_configuration_rows(engine)
     row_keys = {row.key for row in rows}
-    for key in OPINIONATED_MAP:
-        if STUDIO_PROFILE.bank_fader_key(key) is not None:
-            assert key not in row_keys
+    for key in STUDIO_PROFILE.fader_keys:
+        assert key not in row_keys
 
 
-@given(cc=st.sampled_from(SOLO_CCS))
-# @spec UI-MAP-013
-def test_build_rows_excludes_individual_solo_cc_keys(cc: int) -> None:
+@given(cc=st.sampled_from(list(range(32, 40))))
+# @spec UI-CFGDLG-007
+def test_build_configuration_rows_excludes_individual_solo_cc_keys(cc: int) -> None:
     engine = MappingEngine()
-    rows = build_rows(engine)
+    rows = build_configuration_rows(engine)
     row_keys = {row.key for row in rows}
     assert ("cc", cc) not in row_keys
 
 
-# --- UI-MAP-002: only fader rows are editable ---
-
-
-def test_only_fader_rows_are_marked_editable() -> None:
+@given(cc=st.sampled_from(list(range(16, 24)) + list(range(48, 56))))
+# @spec UI-CFGDLG-006
+def test_build_configuration_rows_excludes_individual_knob_and_mute_cc_keys(cc: int) -> None:
     engine = MappingEngine()
-    rows = build_rows(engine)
-    for row in rows:
-        assert row.editable == (row.key in STUDIO_PROFILE.fader_keys)
+    rows = build_configuration_rows(engine)
+    row_keys = {row.key for row in rows}
+    assert ("cc", cc) not in row_keys
 
 
-# --- Fader row target rendering: default vs. axis-targeted vs. reverted ---
-
-
-@given(number=st.sampled_from(FADER_CCS))
-# @spec UI-MAP-011
-def test_fader_row_defaults_to_osc_axis_with_no_name_selected(number: int) -> None:
-    key = ("cc", number)
+def test_build_configuration_rows_are_never_editable() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[key]
-    assert row.target_type == "OSC axis"
-    assert row.target == ""
+    rows = build_configuration_rows(engine)
+    assert all(row.editable is False for row in rows)
 
 
-@given(number=st.sampled_from(FADER_CCS))
-# @spec MAP-AXIS-010
-def test_fader_row_shows_osc_encoder_once_explicitly_switched(number: int) -> None:
-    key = ("cc", number)
+# --- UI-CFGDLG-006: Knob (pot) and Mute collapse to one static-text row each ---
+
+
+def test_knob_row_content() -> None:
     engine = MappingEngine()
-    engine.clear_axis_target(key)
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[key]
-    assert row.target_type == "OSC encoder"
-    assert row.target == f"Encoder {number + 1}"
+    rows = {row.key: row for row in build_configuration_rows(engine)}
+    row = rows[KNOB_ROW_KEY]
+    assert row.name == "Knob (pot)"
+    assert row.midi_source == "CC16-23, ch16"
+    assert "Encoder 9-16" in row.target
+    assert "Bank-derived" in row.target
 
 
-@given(number=st.sampled_from(FADER_CCS))
-def test_fader_row_shows_osc_axis_target_once_set(number: int) -> None:
-    key = ("cc", number)
+def test_mute_row_content() -> None:
     engine = MappingEngine()
-    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[key]
-    assert row.target_type == "OSC axis"
-    assert row.target == "PAN (0-100)"
+    rows = {row.key: row for row in build_configuration_rows(engine)}
+    row = rows[MUTE_ROW_KEY]
+    assert row.name == "Mute"
+    assert row.midi_source == "CC48-55, ch16"
+    assert "Reset encoder 1-8" in row.target
+    assert "Bank-derived" in row.target
 
 
-@given(
-    number=st.sampled_from(FADER_CCS),
-    axis_name=st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=1, max_size=6),
-    min_value=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
-    max_value=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
-)
-def test_fader_row_target_formatting(number: int, axis_name: str, min_value: float, max_value: float) -> None:
-    key = ("cc", number)
+def test_knob_row_content_is_not_recomputed_by_active_group() -> None:
+    # Unlike Solo (below), Knob/Mute describe a shared rule, not a live per-Group
+    # value - the active Group must not change their text.
     engine = MappingEngine()
-    engine.set_axis_target(key, 1, axis_name, min_value, max_value)
-    rows = {row.key: row for row in build_rows(engine)}
-    assert rows[key].target == f"{axis_name} ({min_value:g}-{max_value:g})"
+    before = {row.key: row for row in build_configuration_rows(engine)}[KNOB_ROW_KEY].target
+    engine.process(cc_event_for_track(NEXT_TRACK_CC, 0), now=0.0)
+    engine.process(cc_event_for_track(NEXT_TRACK_CC, 127), now=0.0)  # Group 1 -> 2
+    after = {row.key: row for row in build_configuration_rows(engine)}[KNOB_ROW_KEY].target
+    assert before == after
 
 
-@given(number=st.sampled_from(FADER_CCS))
-def test_fader_row_reverts_to_osc_encoder_after_clear_axis_target(number: int) -> None:
-    key = ("cc", number)
+# --- UI-CFGDLG-007: Solo summary row, Group-aware text ---
+
+
+def test_solo_summary_row_content() -> None:
     engine = MappingEngine()
-    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
-    engine.clear_axis_target(key)
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[key]
-    assert row.target_type == "OSC encoder"
-    assert row.target == f"Encoder {number + 1}"
+    rows = {row.key: row for row in build_configuration_rows(engine)}
+    row = rows[SOLO_ROW_KEY]
+    assert row.name == "Solo 1-8"
+    assert row.midi_source == "CC32-39, ch16"
+    assert row.target == "select-AX1 – select-AX8 (Group 1)"
+
+
+def test_solo_summary_row_target_follows_the_active_group() -> None:
+    engine = MappingEngine()
+    engine.process(cc_event_for_track(NEXT_TRACK_CC, 0), now=0.0)
+    engine.process(cc_event_for_track(NEXT_TRACK_CC, 127), now=0.0)  # Next Track: Group 1 -> 2
+    rows = {row.key: row for row in build_configuration_rows(engine)}
+    row = rows[SOLO_ROW_KEY]
+    assert row.target == "select-AX9 – select-AX16 (Group 2)"
+
+
+# --- Single-instance rows: unchanged content, relocated ---
 
 
 def test_play_row_shows_osc_action_target() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[("cc", 41)]
-    assert row.target_type == "OSC action"
     assert row.target == "/dragonframe/play"
 
 
 def test_scene_row_shows_osc_action_target_with_no_cc_number() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[("korg_scene", None)]
-    assert row.target_type == "OSC action"
     assert row.target == "/dragonframe/black"
     assert row.midi_source == "Native Mode Scene"
 
 
-# --- UI-MAP-013: WebSocket-targeted rows (Stop, Cycle, Solo 1-8, Marker) ---
-
-
-def test_build_rows_includes_all_websocket_target_rows() -> None:
+def test_build_configuration_rows_includes_all_websocket_target_rows() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     for key in WEBSOCKET_ROW_KEYS:
         assert key in rows
-        assert rows[key].target_type == "WebSocket"
         assert rows[key].editable is False
 
 
 def test_stop_row_content() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[("cc", 42)]
     assert row.name == "Stop"
     assert row.midi_source == "CC42, ch16"
-    assert row.trigger == "Press"
     assert row.target == "E-Stop"
 
 
 def test_cycle_row_content() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[("cc", 46)]
     assert row.name == "Cycle"
     assert row.midi_source == "CC46, ch16"
     assert row.target == "select-AXn (cycling)"
 
 
-def test_solo_summary_row_content() -> None:
-    engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("solo_websocket", None)]
-    assert row.name == "Solo 1-8"
-    assert row.midi_source == "CC32-39, ch16"
-    assert row.target == "select-AX1 – select-AX8 (Group 1)"
-
-
-# @spec UI-MAP-013
-def test_solo_summary_row_target_follows_the_active_group() -> None:
-    engine = MappingEngine()
-    engine.process(cc_event_for_track(59, 0), now=0.0)
-    engine.process(cc_event_for_track(59, 127), now=0.0)  # Next Track: Group 1 -> 2
-    rows = {row.key: row for row in build_rows(engine)}
-    row = rows[("solo_websocket", None)]
-    assert row.target == "select-AX9 – select-AX16 (Group 2)"
-
-
 def test_marker_row_content() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     prev_row = rows[("cc", 61)]
     next_row = rows[("cc", 62)]
     assert prev_row.name == "Previous Marker"
@@ -239,63 +227,55 @@ def test_marker_row_content() -> None:
     assert next_row.target == "Jog All (forward)"
 
 
-# --- UI-MAP-012: jog wheel's two additional, non-editable rows ---
+# --- UI-CFGDLG-008: jog wheel's two additional, non-editable rows ---
 
 
-def test_build_rows_includes_both_jog_wheel_rows() -> None:
+def test_build_configuration_rows_includes_both_jog_wheel_rows() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     assert JOG_WHEEL_ROW_KEY in rows
     assert JOG_WHEEL_ARC_ROW_KEY in rows
 
 
 def test_jog_wheel_osc_row_content() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[JOG_WHEEL_ROW_KEY]
     assert row.name == "Jog Wheel"
     assert row.midi_source == "CC110, ch16"
-    assert row.trigger == "Directional"
-    assert row.target_type == "OSC action"
     assert row.target == "stepForward / stepBackward"
     assert row.editable is False
 
 
 def test_jog_wheel_arc_keystroke_row_content() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[JOG_WHEEL_ARC_ROW_KEY]
     assert row.name == "Jog Wheel (Arc)"
     assert row.midi_source == "CC110, ch16"
-    assert row.trigger == "Directional"
-    assert row.target_type == "Keystroke"
     assert row.target == "Option+Shift+Right / Option+Shift+Left"
     assert row.editable is False
 
 
-# --- UI-MAP-016: Previous/Next Track's fixed "Group switch" rows ---
+# --- UI-CFGDLG-009: Previous/Next Track's fixed rows ---
 
 
 def test_previous_track_row_content() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[("cc", PREV_TRACK_CC)]
     assert row.name == "Previous Track"
     assert row.midi_source == "CC58, ch16"
-    assert row.trigger == "Press"
-    assert row.target_type == "Group switch"
     assert row.target == "Previous (wraps 5→1)"
     assert row.editable is False
 
 
 def test_next_track_row_content() -> None:
     engine = MappingEngine()
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[("cc", NEXT_TRACK_CC)]
     assert row.name == "Next Track"
     assert row.midi_source == "CC59, ch16"
-    assert row.trigger == "Press"
-    assert row.target_type == "Group switch"
     assert row.target == "Next (wraps 5→1)"
     assert row.editable is False
 
@@ -331,10 +311,19 @@ def test_group_axis_picker_states_are_independent_of_editing_a_different_group()
     assert before.current == after.current == "PAN"  # Group 1's picker unaffected by Group 3's edit
 
 
-# --- UI-MAP-017: clearing one picker vs. the row-level encoder/axis toggle ---
+def test_group_axis_picker_states_are_unaffected_by_the_engine_wide_fader_mode() -> None:
+    # @spec UI-MAP-018: the Mapping View's picker grid displays regardless of mode.
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_fader_mode(axis=False)
+    states = group_axis_picker_states(engine, ("cc", 0), axes={"PAN": 0.0})
+    assert states[0].current == "PAN"
 
 
-def test_clearing_one_group_leaves_other_groups_and_axis_mode_intact() -> None:
+# --- UI-MAP-017: clearing one picker leaves other groups intact ---
+
+
+def test_clearing_one_group_leaves_other_groups_intact() -> None:
     engine = MappingEngine()
     engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
     engine.set_axis_target(("cc", 0), 2, "TILT", 0.0, 100.0)
@@ -342,7 +331,6 @@ def test_clearing_one_group_leaves_other_groups_and_axis_mode_intact() -> None:
     states = group_axis_picker_states(engine, ("cc", 0), axes={"PAN": 0.0, "TILT": 0.0})
     assert states[0].current is None  # Group 1 cleared
     assert states[1].current == "TILT"  # Group 2 untouched
-    assert engine.is_axis_mode(("cc", 0))  # still axis mode, unlike the full clear_axis_target toggle
 
 
 # --- UI-MAP-015: Group indicator lights ---
@@ -442,33 +430,30 @@ def test_parse_axis_field_rejects_unparseable_text(text: str) -> None:
 # --- Controller Profile-driven rows: nanoKONTROL2 omits jog wheel/Scene rows ---
 
 
-def test_build_rows_for_nanokontrol2_omits_jog_wheel_rows() -> None:
+def test_build_configuration_rows_for_nanokontrol2_omits_jog_wheel_rows() -> None:
     engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     assert JOG_WHEEL_ROW_KEY not in rows
     assert JOG_WHEEL_ARC_ROW_KEY not in rows
 
 
-def test_build_rows_for_nanokontrol2_omits_scene_row() -> None:
+def test_build_configuration_rows_for_nanokontrol2_omits_scene_row() -> None:
     engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     assert ("korg_scene", None) not in rows
 
 
-def test_build_rows_for_nanokontrol2_includes_only_its_own_map_entries() -> None:
+def test_build_configuration_rows_for_nanokontrol2_shows_its_own_channel() -> None:
     engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
-    rows = build_rows(engine)
-    expected_keys = [key for key in OPINIONATED_MAP_NANOKONTROL2 if NANOKONTROL2_PROFILE.bank_fader_key(key) is None]
-    row_keys = [row.key for row in rows]
-    # Same WebSocket rows as the Studio (both profiles have Stop/Cycle/Solo/Marker),
-    # but no jog wheel rows appended - has_jog_wheel is false for this profile. Both
-    # profiles declare previous_track/next_track, so both Group-switch rows appear.
-    assert row_keys == [*expected_keys, *WEBSOCKET_ROW_KEYS, *GROUP_SWITCH_ROW_KEYS]
-
-
-def test_build_rows_for_nanokontrol2_shows_its_own_channel() -> None:
-    engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
-    rows = {row.key: row for row in build_rows(engine)}
+    rows = {row.key: row for row in build_configuration_rows(engine)}
     assert rows[("cc", 41)].midi_source == "CC41, ch1"  # Play, channel 0 zero-indexed -> "ch1"
     assert rows[("cc", 42)].midi_source == "CC42, ch1"  # Stop (WebSocket row)
-    assert rows[("solo_websocket", None)].midi_source == "CC32-39, ch1"
+    assert rows[SOLO_ROW_KEY].midi_source == "CC32-39, ch1"
+    assert rows[KNOB_ROW_KEY].midi_source == "CC16-23, ch1"
+    assert rows[MUTE_ROW_KEY].midi_source == "CC48-55, ch1"
+
+
+def test_build_fader_rows_for_nanokontrol2_returns_its_own_eight_bank_fader_keys() -> None:
+    engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
+    rows = build_fader_rows(engine)
+    assert [row.key for row in rows] == list(NANOKONTROL2_PROFILE.bank_fader_keys)

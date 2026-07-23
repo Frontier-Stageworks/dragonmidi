@@ -6,42 +6,25 @@ from .mapping import JOG_WHEEL_CC, MappingEngine
 
 _Key = tuple[str, "int | None"]
 
-# @spec UI-MAP-012
+# @spec UI-MAP-001, UI-CFGDLG-008
 JOG_WHEEL_ROW_KEY: _Key = ("cc", JOG_WHEEL_CC)
 JOG_WHEEL_ARC_ROW_KEY: _Key = ("jog_wheel_keystroke", None)
-
-_TRIGGER_LABELS = {"absolute": "Absolute", "press": "Press"}
+KNOB_ROW_KEY: _Key = ("knob_summary", None)
+MUTE_ROW_KEY: _Key = ("mute_summary", None)
+SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for all 8 Solo CCs
 
 
 def midi_source_label(key: _Key, channel: int) -> str:
-    """@spec UI-MAP-012, UI-MAP-013"""
+    """@spec UI-MAP-001, UI-CFGDLG-002"""
     kind, number = key
     if kind == "korg_scene":
         return "Native Mode Scene"
     return f"CC{number}, ch{channel + 1}"
 
 
-def _format_bound(value: float) -> str:
-    return f"{value:g}"
-
-
-def _target_label(key: _Key, engine: MappingEngine) -> tuple[str, str]:
-    if key in engine.profile.fader_keys:
-        if engine.is_axis_mode(key):
-            # Group 1's assignment specifically - the summary row shows one value;
-            # the full per-Group detail is group_axis_picker_states() below
-            # (@spec UI-MAP-014).
-            axis = engine.axis_target(key, 1)
-            if axis is not None:
-                bounds = f"{_format_bound(axis.min_value)}-{_format_bound(axis.max_value)}"
-                return "OSC axis", f"{axis.axis_name} ({bounds})"
-            return "OSC axis", ""
-    entry = engine.profile.opinionated_map[key]
-    if entry.address.startswith("/dragonframe/encoderReset/"):
-        return "OSC encoder", f"Reset encoder {entry.address.rsplit('/', 1)[-1]}"
-    if entry.address.startswith("/dragonframe/encoder/"):
-        return "OSC encoder", f"Encoder {entry.address.rsplit('/', 1)[-1]}"
-    return "OSC action", entry.address
+def _cc_range_label(keys, channel: int) -> str:
+    numbers = sorted(number for _, number in keys)
+    return f"CC{numbers[0]}-{numbers[-1]}, ch{channel + 1}"
 
 
 @dataclass(frozen=True)
@@ -49,10 +32,67 @@ class RowView:
     key: _Key
     name: str
     midi_source: str
-    trigger: str
-    target_type: str
     target: str
     editable: bool
+
+
+def build_fader_rows(engine: MappingEngine) -> list[RowView]:
+    """The Mapping View's only content as of 2026-07-23: one row per Bank's fader,
+    in Bank order, every row editable. The Target cell's actual content (the 5-Group
+    axis-picker grid) isn't carried on the row itself - the widget queries
+    `group_axis_picker_states`/`MappingEngine.axis_target` directly, live, on every
+    tick, the same as before.
+
+    @spec UI-MAP-001, UI-MAP-002
+    """
+    profile = engine.profile
+    channel = profile.default_channel
+    return [
+        RowView(
+            key=key,
+            name=profile.control_names[key],
+            midi_source=midi_source_label(key, channel),
+            target="",
+            editable=True,
+        )
+        for key in profile.bank_fader_keys
+    ]
+
+
+def _bank_summary_rows(engine: MappingEngine) -> list[RowView]:
+    """Knob (pot) and Mute: one collapsed row each describing the shared
+    bank-derived rule, not one row per Bank - generalizing Solo's pre-existing
+    single-row treatment (2026-07-23, `docs/llds/app-ui.md § Configuration Dialog`).
+    Their text is a static fact about the shared rule (the exact encoder/reset
+    channel numbers are a fixed convention independent of CC assignment), not a
+    live per-Bank value, so - unlike Solo below - it is not recomputed per Group.
+
+    @spec UI-CFGDLG-006
+    """
+    profile = engine.profile
+    channel = profile.default_channel
+    rows: list[RowView] = []
+    if profile.knob_to_fader:
+        rows.append(
+            RowView(
+                key=KNOB_ROW_KEY,
+                name="Knob (pot)",
+                midi_source=_cc_range_label(profile.knob_to_fader, channel),
+                target="Bank-derived: follows fader's axis, or Encoder 9-16 if unassigned",
+                editable=False,
+            )
+        )
+    if profile.mute_to_fader:
+        rows.append(
+            RowView(
+                key=MUTE_ROW_KEY,
+                name="Mute",
+                midi_source=_cc_range_label(profile.mute_to_fader, channel),
+                target="Bank-derived: setZero on assigned axis, or Reset encoder 1-8",
+                editable=False,
+            )
+        )
+    return rows
 
 
 def _jog_wheel_rows(channel: int) -> list[RowView]:
@@ -61,10 +101,10 @@ def _jog_wheel_rows(channel: int) -> list[RowView]:
     § Jog Wheel Frame Stepping). It has two independent, fixed outputs, so it's
     shown as two read-only rows rather than stretching one row to hold two
     targets or adding a column that's empty for every other control. Only called
-    for a profile with has_jog_wheel true (see build_rows below); a profile
-    without one (the nanoKONTROL2) renders neither row.
+    for a profile with has_jog_wheel true (see build_configuration_rows below); a
+    profile without one (the nanoKONTROL2) renders neither row.
 
-    @spec UI-MAP-012
+    @spec UI-CFGDLG-008
     """
     midi_source = midi_source_label(JOG_WHEEL_ROW_KEY, channel)
     return [
@@ -72,8 +112,6 @@ def _jog_wheel_rows(channel: int) -> list[RowView]:
             key=JOG_WHEEL_ROW_KEY,
             name="Jog Wheel",
             midi_source=midi_source,
-            trigger="Directional",
-            target_type="OSC action",
             target="stepForward / stepBackward",
             editable=False,
         ),
@@ -81,31 +119,20 @@ def _jog_wheel_rows(channel: int) -> list[RowView]:
             key=JOG_WHEEL_ARC_ROW_KEY,
             name="Jog Wheel (Arc)",
             midi_source=midi_source,
-            trigger="Directional",
-            target_type="Keystroke",
             target="Option+Shift+Right / Option+Shift+Left",
             editable=False,
         ),
     ]
 
 
-_SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for all 8 Solo CCs
-
-
 def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
     """Stop, Cycle, Solo 1-8, and Previous/Next Marker target the WebSocket Output
-    Adapter (docs/llds/websocket-output.md), not OSC. Stop/Cycle/Marker were removed
-    from OPINIONATED_MAP entirely (MAP-WS-009) and Solo was removed from bank
-    derivation (MAP-WS-002), so none of them are reachable via build_rows()'s
-    opinionated-map loop below - rendered as fixed rows here instead, the same
-    treatment as the jog wheel's rows for entries that aren't table lookups. Solo
-    gets one summary row for all 8 buttons, not eight near-identical rows and not
-    folded into the fader rows (docs/llds/app-ui.md § Mapping View). Present for any
-    profile that declares these keys (`ControllerProfile.websocket_keys`) - a profile
-    that omits one (e.g. no `cycle` in its `controls:` block) simply has no row for
-    it, the same "absent, not disabled" treatment used elsewhere.
+    Adapter (docs/llds/websocket-output.md), not OSC. Present for any profile that
+    declares these keys (`ControllerProfile.websocket_keys`) - a profile that omits
+    one simply has no row for it, the same "absent, not disabled" treatment used
+    elsewhere.
 
-    @spec UI-MAP-001, UI-MAP-013, MAP-CONFIG-005
+    @spec UI-CFGDLG-002, MAP-CONFIG-005
     """
     channel = engine.profile.default_channel
     ws_keys = engine.profile.websocket_keys
@@ -119,8 +146,6 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
                 key=ws_keys.stop,
                 name="Stop",
                 midi_source=midi_source_label(ws_keys.stop, channel),
-                trigger="Press",
-                target_type="WebSocket",
                 target="E-Stop",
                 editable=False,
             )
@@ -131,26 +156,21 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
                 key=ws_keys.cycle,
                 name="Cycle",
                 midi_source=midi_source_label(ws_keys.cycle, channel),
-                trigger="Press",
-                target_type="WebSocket",
                 target="select-AXn (cycling)",
                 editable=False,
             )
         )
     if ws_keys.solos:
-        solo_ccs = sorted(number for _, number in ws_keys.solos)
         g = engine.active_group
         low, high = 1 + 8 * (g - 1), 8 + 8 * (g - 1)
         rows.append(
             RowView(
-                key=_SOLO_ROW_KEY,
+                key=SOLO_ROW_KEY,
                 name="Solo 1-8",
-                midi_source=f"CC{solo_ccs[0]}-{solo_ccs[-1]}, ch{channel + 1}",
-                trigger="Press",
-                target_type="WebSocket",
-                # Recomputed every call from the active Group (@spec UI-MAP-013,
-                # MAP-GROUP-002) - "button N -> AXN" phrasing dropped in favor of the
-                # plain Group number, avoiding an awkward "+0" term at Group 1.
+                midi_source=_cc_range_label(ws_keys.solos, channel),
+                # Recomputed every call from the active Group (@spec MAP-GROUP-002) -
+                # "button N -> AXN" phrasing dropped in favor of the plain Group
+                # number, avoiding an awkward "+0" term at Group 1.
                 target=f"select-AX{low} – select-AX{high} (Group {g})",
                 editable=False,
             )
@@ -161,8 +181,6 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
                 key=ws_keys.previous_marker,
                 name="Previous Marker",
                 midi_source=midi_source_label(ws_keys.previous_marker, channel),
-                trigger="Press",
-                target_type="WebSocket",
                 target="Jog All (backward)",
                 editable=False,
             )
@@ -173,8 +191,6 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
                 key=ws_keys.next_marker,
                 name="Next Marker",
                 midi_source=midi_source_label(ws_keys.next_marker, channel),
-                trigger="Press",
-                target_type="WebSocket",
                 target="Jog All (forward)",
                 editable=False,
             )
@@ -189,16 +205,13 @@ _GROUP_SWITCH_TARGETS = {
 
 
 def _group_switch_rows(engine: MappingEngine) -> list[RowView]:
-    """Previous/Next Track are no longer OPINIONATED_MAP entries as of Phase 6
-    (MAP-GROUP-003, removed from OSC dispatch entirely) - rendered as fixed rows
-    here instead, the same treatment `_websocket_target_rows`/`_jog_wheel_rows`
-    already give entries that aren't table lookups. Present for whichever
-    direction(s) the active profile's `group_keys` declares - a profile
-    declaring only one of previous_track/next_track (MAP-GROUP-006) gets only
-    that row, the same "absent, not disabled" treatment as any other omitted
-    `transport` key.
+    """Previous/Next Track are not `OPINIONATED_MAP` entries as of Phase 6
+    (`MAP-GROUP-003`) - rendered as fixed rows here instead, the same treatment
+    `_websocket_target_rows`/`_jog_wheel_rows` already give entries that aren't
+    table lookups. Present for whichever direction(s) the active profile's
+    `group_keys` declares.
 
-    @spec UI-MAP-016
+    @spec UI-CFGDLG-009
     """
     channel = engine.profile.default_channel
     group_keys = engine.profile.group_keys
@@ -212,8 +225,6 @@ def _group_switch_rows(engine: MappingEngine) -> list[RowView]:
                 key=group_keys.previous,
                 name="Previous Track",
                 midi_source=midi_source_label(group_keys.previous, channel),
-                trigger="Press",
-                target_type="Group switch",
                 target=_GROUP_SWITCH_TARGETS["previous"],
                 editable=False,
             )
@@ -224,8 +235,6 @@ def _group_switch_rows(engine: MappingEngine) -> list[RowView]:
                 key=group_keys.next,
                 name="Next Track",
                 midi_source=midi_source_label(group_keys.next, channel),
-                trigger="Press",
-                target_type="Group switch",
                 target=_GROUP_SWITCH_TARGETS["next"],
                 editable=False,
             )
@@ -233,34 +242,30 @@ def _group_switch_rows(engine: MappingEngine) -> list[RowView]:
     return rows
 
 
-def build_rows(engine: MappingEngine) -> list[RowView]:
-    """One row per entry in the active Controller Profile's opinionated map, in
-    table order - except Knob/Mute entries, which are bank-derived and folded into
-    their bank's Fader Channel row rather than shown as their own rows (their OSC
-    dispatch is unaffected) - plus the WebSocket-targeted rows (UI-MAP-013),
-    the Group-switch rows (UI-MAP-016), and, only for a profile with a jog wheel,
-    two further rows for it (UI-MAP-012), all appended last. A profile without a
-    Scene button or jog wheel simply has no such entry/rows to render - not a
-    disabled placeholder, an absence.
+def build_configuration_rows(engine: MappingEngine) -> list[RowView]:
+    """The Configuration Dialog's rows (2026-07-23): every control's assignment
+    that isn't the Fader row itself (handled specially by the widget, since it
+    hosts the single engine-wide Axis/Encoder switch rather than a RowView) - one
+    collapsed row each for Knob (pot), Mute, and Solo, plus every single-instance
+    control (Play, Record, Rewind, Fast Forward, Scene, Stop, Cycle, Previous/Next
+    Marker, the jog wheel, Previous/Next Track), unchanged in content from the
+    pre-2026-07-23 Mapping View, just relocated. None of these rows are editable.
 
-    @spec UI-MAP-001, UI-MAP-002, UI-MAP-012, UI-MAP-013, UI-MAP-016
+    @spec UI-CFGDLG-002, UI-CFGDLG-006, UI-CFGDLG-007, UI-CFGDLG-008, UI-CFGDLG-009
     """
     profile = engine.profile
     channel = profile.default_channel
-    rows = []
+    rows: list[RowView] = list(_bank_summary_rows(engine))
     for key, entry in profile.opinionated_map.items():
-        if profile.bank_fader_key(key) is not None:
-            continue  # Knob/Mute: folded into the Fader Channel row, not its own row
-        target_type, target = _target_label(key, engine)
+        if key in profile.fader_keys or profile.bank_fader_key(key) is not None:
+            continue  # Fader (main window) / Knob & Mute (collapsed above)
         rows.append(
             RowView(
                 key=key,
                 name=profile.control_names[key],
                 midi_source=midi_source_label(key, channel),
-                trigger=_TRIGGER_LABELS[entry.kind],
-                target_type=target_type,
-                target=target,
-                editable=key in profile.fader_keys,
+                target=entry.address,
+                editable=False,
             )
         )
     rows.extend(_websocket_target_rows(engine))
@@ -293,10 +298,12 @@ def axis_picker_state(configured_name: "str | None", axes: "dict[str, float] | N
 
 
 def group_axis_picker_states(engine: MappingEngine, key: _Key, axes: "dict[str, float] | None") -> tuple[AxisPickerState, ...]:
-    """The 5 per-Group axis-picker states for one fader row (leftmost = Group 1),
-    replacing the pre-Phase-6 single picker. All 5 share the same discovered-name
-    candidate list, since axis discovery is project-wide, not per-Group - only
-    each picker's `current` selection varies.
+    """The 5 per-Group axis-picker states for one fader row (leftmost = Group 1).
+    All 5 share the same discovered-name candidate list, since axis discovery is
+    project-wide, not per-Group - only each picker's `current` selection varies.
+    Independent of the engine-wide fader mode (`UI-MAP-018`): the grid always
+    reflects the stored (Bank, Group) table regardless of whether `process()` is
+    currently consulting it.
 
     @spec UI-MAP-014
     """
@@ -312,7 +319,7 @@ def group_axis_picker_states(engine: MappingEngine, key: _Key, axes: "dict[str, 
 def active_group_lights(engine: MappingEngine) -> tuple[bool, ...]:
     """5 booleans, one per Group (leftmost = Group 1) - True for the currently
     active Group, False for every other. Recomputed fresh on every call, the same
-    "no cached state" pattern as `build_rows`/`axis_picker_state`.
+    "no cached state" pattern as `build_fader_rows`/`axis_picker_state`.
 
     @spec UI-MAP-015
     """

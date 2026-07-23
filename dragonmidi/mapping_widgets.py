@@ -6,13 +6,13 @@ from typing import Callable, Iterator
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
-    QStackedLayout,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -20,7 +20,15 @@ from PySide6.QtWidgets import (
 )
 
 from .mapping import MappingEngine
-from .mapping_view_model import AxisPickerState, active_group_lights, build_rows, group_axis_picker_states, parse_axis_field
+from .mapping_view_model import (
+    SOLO_ROW_KEY,
+    AxisPickerState,
+    active_group_lights,
+    build_configuration_rows,
+    build_fader_rows,
+    group_axis_picker_states,
+    parse_axis_field,
+)
 from .osc_io import AxisDiscovery
 
 _NO_AXIS_SELECTED = ""
@@ -57,17 +65,15 @@ def _vline() -> QFrame:
 
 
 class _AxisTargetEditor(QWidget):
-    """The fader Target-column widget: either a read-only encoder label, or 5
-    per-Group blocks (leftmost = Group 1), each two rows tall - the axis-name
-    picker on top, its min ("m")/max ("M") fields side by side below it. Makes
-    every fader row double-height compared to the table's other rows (2026-07-23,
-    user's explicit layout request). Replaces the pre-Phase-6 single picker.
-    `show_encoder`/`show_axis_picker` are called from `MappingView.refresh()`
-    based on `MappingEngine.is_axis_mode` alone - there is no longer a UI control
-    to switch a fader between the two (Trigger and Target type columns, including
-    the OSC encoder/OSC axis combo, were removed from the Mapping View entirely,
-    2026-07-23); the engine's own encoder-mode machinery is unchanged, just not
-    user-toggleable from this view.
+    """The fader Target-column widget: 5 per-Group blocks (leftmost = Group 1),
+    each two rows tall - the axis-name picker on top, its min ("m")/max ("M")
+    fields side by side below it. Makes every fader row double-height compared
+    to the table's other rows (2026-07-23, user's explicit layout request).
+    Always shows the picker grid regardless of the engine-wide fader mode
+    (`MappingEngine.is_axis_mode()`, `docs/llds/static-mapping.md § Fader Axis
+    Mode`) - that mode is controlled from the Configuration Dialog's Fader row
+    (`_FaderModeRow` below), not from here; this row's own content doesn't
+    change based on it (@spec UI-MAP-018).
 
     @spec UI-MAP-006, UI-MAP-007, UI-MAP-014, UI-MAP-017
     """
@@ -77,10 +83,7 @@ class _AxisTargetEditor(QWidget):
         self._on_axis_change = on_axis_change
         self._on_axis_clear = on_axis_clear
 
-        self._encoder_label = QLabel("")
-
-        axis_row = QWidget()
-        axis_layout = QHBoxLayout(axis_row)
+        axis_layout = QHBoxLayout(self)
         axis_layout.setContentsMargins(0, 0, 0, 0)
         self._group_combos: list[QComboBox] = []
         self._group_min_edits: list[QLineEdit] = []
@@ -117,18 +120,6 @@ class _AxisTargetEditor(QWidget):
             self._group_combos.append(combo)
             self._group_min_edits.append(min_edit)
             self._group_max_edits.append(max_edit)
-        self._axis_row = axis_row
-
-        self._stack = QStackedLayout(self)
-        self._stack.addWidget(self._encoder_label)
-        self._stack.addWidget(axis_row)
-
-    def show_encoder(self, text: str) -> None:
-        self._encoder_label.setText(text)
-        self._stack.setCurrentWidget(self._encoder_label)
-
-    def show_axis_picker(self) -> None:
-        self._stack.setCurrentWidget(self._axis_row)
 
     def sync_picker(self, group_index: int, state: AxisPickerState, current_min: float, current_max: float) -> None:
         """Repopulate one Group's axis combo from the current discovery state
@@ -270,10 +261,11 @@ class _GroupHeaderRow(QWidget):
 
 
 class MappingView(QWidget):
-    """The Mapping View: one row per opinionated-map entry; fader rows are
-    editable (OSC encoder <-> OSC axis, 5 pickers per Group once in axis mode).
-    Embedded directly in the main window as a section below the host/port
-    configuration form, not a separate window.
+    """The Mapping View: one row per Bank's fader, every row editable (5 Group
+    axis pickers each). Embedded directly in the main window as a section below
+    the host/port configuration form, not a separate window. As of 2026-07-23,
+    every other control's row lives in the Configuration Dialog instead
+    (`ConfigurationDialog` below) - this view's only content is the fader grid.
 
     @spec UI-MAP-001, UI-MAP-002, UI-MAP-009, UI-MAP-010, UI-MAP-014, UI-MAP-015
     """
@@ -294,17 +286,12 @@ class MappingView(QWidget):
 
         self._group_indicator = _GroupIndicatorRow()
 
-        rows = build_rows(self._engine)
+        rows = build_fader_rows(self._engine)
         # +1 for the A-E Group-letter header row (row 0), a real table row so its
         # column boundaries are guaranteed to match every fader row's below it.
         self._table = QTableWidget(len(rows) + 1, len(self._COLUMNS))
         self._table.setHorizontalHeaderLabels(self._COLUMNS)
         self._editors: dict = {}
-        # Non-editable rows whose Target text isn't fixed at construction time -
-        # currently just Solo 1-8, whose text is recomputed from the active Group
-        # on every tick (@spec UI-MAP-013). Re-read in refresh() below; every other
-        # non-editable row's text is a one-time fact set here and never revisited.
-        self._dynamic_target_items: dict = {}
 
         for column in range(2):
             self._table.setItem(0, column, QTableWidgetItem(""))
@@ -314,18 +301,12 @@ class MappingView(QWidget):
             row_index = offset + 1
             self._table.setItem(row_index, 0, QTableWidgetItem(row.name))
             self._table.setItem(row_index, 1, QTableWidgetItem(row.midi_source))
-            if row.editable:
-                editor = _AxisTargetEditor(
-                    on_axis_change=lambda g, name, mn, mx, k=row.key: self._on_axis_change(k, g, name, mn, mx),
-                    on_axis_clear=lambda g, k=row.key: self._on_axis_clear(k, g),
-                )
-                self._table.setCellWidget(row_index, 2, editor)
-                self._editors[row.key] = editor
-            else:
-                target_item = QTableWidgetItem(row.target)
-                self._table.setItem(row_index, 2, target_item)
-                if row.key == ("solo_websocket", None):
-                    self._dynamic_target_items[row.key] = target_item
+            editor = _AxisTargetEditor(
+                on_axis_change=lambda g, name, mn, mx, k=row.key: self._on_axis_change(k, g, name, mn, mx),
+                on_axis_clear=lambda g, k=row.key: self._on_axis_clear(k, g),
+            )
+            self._table.setCellWidget(row_index, 2, editor)
+            self._editors[row.key] = editor
 
         rescan_button = QPushButton("Rescan axes")
         rescan_button.clicked.connect(on_rescan)
@@ -368,39 +349,148 @@ class MappingView(QWidget):
             self._on_group_axis_changed()
 
     def refresh(self) -> None:
-        """Recomputes every fader row's editor from live engine/discovery state,
-        the Group indicator row, and the Solo row's Group-aware text.
+        """Recomputes every fader row's editor from live engine/discovery state
+        and the Group indicator row.
 
         Runs on every UI tick, so - same as `_AxisTargetEditor.sync_picker` -
         this must not touch a combo box while its popup is open, and must not
-        force a text change that's already in effect.
+        force a text change that's already in effect. Every row always shows
+        its picker grid regardless of the engine-wide fader mode (@spec
+        UI-MAP-018) - that mode is surfaced in the Configuration Dialog instead.
 
-        @spec UI-MAP-004, UI-MAP-013, UI-MAP-014, UI-MAP-015
+        @spec UI-MAP-004, UI-MAP-014, UI-MAP-015
         """
         self._group_indicator.sync(active_group_lights(self._engine))
 
-        rows = {row.key: row for row in build_rows(self._engine)}
-
-        for key, item in self._dynamic_target_items.items():
-            row = rows.get(key)
-            if row is not None and item.text() != row.target:
-                item.setText(row.target)
-
         for key, editor in self._editors.items():
-            row = rows[key]
-            # Every fader stays in OSC axis mode as of this UI simplification -
-            # the OSC encoder <-> OSC axis toggle was removed from the Mapping
-            # View (user's explicit choice, 2026-07-23); MappingEngine's
-            # encoder-mode machinery itself is untouched, so this still defers
-            # to `is_axis_mode` rather than assuming.
-            axis_mode = self._engine.is_axis_mode(key)
-            if not axis_mode:
-                editor.show_encoder(row.target)
-                continue
-
-            editor.show_axis_picker()
             states = group_axis_picker_states(self._engine, key, self._axis_discovery.axes)
             for group_index, state in enumerate(states, start=1):
                 axis_target = self._engine.axis_target(key, group_index)
                 current_min, current_max = (axis_target.min_value, axis_target.max_value) if axis_target is not None else (0.0, 100.0)
                 editor.sync_picker(group_index, state, current_min, current_max)
+
+
+class _FaderModeRow(QWidget):
+    """The Configuration Dialog's Fader row: a single Axis/Encoder switch
+    governing all 8 faders at once (`docs/llds/static-mapping.md § Fader Axis
+    Mode`, 2026-07-23 reversal of the pre-existing per-fader toggle) - the only
+    interactive control anywhere in the dialog.
+
+    @spec UI-CFGDLG-003
+    """
+
+    _AXIS_MODE_TEXT = "Axis mode"
+    _ENCODER_MODE_TEXT = "Encoder mode"
+
+    def __init__(self, on_mode_change: Callable[[bool], None]) -> None:
+        super().__init__()
+        self._on_mode_change = on_mode_change
+        self._combo = QComboBox()
+        self._combo.addItems([self._AXIS_MODE_TEXT, self._ENCODER_MODE_TEXT])
+        self._combo.currentIndexChanged.connect(self._emit_change)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._combo)
+        layout.addStretch(1)
+
+    def sync(self, is_axis_mode: bool) -> None:
+        desired_index = 0 if is_axis_mode else 1
+        if self._combo.currentIndex() != desired_index:
+            with _signals_blocked(self._combo):
+                self._combo.setCurrentIndex(desired_index)
+
+    def _emit_change(self, index: int) -> None:
+        self._on_mode_change(index == 0)
+
+
+class ConfigurationDialog(QDialog):
+    """A modal dialog, opened by the Configuration button beneath the Controller
+    dropdown - not embedded in the main window. Holds every control's assignment
+    that isn't the Mapping View's fader-to-axis grid, one row per control *type*
+    (Knob/Mute/Solo collapse to a single row each, not one per Bank), plus the
+    engine-wide fader mode switch. Rebuilds its full row set on every Controller
+    Profile switch (unlike the Mapping View's build-once pattern), since which
+    rows exist (Scene, jog wheel, Track) varies by profile.
+
+    @spec UI-CFGDLG-001, UI-CFGDLG-002, UI-CFGDLG-003, UI-CFGDLG-004,
+    UI-CFGDLG-006, UI-CFGDLG-007, UI-CFGDLG-008, UI-CFGDLG-009, UI-CFGDLG-010
+    """
+
+    _COLUMNS = ["Name", "MIDI", "Target"]
+
+    def __init__(self, mapping_engine: MappingEngine) -> None:
+        super().__init__()
+        self.setWindowTitle("Configuration")
+        self._engine = mapping_engine
+
+        self._group_indicator = _GroupIndicatorRow()
+        self._fader_mode_row = _FaderModeRow(on_mode_change=self._on_fader_mode_change)
+        self._dynamic_target_items: dict = {}
+
+        self._table = QTableWidget(0, len(self._COLUMNS))
+        self._table.setHorizontalHeaderLabels(self._COLUMNS)
+        self._rebuild_rows()
+
+        fader_row = QHBoxLayout()
+        fader_row.addWidget(QLabel("Fader"))
+        fader_row.addWidget(self._fader_mode_row)
+
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self._group_indicator)
+        layout.addLayout(fader_row)
+        layout.addWidget(self._table)
+        layout.addWidget(close_button)
+
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        self._table.resizeColumnsToContents()
+
+        self.refresh()
+
+    def _on_fader_mode_change(self, axis: bool) -> None:
+        self._engine.set_fader_mode(axis)
+
+    def _rebuild_rows(self) -> None:
+        """(Re)constructs the table's row set from the engine's current profile.
+        Called at construction and again on every Controller Profile switch
+        (`rebuild_for_profile_change` below), since which rows exist (Scene, jog
+        wheel, Track) varies by profile.
+
+        @spec UI-CFGDLG-010
+        """
+        rows = build_configuration_rows(self._engine)
+        self._table.setRowCount(len(rows))
+        self._dynamic_target_items = {}
+        for row_index, row in enumerate(rows):
+            self._table.setItem(row_index, 0, QTableWidgetItem(row.name))
+            self._table.setItem(row_index, 1, QTableWidgetItem(row.midi_source))
+            target_item = QTableWidgetItem(row.target)
+            self._table.setItem(row_index, 2, target_item)
+            # Solo's Target text is recomputed every tick from the active Group
+            # (@spec UI-CFGDLG-007); every other row's text is a one-time fact
+            # set here and never revisited.
+            if row.key == SOLO_ROW_KEY:
+                self._dynamic_target_items[row.key] = target_item
+        self._table.resizeColumnsToContents()
+
+    def rebuild_for_profile_change(self) -> None:
+        """@spec UI-CFGDLG-010"""
+        self._rebuild_rows()
+
+    def refresh(self) -> None:
+        """Recomputes the Group indicator, the Fader mode switch, and the Solo
+        row's Group-aware text. Runs on every UI tick, whether or not the dialog
+        is currently visible - matching the Mapping View's own always-refresh
+        pattern - so it's always current the moment it's shown.
+        """
+        self._group_indicator.sync(active_group_lights(self._engine))
+        self._fader_mode_row.sync(self._engine.is_axis_mode())
+
+        rows = {row.key: row for row in build_configuration_rows(self._engine)}
+        for key, item in self._dynamic_target_items.items():
+            row = rows.get(key)
+            if row is not None and item.text() != row.target:
+                item.setText(row.target)

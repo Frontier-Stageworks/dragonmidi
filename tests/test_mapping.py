@@ -3,7 +3,7 @@
 @spec MAP-TABLE-001, MAP-TABLE-002, MAP-TABLE-003, MAP-TABLE-005
 @spec MAP-DEBOUNCE-001, MAP-STATE-001, MAP-STATE-002
 @spec MAP-AXIS-001, MAP-AXIS-002, MAP-AXIS-004, MAP-AXIS-006, MAP-AXIS-007
-@spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010
+@spec MAP-AXIS-008, MAP-AXIS-009, MAP-AXIS-010, MAP-AXIS-011, MAP-AXIS-012
 @spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-004, MAP-BANK-005, MAP-BANK-006, MAP-BANK-007
 @spec MAP-BANK-008, MAP-BANK-009
 @spec MAP-JOG-001, MAP-JOG-002, MAP-JOG-003, MAP-JOG-004, MAP-JOG-005
@@ -101,7 +101,7 @@ def test_scene_button_matches_regardless_of_channel(channel: int, value: int) ->
 # @spec MAP-TABLE-002
 def test_fader_sends_absolute_encoder_value(number: int, value: int) -> None:
     engine = MappingEngine()
-    engine.clear_axis_target(("cc", number))  # explicit OSC encoder mode (MAP-AXIS-008 default is now axis mode)
+    engine.set_fader_mode(axis=False)  # explicit OSC encoder mode (MAP-AXIS-008 default is now axis mode)
     result = engine.process(cc_event(number, value), now=0.0)
     assert result is not None
     assert result.address == f"/dragonframe/encoder/{number + 1}"
@@ -123,7 +123,7 @@ def test_knob_sends_absolute_encoder_value(number: int, value: int) -> None:
 def test_absolute_control_repeating_identical_value_sends_only_once(number: int, value: int) -> None:
     engine = MappingEngine()
     if number in FADER_CCS:
-        engine.clear_axis_target(("cc", number))  # explicit OSC encoder mode
+        engine.set_fader_mode(axis=False)  # explicit OSC encoder mode
     first = engine.process(cc_event(number, value), now=0.0)
     second = engine.process(cc_event(number, value), now=0.001)  # identical value again
     assert first is not None
@@ -138,7 +138,7 @@ def test_absolute_control_repeating_identical_value_sends_only_once(number: int,
 def test_absolute_control_sends_every_distinct_value_with_no_debounce(number: int, values: list[int]) -> None:
     engine = MappingEngine()
     if number in FADER_CCS:
-        engine.clear_axis_target(("cc", number))  # explicit OSC encoder mode
+        engine.set_fader_mode(axis=False)  # explicit OSC encoder mode
     # Fire all distinct values back-to-back at the same instant (now never advances):
     # MAP-TABLE-002 requires no debounce for absolute controls, unlike button press-edges.
     results = [engine.process(cc_event(number, v), now=0.0) for v in values]
@@ -213,7 +213,7 @@ def test_unmapped_control_allocates_no_tracked_state(cc: int) -> None:
 def test_mapped_control_does_allocate_tracked_state(number: int) -> None:
     engine = MappingEngine()
     if number in FADER_CCS:
-        engine.clear_axis_target(("cc", number))  # explicit OSC encoder mode, so it actually dispatches
+        engine.set_fader_mode(axis=False)  # explicit OSC encoder mode, so it actually dispatches
     engine.process(cc_event(number, 64), now=0.0)
     assert ("cc", number) in engine.tracked_controls()
 
@@ -405,67 +405,39 @@ def test_set_axis_target_rejects_non_fader_keys(number: int) -> None:
 # --- Target-switch behavior: switching discards prior dedup state for that key ---
 
 
-def test_setting_an_axis_target_discards_prior_encoder_dedup_state() -> None:
+def test_setting_an_axis_target_discards_prior_dedup_state_for_the_active_group() -> None:
     engine = MappingEngine()
-    engine.clear_axis_target(("cc", 0))  # explicit OSC encoder mode
-    # Establish previous-value state via the OSC-encoder target first.
-    engine.process(cc_event(0, 64), now=0.0)
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.process(cc_event(0, 64), now=0.0)  # establish previous-value state under PAN
     assert ("cc", 0) in engine.tracked_controls()
 
-    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
-    # The same raw value that would have been deduped under the old target must fire
-    # again under the new target, proving the switch discarded the prior dedup state.
+    engine.set_axis_target(("cc", 0), 1, "TILT", 0.0, 100.0)  # retarget Group 1 to a new axis
+    # The same raw value that would have been deduped under PAN must fire again under
+    # TILT, proving the retarget discarded the prior dedup state.
     result = engine.process(cc_event(0, 64), now=0.001)
     assert result is not None
-    assert result.address == "/dragonframe/axis/PAN/gotoPosition"
+    assert result.address == "/dragonframe/axis/TILT/gotoPosition"
 
 
-# --- MAP-AXIS-007: clearing an axis target reverts to the opinionated encoder target ---
-
-
-@given(number=st.sampled_from(FADER_CCS))
-# @spec MAP-AXIS-007
-def test_clear_axis_target_reverts_to_opinionated_encoder(number: int) -> None:
-    key = ("cc", number)
+# @spec MAP-AXIS-007, MAP-AXIS-010
+def test_set_axis_target_does_not_change_the_engine_wide_fader_mode() -> None:
+    # 2026-07-23: mode and per-cell axis-target data are fully orthogonal - setting a
+    # (Bank, Group) assignment no longer implicitly re-enters axis mode the way the old
+    # per-fader `set_axis_target` used to.
     engine = MappingEngine()
-    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
-    engine.clear_axis_target(key)
+    engine.set_fader_mode(axis=False)  # explicit OSC encoder mode
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    assert engine.is_axis_mode() is False
 
-    result = engine.process(cc_event(number, 64), now=0.0)
+    result = engine.process(cc_event(0, 64), now=0.0)
     assert result is not None
-    assert result.address == OPINIONATED_MAP[key].address
-    assert not result.address.startswith("/dragonframe/axis/")
+    assert result.address == OPINIONATED_MAP[("cc", 0)].address  # still encoder-mode dispatch
 
 
-@given(number=st.sampled_from(FADER_CCS))
-# @spec MAP-AXIS-007
-def test_clear_axis_target_discards_dedup_state_from_the_axis_target(number: int) -> None:
-    key = ("cc", number)
-    engine = MappingEngine()
-    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
-    engine.process(cc_event(number, 64), now=0.0)  # establish previous-value state under the axis target
-
-    engine.clear_axis_target(key)
-    # The same raw value that would have been deduped under the axis target must fire
-    # again under the restored encoder target, proving the clear discarded prior state.
-    result = engine.process(cc_event(number, 64), now=0.001)
-    assert result is not None
-    assert result.address == OPINIONATED_MAP[key].address
-
-
-@given(number=st.sampled_from(FADER_CCS))
-# @spec MAP-AXIS-007
-def test_clear_axis_target_on_a_key_with_no_axis_target_is_a_noop(number: int) -> None:
-    key = ("cc", number)
-    engine = MappingEngine()
-    engine.clear_axis_target(key)  # must not raise
-
-    result = engine.process(cc_event(number, 64), now=0.0)
-    assert result is not None
-    assert result.address == OPINIONATED_MAP[key].address
-
-
-# --- MAP-AXIS-008 / MAP-AXIS-009: faders default to axis mode, no name, no output ---
+# --- MAP-AXIS-007 / MAP-AXIS-010 / MAP-AXIS-011: engine-wide fader mode (2026-07-23) ---
+# Replaces the pre-existing per-fader `clear_axis_target`/`enter_axis_mode` pair with a
+# single `set_fader_mode(axis: bool)` governing all 8 faders together - and reverses the
+# old discard-on-switch behavior: a mode flip never touches `_group_axis_targets`.
 
 
 @given(number=st.sampled_from(FADER_CCS), value=st.integers(min_value=1, max_value=127))
@@ -476,23 +448,19 @@ def test_fresh_fader_defaults_to_axis_mode_and_sends_nothing_until_named(number:
     assert result is None
 
 
-@given(number=st.sampled_from(FADER_CCS))
-# @spec MAP-AXIS-008
-def test_is_axis_mode_defaults_true_for_every_fader(number: int) -> None:
+# @spec MAP-AXIS-008, MAP-AXIS-010
+def test_is_axis_mode_defaults_true() -> None:
     engine = MappingEngine()
-    assert engine.is_axis_mode(("cc", number)) is True
-
-
-# --- MAP-AXIS-010: axis/encoder mode tracked independently of a chosen name ---
+    assert engine.is_axis_mode() is True
 
 
 @given(number=st.sampled_from(FADER_CCS))
 # @spec MAP-AXIS-010
-def test_clear_axis_target_enters_encoder_mode(number: int) -> None:
+def test_set_fader_mode_false_enters_encoder_mode_for_every_fader(number: int) -> None:
     key = ("cc", number)
     engine = MappingEngine()
-    engine.clear_axis_target(key)
-    assert engine.is_axis_mode(key) is False
+    engine.set_fader_mode(axis=False)
+    assert engine.is_axis_mode() is False
     result = engine.process(cc_event(number, 100), now=0.0)
     assert result is not None
     assert result.address == OPINIONATED_MAP[key].address
@@ -500,14 +468,82 @@ def test_clear_axis_target_enters_encoder_mode(number: int) -> None:
 
 @given(number=st.sampled_from(FADER_CCS))
 # @spec MAP-AXIS-010
-def test_enter_axis_mode_without_a_name_sends_nothing_not_encoder_fallback(number: int) -> None:
-    key = ("cc", number)
+def test_set_fader_mode_true_without_a_name_sends_nothing_not_encoder_fallback(number: int) -> None:
     engine = MappingEngine()
-    engine.clear_axis_target(key)  # encoder mode
-    engine.enter_axis_mode(key)  # back to axis mode, no name yet
-    assert engine.is_axis_mode(key) is True
+    engine.set_fader_mode(axis=False)  # encoder mode
+    engine.set_fader_mode(axis=True)  # back to axis mode, no name yet
+    assert engine.is_axis_mode() is True
     result = engine.process(cc_event(number, 100), now=0.0)
     assert result is None
+
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec MAP-AXIS-007
+def test_encoder_mode_dispatches_opinionated_encoder_even_with_an_axis_target_configured(number: int) -> None:
+    key = ("cc", number)
+    engine = MappingEngine()
+    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
+    engine.set_fader_mode(axis=False)
+
+    result = engine.process(cc_event(number, 64), now=0.0)
+    assert result is not None
+    assert result.address == OPINIONATED_MAP[key].address
+    assert not result.address.startswith("/dragonframe/axis/")
+
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec MAP-AXIS-007
+def test_mode_flip_to_encoder_and_back_preserves_the_axis_target(number: int) -> None:
+    key = ("cc", number)
+    engine = MappingEngine()
+    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
+
+    engine.set_fader_mode(axis=False)  # flip away - the old per-fader clear_axis_target
+    engine.set_fader_mode(axis=True)  # would have wiped this; the new flip preserves it
+
+    assert engine.axis_target(key, 1).axis_name == "PAN"
+    result = engine.process(cc_event(number, 64), now=0.0)
+    assert result is not None
+    assert result.address == "/dragonframe/axis/PAN/gotoPosition"
+
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec MAP-AXIS-011
+def test_mode_flip_does_not_change_the_dumped_axis_target_table(number: int) -> None:
+    key = ("cc", number)
+    engine = MappingEngine()
+    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
+    before = engine.dump_group_axis_targets()
+
+    engine.set_fader_mode(axis=False)
+    engine.set_fader_mode(axis=True)
+
+    assert engine.dump_group_axis_targets() == before
+
+
+# @spec MAP-AXIS-010
+def test_set_fader_mode_is_a_noop_when_already_in_the_requested_mode() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.process(cc_event(0, 64), now=0.0)  # establish a dedup baseline
+
+    engine.set_fader_mode(axis=True)  # already axis mode - must not discard the baseline
+    result = engine.process(cc_event(0, 64), now=1.0)  # identical value again
+    assert result is None  # still deduped - a no-op flip doesn't touch dedup state
+
+
+@given(number=st.sampled_from(FADER_CCS))
+# @spec MAP-AXIS-012
+def test_mode_flip_mid_gesture_takes_effect_on_the_very_next_value(number: int) -> None:
+    key = ("cc", number)
+    engine = MappingEngine()
+    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
+    engine.process(cc_event(number, 40), now=0.0)  # fader mid-drag in axis mode
+
+    engine.set_fader_mode(axis=False)  # mode flips mid-gesture
+    result = engine.process(cc_event(number, 41), now=1.0)  # next value from the same drag
+    assert result is not None
+    assert result.address == OPINIONATED_MAP[key].address  # fires against encoder mode immediately
 
 
 # --- Bank Derivation (MAP-BANK-001 through MAP-BANK-007) ---
@@ -633,14 +669,18 @@ def test_record_and_select_stay_unmapped_regardless_of_bank_axis(fader_number: i
 
 @given(fader_number=st.sampled_from(FADER_CCS))
 # @spec MAP-BANK-007
-def test_knob_dedup_discarded_on_encoder_to_axis_transition(fader_number: int) -> None:
+def test_knob_dedup_discarded_on_engine_wide_encoder_to_axis_transition(fader_number: int) -> None:
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.clear_axis_target(fader_key)  # explicit encoder mode
+    engine.set_fader_mode(axis=False)  # explicit encoder mode
+    # Configuring the (Bank, Group) assignment while still in encoder mode is allowed -
+    # mode and per-cell axis data are orthogonal as of 2026-07-23 - but has no dispatch
+    # effect yet, since the engine-wide mode hasn't flipped.
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
     engine.process(cc_event(knob_number, 0), now=0.0)  # encoder-mode dedup stores normalized 0.0
 
-    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)  # encoder -> axis transition
+    engine.set_fader_mode(axis=True)  # the actual encoder -> axis transition
     # Without the MAP-BANK-007 discard, the stale normalized 0.0 would still be compared
     # against as if it were a raw baseline (0 - 0.0 == 0.0, a nonzero raw value like 50
     # would wrongly compute as a real delta of 50.0 instead of establishing a fresh baseline).
@@ -670,22 +710,45 @@ def test_knob_dedup_not_discarded_by_a_same_mode_axis_name_change(fader_number: 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
 # @spec MAP-BANK-007
-def test_enter_axis_mode_alone_discards_knob_dedup_on_transition(fader_number: int) -> None:
+def test_set_fader_mode_true_alone_discards_knob_dedup_on_transition(fader_number: int) -> None:
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.clear_axis_target(fader_key)  # encoder mode
+    engine.set_fader_mode(axis=False)  # encoder mode
     engine.process(cc_event(knob_number, 0), now=0.0)  # stale normalized 0.0 stored
 
-    engine.enter_axis_mode(fader_key)  # transition back to axis mode, no name yet
+    engine.set_fader_mode(axis=True)  # transition back to axis mode, no name yet
     engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)  # already in axis mode - no further transition here
-    # Proves the discard happened in enter_axis_mode itself, not (redundantly) in this set_axis_target call.
+    # Proves the discard happened in set_fader_mode itself, not (redundantly) in this set_axis_target call.
     first = engine.process(cc_event(knob_number, 50), now=1.0)
     assert first is None
 
     second = engine.process(cc_event(knob_number, 55), now=1.001)
     assert second is not None
     assert second.args == (5.0 * _KNOB_STEP_SCALE,)
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-007
+def test_mode_flip_discards_every_banks_knob_dedup_simultaneously(fader_number: int) -> None:
+    other_fader_number = FADER_CCS[(FADER_CCS.index(fader_number) + 1) % len(FADER_CCS)]
+    fader_key = ("cc", fader_number)
+    other_fader_key = ("cc", other_fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    other_knob_number = other_fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(other_fader_key, 1, "TILT", 0.0, 100.0)
+    engine.process(cc_event(knob_number, 60), now=0.0)  # establish baselines on two different Banks
+    engine.process(cc_event(other_knob_number, 60), now=0.0)
+
+    engine.set_fader_mode(axis=False)
+    engine.set_fader_mode(axis=True)  # a single flip pair affects every Bank at once
+
+    # Both Banks' knob baselines were discarded - each fires nothing on the very next
+    # message (fresh baseline), not the wrongly-computed delta a stale reading would give.
+    assert engine.process(cc_event(knob_number, 90), now=1.0) is None
+    assert engine.process(cc_event(other_knob_number, 90), now=1.0) is None
 
 
 # --- Knob position clamping (MAP-BANK-008, MAP-BANK-009) ---
@@ -1341,15 +1404,19 @@ def test_switching_group_changes_which_axis_a_fader_addresses() -> None:
     assert result.address == "/dragonframe/axis/TILT/gotoPosition"
 
 
-# @spec MAP-GROUP-009
-def test_clear_axis_target_clears_all_five_groups_and_enters_encoder_mode() -> None:
+# @spec MAP-AXIS-007, MAP-AXIS-011
+def test_mode_flip_leaves_all_five_groups_assignments_untouched() -> None:
+    # 2026-07-23 reversal: unlike the old per-fader `clear_axis_target`, which used to
+    # wipe all 5 Groups' assignments on every switch to encoder mode, the engine-wide
+    # `set_fader_mode` never touches `_group_axis_targets` in either direction.
     engine = MappingEngine()
     for g in range(1, 6):
         engine.set_axis_target(("cc", 0), g, "PAN", 0.0, 100.0)
-    engine.clear_axis_target(("cc", 0))
+    engine.set_fader_mode(axis=False)
     for g in range(1, 6):
-        assert engine.axis_target(("cc", 0), g) is None
-    assert not engine.is_axis_mode(("cc", 0))
+        assert engine.axis_target(("cc", 0), g) is not None
+        assert engine.axis_target(("cc", 0), g).axis_name == "PAN"
+    assert engine.is_axis_mode() is False
 
 
 # @spec MAP-GROUP-009
@@ -1360,7 +1427,7 @@ def test_clear_group_axis_target_clears_only_that_group() -> None:
     engine.clear_group_axis_target(("cc", 0), 1)
     assert engine.axis_target(("cc", 0), 1) is None
     assert engine.axis_target(("cc", 0), 2) is not None
-    assert engine.is_axis_mode(("cc", 0))  # still axis mode - not the full row-level toggle
+    assert engine.is_axis_mode()  # still axis mode - clear_group_axis_target never touches mode
 
 
 # @spec MAP-GROUP-009
@@ -1410,7 +1477,7 @@ def test_group_switch_discards_dedup_for_axis_mode_banks() -> None:
 # @spec MAP-GROUP-011
 def test_group_switch_does_not_touch_encoder_mode_banks_dedup() -> None:
     engine = MappingEngine()
-    engine.clear_axis_target(("cc", 0))  # OSC encoder mode
+    engine.set_fader_mode(axis=False)  # OSC encoder mode
     engine.process(cc_event(0, 64), now=0.0)  # establish a dedup baseline
     _press(engine, NEXT_TRACK_CC, now=1.0)
     # Encoder-mode dedup is untouched by a Group switch - the repeat must still be
@@ -1445,12 +1512,15 @@ def test_load_group_axis_targets_populates_without_saving_or_raising() -> None:
     assert target.max_value == 100.0
 
 
-# @spec MAP-STORE-002
-def test_load_group_axis_targets_puts_the_fader_in_axis_mode() -> None:
+# @spec MAP-STORE-002, MAP-AXIS-010
+def test_load_group_axis_targets_does_not_change_the_engine_wide_fader_mode() -> None:
+    # 2026-07-23: mode is orthogonal to the axis-target table and is never persisted
+    # (docs/llds/static-mapping.md § Preset Store) - loading a saved table must not
+    # implicitly force axis mode the way the old per-fader load path once did.
     engine = MappingEngine()
-    engine.clear_axis_target(("cc", 0))  # start in encoder mode
+    engine.set_fader_mode(axis=False)  # start in encoder mode
     engine.load_group_axis_targets({1: {1: {"axis_name": "PAN", "min": 0.0, "max": 100.0}}})
-    assert engine.is_axis_mode(("cc", 0))
+    assert engine.is_axis_mode() is False
 
 
 # @spec MAP-STORE-002

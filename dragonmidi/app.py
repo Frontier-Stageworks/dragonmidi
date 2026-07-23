@@ -26,7 +26,7 @@ from .controller_profile_loader import load_controller_profiles
 from .events import MidiEvent
 from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
 from .mapping import MappingEngine
-from .mapping_widgets import MappingView
+from .mapping_widgets import ConfigurationDialog, MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
 from .osc_io import AxisDiscovery, OscClient, OscListener
 from .preset_store import load_group_axis_targets, save_group_axis_targets
@@ -41,6 +41,11 @@ APP_TITLE = "DragonMIDI"
 DISCOVERY_POLL_MS = 2000
 UI_TICK_MS = 30
 DEFAULT_PROFILE_NAME = "nanoKONTROL Studio"
+# Fixed maximum widths for the host/port fields (2026-07-23, user's explicit
+# choice) - sized to their longest realistic content (an IPv4 address/short
+# hostname, and a 5-digit port number) rather than stretching to fill the row.
+_HOST_FIELD_MAX_WIDTH = 110
+_PORT_FIELD_MAX_WIDTH = 55
 
 
 def _asset_path(filename: str) -> str | None:
@@ -159,6 +164,11 @@ class DragonMidiWindow(QMainWindow):
         profile_form.addWidget(self._profile_combo, 0, 1)
         layout.addLayout(profile_form)
 
+        self._configuration_dialog = ConfigurationDialog(self._mapping)
+        configuration_button = QPushButton("Configuration…")
+        configuration_button.clicked.connect(self._on_configuration_clicked)
+        layout.addWidget(configuration_button)
+
         self._profile_hint_label = QLabel(self._default_profile.setup_hint or "")
         self._profile_hint_label.setVisible(show_setup_hint(self._default_profile.setup_hint))
         layout.addWidget(self._profile_hint_label)
@@ -175,11 +185,14 @@ class DragonMidiWindow(QMainWindow):
         form = QGridLayout()
         form.addWidget(QLabel("Sending to"), 0, 0)
         self._host_edit = QLineEdit(self._config.applied.host)
+        self._host_edit.setMaximumWidth(_HOST_FIELD_MAX_WIDTH)
         self._df_port_edit = QLineEdit(str(self._config.applied.dragonframe_port))
+        self._df_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
         form.addWidget(self._host_edit, 0, 1)
         form.addWidget(self._df_port_edit, 0, 2)
         form.addWidget(QLabel("Listen port"), 1, 0)
         self._listen_port_edit = QLineEdit(str(self._config.applied.listen_port))
+        self._listen_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
         form.addWidget(self._listen_port_edit, 1, 1)
         apply_button = QPushButton("Apply")
         apply_button.clicked.connect(self._on_apply_clicked)
@@ -202,6 +215,13 @@ class DragonMidiWindow(QMainWindow):
         self._midi_connected = connected
         self._midi_device_name = device_name
 
+    def _on_configuration_clicked(self) -> None:
+        """@spec UI-CFGDLG-001: opened modally; the underlying QTimer keeps
+        ticking during exec()'s nested event loop, so the dialog's own content
+        (and the main window's, if later revealed) stays live-refreshed.
+        """
+        self._configuration_dialog.exec()
+
     def _on_profile_changed(self, index: int) -> None:
         """Applies immediately, no Apply step (@spec UI-PROFILE-002): resets the
         Mapping Engine to the newly-selected profile's map right away, independent
@@ -219,6 +239,7 @@ class DragonMidiWindow(QMainWindow):
         self._profile_hint_label.setText(profile.setup_hint or "")
         self._profile_hint_label.setVisible(show_setup_hint(profile.setup_hint))  # @spec UI-PROFILE-003
         self._mapping_view.refresh()
+        self._configuration_dialog.rebuild_for_profile_change()  # @spec UI-CFGDLG-010
 
     def _save_group_axis_targets(self) -> None:
         """@spec MAP-STORE-004"""
@@ -246,6 +267,7 @@ class DragonMidiWindow(QMainWindow):
         drain_queue(self._midi_queue, self._process_midi_event)
         self._axis_discovery.check_timeout()
         self._mapping_view.refresh()
+        self._configuration_dialog.refresh()
 
         snapshot = compute_status_snapshot(
             self._monitor,

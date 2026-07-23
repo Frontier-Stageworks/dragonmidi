@@ -149,6 +149,7 @@ flowchart LR
 |  DragonMIDI                                    |
 |                                                 |
 |  Controller: [nanoKONTROL Studio ▾]            |
+|  [Configuration…]                              |
 |                                                 |
 |   ●  MIDI signal        nanoKONTROL Studio      |
 |   ●  Dragonframe signal  127.0.0.1:7011 (listen)|
@@ -157,9 +158,11 @@ flowchart LR
 +-----------------------------------------------+
 ```
 
-Each indicator is 3-state, not a plain lit/dim toggle: **live** (recent traffic), **error** (Native Mode handshake failure, or listener bind failure — distinct from ordinary quiet), **quiet** (no recent traffic, no error). Host/ports are lightly editable behind an explicit Apply action.
+Each indicator is 3-state, not a plain lit/dim toggle: **live** (recent traffic), **error** (Native Mode handshake failure, or listener bind failure — distinct from ordinary quiet), **quiet** (no recent traffic, no error). Host/ports are lightly editable behind an explicit Apply action, in visually bounded-width fields (`docs/llds/app-ui.md`'s concern, not restated here) — an IP address or port number has a short, known maximum length, so the fields no longer stretch to fill the window.
 
-**Mapping view** (a section of the same window, below the status/config area):
+**Configuration dialog**, opened by the button beneath the Controller dropdown: a separate window (not embedded) holding every control's assignment that isn't the fader-to-axis grid itself — one summary row per control or control *type* (Fader, Knob/Pot, Mute, Solo, transport buttons, jog wheel, etc.), not one row per physical instance, so a bank-derived control that behaves identically across all 8 channel strips (Knob, Mute, Solo) gets exactly one row describing that shared behavior rather than eight repeats of the same fact. This is also where the fader's OSC axis ↔ OSC encoder mode switch lives, as a single control affecting all 8 faders together — see Key Design Decisions.
+
+**Mapping view** (embedded directly in the main window, unlike the Configuration dialog above): now scoped to only the 8 fader rows' Group-axis assignment grid — every other row that used to share this table has moved to the Configuration dialog.
 
 ```
 +-----------------------------------------------------------------------+
@@ -192,6 +195,8 @@ Once Group switching (Phase 6) lands, each of the 8 fader rows' single OSC axis 
 - **Per-axis min/max scaling entered by the user, not discovered.** Dragonframe has `setLimits` but no `getLimits` over OSC — an axis's practical range cannot be read back, only set. The mapping view asks the user for it directly.
 - **Mapping isolated behind one interface.** The mapping engine (MIDI event in, OSC message out) is a pure, swappable component — the editor, persistence, and MIDI-learn sit on top of it without touching MIDI I/O, OSC I/O, or the status indicators.
 - **Mapping editor defaults to the nanoKONTROL Studio's opinionated map** rather than an empty table, so the zero-config experience is unchanged for anyone who never opens the mapping view.
+- **Configuration is a separate dialog, not a second embedded section.** Unlike the Mapping View (embedded in the main window since Phase 1), the Configuration dialog holding every non-fader-axis control assignment opens on demand from a button and is closed to return to the main window. The main window's whole purpose — glanceable status plus the fader-axis grid a user adjusts often — would be diluted by permanently showing rows (Play, Stop, Scene, transport, etc.) a user only needs to confirm rarely; a dialog keeps those two concerns visually separate without losing either one's "confirm at a glance" property once opened. Chosen over keeping one combined table (the pre-2026-07-23 design) or an inline expand/collapse panel (user's explicit choice, 2026-07-23).
+- **Configuration collapses to one row per control type, not one row per physical instance.** Knob, Mute, and Solo behave identically across all 8 channel strips (bank-derived, or a single mechanical formula) — showing 8 near-identical rows per type would repeat the same fact 8 times for no additional information a user could act on differently per instance, the same reasoning already applied to Solo's pre-existing single summary row. Only the Fader row differs: it hosts the OSC axis ↔ OSC encoder mode switch, which is now a single control governing all 8 faders together rather than 8 independent per-fader flags (a reversal of the prior per-fader model, user's explicit choice, 2026-07-23) — simpler to reason about and to show in one row, at the cost of no longer being able to mix modes across faders.
 - **One target per mapping entry, not multiple.** A control drives exactly one target — matches "select what I want each control to do" as a single choice, not a dual-purpose one, and keeps the mapping engine's per-entry logic simple.
 - **Auto-connect by name within the selected Controller Profile, no general device picker.** Scanning MIDI inputs for a name match removes a manual connect step. If the device isn't found, the MIDI indicator stays quiet and the app keeps retrying.
 - **Controller Profile abstraction, not per-device forked code.** `MidiInputAdapter` and the Mapping Engine are driven by a `ControllerProfile` (device name-match pattern, optional Native-Mode-style handshake, default MIDI channel, feature flags, opinionated default map) rather than hardcoding the nanoKONTROL Studio's quirks throughout. The nanoKONTROL Studio and nanoKONTROL2 ship as two Controller Profile config files rather than two profile instances; a third controller is a new config file, not new code. Chosen over forking the adapter/engine per device (more duplicated boilerplate — discovery polling, bank derivation, WebSocket-targeted controls all repeated) or scattering `if profile == "studio"` conditionals through shared code (doesn't scale past two devices).
