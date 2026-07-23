@@ -22,7 +22,7 @@ def midi_source_label(key: _Key, channel: int) -> str:
     return f"CC{number}, ch{channel + 1}"
 
 
-def _cc_range_label(keys, channel: int) -> str:
+def cc_range_label(keys, channel: int) -> str:
     numbers = sorted(number for _, number in keys)
     return f"CC{numbers[0]}-{numbers[-1]}, ch{channel + 1}"
 
@@ -77,7 +77,7 @@ def _bank_summary_rows(engine: MappingEngine) -> list[RowView]:
             RowView(
                 key=KNOB_ROW_KEY,
                 name="Knob (pot)",
-                midi_source=_cc_range_label(profile.knob_to_fader, channel),
+                midi_source=cc_range_label(profile.knob_to_fader, channel),
                 target="Bank-derived: follows fader's axis, or Encoder 9-16 if unassigned",
                 editable=False,
             )
@@ -87,7 +87,7 @@ def _bank_summary_rows(engine: MappingEngine) -> list[RowView]:
             RowView(
                 key=MUTE_ROW_KEY,
                 name="Mute",
-                midi_source=_cc_range_label(profile.mute_to_fader, channel),
+                midi_source=cc_range_label(profile.mute_to_fader, channel),
                 target="Bank-derived: setZero on assigned axis, or Reset encoder 1-8",
                 editable=False,
             )
@@ -167,7 +167,7 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
             RowView(
                 key=SOLO_ROW_KEY,
                 name="Solo 1-8",
-                midi_source=_cc_range_label(ws_keys.solos, channel),
+                midi_source=cc_range_label(ws_keys.solos, channel),
                 # Recomputed every call from the active Group (@spec MAP-GROUP-002) -
                 # "button N -> AXN" phrasing dropped in favor of the plain Group
                 # number, avoiding an awkward "+0" term at Group 1.

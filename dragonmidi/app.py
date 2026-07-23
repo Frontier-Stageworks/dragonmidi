@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -167,7 +168,10 @@ class DragonMidiWindow(QMainWindow):
         self._configuration_dialog = ConfigurationDialog(self._mapping)
         configuration_button = QPushButton("Configuration…")
         configuration_button.clicked.connect(self._on_configuration_clicked)
-        layout.addWidget(configuration_button)
+        configuration_row = QHBoxLayout()
+        configuration_row.addWidget(configuration_button)
+        configuration_row.addStretch(1)
+        layout.addLayout(configuration_row)
 
         self._profile_hint_label = QLabel(self._default_profile.setup_hint or "")
         self._profile_hint_label.setVisible(show_setup_hint(self._default_profile.setup_hint))
@@ -182,22 +186,31 @@ class DragonMidiWindow(QMainWindow):
         layout.addWidget(self._midi_row)
         layout.addWidget(self._dragonframe_row)
 
-        form = QGridLayout()
-        form.addWidget(QLabel("Sending to"), 0, 0)
+        sending_to_row = QHBoxLayout()
+        sending_to_row.addWidget(QLabel("Sending to"))
         self._host_edit = QLineEdit(self._config.applied.host)
         self._host_edit.setMaximumWidth(_HOST_FIELD_MAX_WIDTH)
         self._df_port_edit = QLineEdit(str(self._config.applied.dragonframe_port))
         self._df_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
-        form.addWidget(self._host_edit, 0, 1)
-        form.addWidget(self._df_port_edit, 0, 2)
-        form.addWidget(QLabel("Listen port"), 1, 0)
+        sending_to_row.addWidget(self._host_edit)
+        sending_to_row.addWidget(self._df_port_edit)
+        sending_to_row.addStretch(1)
+        layout.addLayout(sending_to_row)
+
+        listen_port_row = QHBoxLayout()
+        listen_port_row.addWidget(QLabel("Listen port"))
         self._listen_port_edit = QLineEdit(str(self._config.applied.listen_port))
         self._listen_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
-        form.addWidget(self._listen_port_edit, 1, 1)
+        listen_port_row.addWidget(self._listen_port_edit)
+        listen_port_row.addStretch(1)
+        layout.addLayout(listen_port_row)
+
         apply_button = QPushButton("Apply")
         apply_button.clicked.connect(self._on_apply_clicked)
-        form.addWidget(apply_button, 1, 2)
-        layout.addLayout(form)
+        apply_row = QHBoxLayout()
+        apply_row.addWidget(apply_button)
+        apply_row.addStretch(1)
+        layout.addLayout(apply_row)
 
         layout.addWidget(QLabel("Mapping"))
         self._mapping_view = MappingView(

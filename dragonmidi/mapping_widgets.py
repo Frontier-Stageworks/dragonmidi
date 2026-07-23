@@ -26,6 +26,7 @@ from .mapping_view_model import (
     active_group_lights,
     build_configuration_rows,
     build_fader_rows,
+    cc_range_label,
     group_axis_picker_states,
     parse_axis_field,
 )
@@ -310,11 +311,14 @@ class MappingView(QWidget):
 
         rescan_button = QPushButton("Rescan axes")
         rescan_button.clicked.connect(on_rescan)
+        rescan_row = QHBoxLayout()
+        rescan_row.addWidget(rescan_button)
+        rescan_row.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._group_indicator)
         layout.addWidget(self._table)
-        layout.addWidget(rescan_button)
+        layout.addLayout(rescan_row)
 
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -370,11 +374,12 @@ class MappingView(QWidget):
                 editor.sync_picker(group_index, state, current_min, current_max)
 
 
-class _FaderModeRow(QWidget):
-    """The Configuration Dialog's Fader row: a single Axis/Encoder switch
-    governing all 8 faders at once (`docs/llds/static-mapping.md § Fader Axis
-    Mode`, 2026-07-23 reversal of the pre-existing per-fader toggle) - the only
-    interactive control anywhere in the dialog.
+class _FaderModeCell(QWidget):
+    """The Configuration Dialog's Fader row's Target cell: a single Axis/Encoder
+    switch governing all 8 faders at once (`docs/llds/static-mapping.md § Fader
+    Axis Mode`, 2026-07-23 reversal of the pre-existing per-fader toggle) - the
+    only interactive cell anywhere in the dialog's table, embedded as a cell
+    widget the same way `_AxisTargetEditor` is in the Mapping View.
 
     @spec UI-CFGDLG-003
     """
@@ -407,12 +412,15 @@ class ConfigurationDialog(QDialog):
     """A modal dialog, opened by the Configuration button beneath the Controller
     dropdown - not embedded in the main window. Holds every control's assignment
     that isn't the Mapping View's fader-to-axis grid, one row per control *type*
-    (Knob/Mute/Solo collapse to a single row each, not one per Bank), plus the
-    engine-wide fader mode switch. Rebuilds its full row set on every Controller
-    Profile switch (unlike the Mapping View's build-once pattern), since which
-    rows exist (Scene, jog wheel, Track) varies by profile.
+    (Fader/Knob/Mute/Solo collapse to a single row each, not one per Bank), the
+    Fader row's Target cell hosting the engine-wide axis/encoder mode switch the
+    same way every other row's Target cell holds that control's assignment.
+    Rebuilds its full row set on every Controller Profile switch (unlike the
+    Mapping View's build-once pattern), since which rows exist (Scene, jog
+    wheel, Track) varies by profile. Opens sized to its table's full content
+    width, so no column is clipped on first show.
 
-    @spec UI-CFGDLG-001, UI-CFGDLG-002, UI-CFGDLG-003, UI-CFGDLG-004,
+    @spec UI-CFGDLG-001, UI-CFGDLG-002, UI-CFGDLG-003,
     UI-CFGDLG-006, UI-CFGDLG-007, UI-CFGDLG-008, UI-CFGDLG-009, UI-CFGDLG-010
     """
 
@@ -423,48 +431,64 @@ class ConfigurationDialog(QDialog):
         self.setWindowTitle("Configuration")
         self._engine = mapping_engine
 
-        self._group_indicator = _GroupIndicatorRow()
-        self._fader_mode_row = _FaderModeRow(on_mode_change=self._on_fader_mode_change)
+        self._fader_mode_cell: _FaderModeCell | None = None
         self._dynamic_target_items: dict = {}
 
         self._table = QTableWidget(0, len(self._COLUMNS))
         self._table.setHorizontalHeaderLabels(self._COLUMNS)
         self._rebuild_rows()
 
-        fader_row = QHBoxLayout()
-        fader_row.addWidget(QLabel("Fader"))
-        fader_row.addWidget(self._fader_mode_row)
-
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.accept)
+        close_row = QHBoxLayout()
+        close_row.addWidget(close_button)
+        close_row.addStretch(1)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self._group_indicator)
-        layout.addLayout(fader_row)
         layout.addWidget(self._table)
-        layout.addWidget(close_button)
+        layout.addLayout(close_row)
 
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         self._table.resizeColumnsToContents()
 
         self.refresh()
+        self.resize(self.table_width_hint() + 40, 600)
+
+    def table_width_hint(self) -> int:
+        """Total width needed to show every column without clipping/scrolling -
+        mirrors `MappingView.table_width_hint()`, used once to size the dialog
+        on first show."""
+        width = self._table.verticalHeader().width() + self._table.frameWidth() * 2
+        for column in range(self._table.columnCount()):
+            width += self._table.columnWidth(column)
+        return width
 
     def _on_fader_mode_change(self, axis: bool) -> None:
         self._engine.set_fader_mode(axis)
 
     def _rebuild_rows(self) -> None:
-        """(Re)constructs the table's row set from the engine's current profile.
-        Called at construction and again on every Controller Profile switch
-        (`rebuild_for_profile_change` below), since which rows exist (Scene, jog
-        wheel, Track) varies by profile.
+        """(Re)constructs the table's row set from the engine's current profile,
+        including the Fader row (row 0) - not itself part of
+        `build_configuration_rows()`'s output, since its Target cell is a live
+        widget rather than text. Called at construction and again on every
+        Controller Profile switch (`rebuild_for_profile_change` below), since
+        which rows exist (Scene, jog wheel, Track) varies by profile.
 
-        @spec UI-CFGDLG-010
+        @spec UI-CFGDLG-003, UI-CFGDLG-010
         """
         rows = build_configuration_rows(self._engine)
-        self._table.setRowCount(len(rows))
+        self._table.setRowCount(len(rows) + 1)
         self._dynamic_target_items = {}
-        for row_index, row in enumerate(rows):
+
+        profile = self._engine.profile
+        self._table.setItem(0, 0, QTableWidgetItem("Fader"))
+        self._table.setItem(0, 1, QTableWidgetItem(cc_range_label(profile.fader_keys, profile.default_channel)))
+        self._fader_mode_cell = _FaderModeCell(on_mode_change=self._on_fader_mode_change)
+        self._table.setCellWidget(0, 2, self._fader_mode_cell)
+
+        for offset, row in enumerate(rows):
+            row_index = offset + 1
             self._table.setItem(row_index, 0, QTableWidgetItem(row.name))
             self._table.setItem(row_index, 1, QTableWidgetItem(row.midi_source))
             target_item = QTableWidgetItem(row.target)
@@ -481,13 +505,13 @@ class ConfigurationDialog(QDialog):
         self._rebuild_rows()
 
     def refresh(self) -> None:
-        """Recomputes the Group indicator, the Fader mode switch, and the Solo
-        row's Group-aware text. Runs on every UI tick, whether or not the dialog
-        is currently visible - matching the Mapping View's own always-refresh
-        pattern - so it's always current the moment it's shown.
+        """Recomputes the Fader mode switch and the Solo row's Group-aware text.
+        Runs on every UI tick, whether or not the dialog is currently visible -
+        matching the Mapping View's own always-refresh pattern - so it's always
+        current the moment it's shown.
         """
-        self._group_indicator.sync(active_group_lights(self._engine))
-        self._fader_mode_row.sync(self._engine.is_axis_mode())
+        if self._fader_mode_cell is not None:
+            self._fader_mode_cell.sync(self._engine.is_axis_mode())
 
         rows = {row.key: row for row in build_configuration_rows(self._engine)}
         for key, item in self._dynamic_target_items.items():
