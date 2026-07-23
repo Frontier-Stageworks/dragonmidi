@@ -41,6 +41,11 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 150
+# ruff 0.16.0 started formatting fenced code blocks inside Markdown files by
+# default - docs/ contains illustrative pseudocode in LLDs/specs, not lint- or
+# format-checked source, so exclude it explicitly rather than let ruff reformat
+# documentation examples.
+extend-exclude = ["docs/**/*.md"]
 
 [tool.ruff.lint]
 # Explicit allowlist, not ruff's built-in default - matching the sibling
