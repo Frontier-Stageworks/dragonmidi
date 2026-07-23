@@ -6,6 +6,7 @@ from typing import Callable, Iterator
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -45,6 +46,16 @@ def _signals_blocked(*widgets: QWidget) -> Iterator[None]:
 _GROUP_COUNT = 5
 
 
+def _vline() -> QFrame:
+    """A thin vertical rule separating adjacent Group columns (A/B/C/D/E) -
+    used identically in both `_GroupHeaderRow` and `_AxisTargetEditor` so the
+    lines are continuous from the letter header down through the picker rows."""
+    line = QFrame()
+    line.setFrameShape(QFrame.VLine)
+    line.setFrameShadow(QFrame.Sunken)
+    return line
+
+
 class _AxisTargetEditor(QWidget):
     """The fader Target-column widget: either a read-only encoder label, or 5
     per-Group blocks (leftmost = Group 1), each two rows tall - the axis-name
@@ -75,6 +86,8 @@ class _AxisTargetEditor(QWidget):
         self._group_min_edits: list[QLineEdit] = []
         self._group_max_edits: list[QLineEdit] = []
         for group_index in range(1, _GROUP_COUNT + 1):
+            if group_index > 1:
+                axis_layout.addWidget(_vline())
             group_block = QWidget()
             group_layout = QVBoxLayout(group_block)
             group_layout.setContentsMargins(0, 0, 0, 0)
@@ -186,13 +199,18 @@ class _AxisTargetEditor(QWidget):
         self._on_axis_change(group_index, name, min_value, max_value)
 
 
-_DOT_FONT_SIZE_PX = 21  # 50% larger than the prior unstyled (~14px) default
+_GROUP_LETTERS = "ABCDE"
+# 14px (unstyled default) -> 21px (2026-07-23, first pass) -> 32px (2026-07-23,
+# a further 50% on top of that): each round was the user's explicit request.
+_DOT_FONT_SIZE_PX = 32
 
 
 class _GroupIndicatorRow(QWidget):
     """5 lights, one per Group (leftmost = Group 1) - blue when active, grey
-    otherwise, centered in the row. Plain dots for now; exact sizing/spacing is
-    not yet finalized (`docs/llds/app-ui.md`).
+    otherwise, centered in the row, each with its A-E column letter directly
+    above it (matching `_GroupHeaderRow`'s letters over the picker grid below).
+    Plain dots for now; exact sizing/spacing is not yet finalized
+    (`docs/llds/app-ui.md`).
 
     @spec UI-MAP-015
     """
@@ -203,18 +221,28 @@ class _GroupIndicatorRow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addStretch(1)
         layout.addWidget(QLabel("Group:"))
-        self._dots = [QLabel("●") for _ in range(_GROUP_COUNT)]
-        for dot in self._dots:
-            layout.addWidget(dot)
+        self._dots: list[QLabel] = []
+        for letter in _GROUP_LETTERS:
+            column = QWidget()
+            column_layout = QVBoxLayout(column)
+            column_layout.setContentsMargins(0, 0, 0, 0)
+            column_layout.setSpacing(0)
+            column_layout.setAlignment(Qt.AlignCenter)
+            letter_label = QLabel(letter)
+            letter_label.setAlignment(Qt.AlignCenter)
+            letter_label.setStyleSheet("font-weight: 600;")
+            dot = QLabel("●")
+            dot.setAlignment(Qt.AlignCenter)
+            column_layout.addWidget(letter_label)
+            column_layout.addWidget(dot)
+            layout.addWidget(column)
+            self._dots.append(dot)
         layout.addStretch(1)
 
     def sync(self, lights: tuple) -> None:
         for dot, lit in zip(self._dots, lights):
             color = "#2f6fed" if lit else "#888888"
             dot.setStyleSheet(f"color: {color}; font-size: {_DOT_FONT_SIZE_PX}px;")
-
-
-_GROUP_LETTERS = "ABCDE"
 
 
 class _GroupHeaderRow(QWidget):
@@ -232,7 +260,9 @@ class _GroupHeaderRow(QWidget):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        for letter in _GROUP_LETTERS:
+        for index, letter in enumerate(_GROUP_LETTERS):
+            if index > 0:
+                layout.addWidget(_vline())
             label = QLabel(letter)
             label.setAlignment(Qt.AlignCenter)
             label.setStyleSheet("font-weight: 600;")
