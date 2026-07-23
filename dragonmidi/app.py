@@ -248,14 +248,15 @@ class DragonMidiWindow(QMainWindow):
         # choice) - isolate everything *except* the Mapping View (which Qt sizes
         # correctly on its own) and substitute the Mapping View's own explicit
         # height hint (`table_height_hint()`, the same fix `table_width_hint()`
-        # already applies for width) in its place.
-        central.adjustSize()
+        # already applies for width) in its place. Width is unaffected by this -
+        # computed exactly as before, from the table's own column widths.
         chrome_height = central.sizeHint().height() - self._mapping_view.sizeHint().height()
         self.resize(self._mapping_view.table_width_hint() + 60, chrome_height + self._mapping_view.table_height_hint())
 
     def _build_status_group(self) -> QGroupBox:
         group = QGroupBox("Status")
         layout = QVBoxLayout(group)
+        layout.setSpacing(8)
         self._midi_row = IndicatorRow("MIDI signal")
         self._dragonframe_row = IndicatorRow("Dragonframe signal")
         layout.addWidget(self._midi_row)
@@ -275,6 +276,7 @@ class DragonMidiWindow(QMainWindow):
         sibling forces the row to."""
         group = QGroupBox("Configuration")
         layout = QVBoxLayout(group)
+        layout.setSpacing(8)
 
         controller_row = QHBoxLayout()
         controller_row.addWidget(QLabel("Controller"))
@@ -290,14 +292,20 @@ class DragonMidiWindow(QMainWindow):
         self._profile_combo.setCurrentIndex(default_index)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         controller_row.addWidget(self._profile_combo)
+        # Stretch sits *before* the button, not after (2026-07-23, user's
+        # explicit choice) - pushes "Configuration..." flush to the box's right
+        # edge instead of hugging the dropdown.
+        controller_row.addStretch(1)
 
         self._configuration_dialog = ConfigurationDialog(self._mapping)
         configuration_button = QPushButton("Configuration…")
         configuration_button.clicked.connect(self._on_configuration_clicked)
         controller_row.addWidget(configuration_button)
-        controller_row.addStretch(1)
         layout.addLayout(controller_row)
 
+        # Always added to the layout, even when hidden (unlike load_failure_text
+        # below) - _on_profile_changed toggles this label's visibility on every
+        # profile switch, which requires it to already have a home in the layout.
         self._profile_hint_label = QLabel(self._default_profile.setup_hint or "")
         self._profile_hint_label.setVisible(show_setup_hint(self._default_profile.setup_hint))
         layout.addWidget(self._profile_hint_label)
