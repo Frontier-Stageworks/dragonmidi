@@ -97,9 +97,7 @@ def save_group_axis_targets(configurations_dir: Path, profile_name: str, bank_ax
     """
     path = _file_path(configurations_dir, profile_name)
     payload = {
-        "bank_axes": {
-            str(bank_index): {str(group_index): entry for group_index, entry in groups.items()} for bank_index, groups in bank_axes.items()
-        }
+        "bank_axes": {str(bank_index): {str(group_index): entry for group_index, entry in groups.items()} for bank_index, groups in bank_axes.items()}
     }
     try:
         configurations_dir.mkdir(parents=True, exist_ok=True)
