@@ -52,11 +52,14 @@ _PORT_FIELD_MAX_WIDTH = 55
 # reason to claim more than this much width (2026-07-23, user's explicit choice).
 _CONTROLLER_COMBO_MAX_WIDTH = 250
 
-# Evokes Frontier Stageworks' cream/black/mustard, monospace-technical look
-# (2026-07-23, user's explicit choice) - not an exact port, just the same
-# palette/typography family applied to Qt's native widgets.
-_INK = "#171717"
-_PAPER = "#F0EEE4"
+# Evokes the app icon's own light/dark grey palette (2026-07-23, user's explicit
+# choice, superseding the initial cream/mustard pass) - colors sampled directly
+# from assets/dragonmidi.png (the icon's background and fader-icon fill), plus a
+# monospace, technical-blueprint typography family applied to Qt's native widgets.
+# The mustard accent from that initial pass is kept for every button - user's
+# explicit choice.
+_INK = "#363B40"
+_PAPER = "#C7D3DE"
 _ACCENT = "#E8B923"
 _APP_STYLESHEET = f"""
 QWidget {{
@@ -79,23 +82,17 @@ QGroupBox::title {{
     background-color: {_PAPER};
 }}
 QPushButton {{
-    background-color: {_PAPER};
+    background-color: {_ACCENT};
     border: 2px solid {_INK};
     border-radius: 0px;
     padding: 5px 14px;
     font-weight: bold;
 }}
 QPushButton:hover {{
-    background-color: #efd98a;
+    background-color: #f0c53d;
 }}
 QPushButton:pressed {{
-    background-color: {_ACCENT};
-}}
-QPushButton#primaryButton {{
-    background-color: {_ACCENT};
-}}
-QPushButton#primaryButton:hover {{
-    background-color: #f0c53d;
+    background-color: #cfa61c;
 }}
 QLineEdit, QComboBox {{
     border: 1px solid {_INK};
@@ -218,6 +215,10 @@ class DragonMidiWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
 
+        title_label = QLabel(APP_TITLE)
+        title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
+        layout.addWidget(title_label)
+
         top_row = QHBoxLayout()
         top_row.addWidget(self._build_status_group())
         top_row.addWidget(self._build_configuration_group())
@@ -306,7 +307,6 @@ class DragonMidiWindow(QMainWindow):
         layout.addLayout(form)
 
         apply_button = QPushButton("Apply")
-        apply_button.setObjectName("primaryButton")
         apply_button.clicked.connect(self._on_apply_clicked)
         apply_row = QHBoxLayout()
         apply_row.addWidget(apply_button)
