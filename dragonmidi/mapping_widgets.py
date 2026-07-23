@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Callable, Iterator
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -46,10 +47,18 @@ _GROUP_COUNT = 5
 
 class _AxisTargetEditor(QWidget):
     """The fader Target-column widget: either a read-only encoder label, or 5
-    per-Group axis-name pickers + min/max fields (leftmost = Group 1), toggled by
-    the row's Target-type combo. Replaces the pre-Phase-6 single picker.
+    per-Group blocks (leftmost = Group 1), each two rows tall - the axis-name
+    picker on top, its min ("m")/max ("M") fields side by side below it. Makes
+    every fader row double-height compared to the table's other rows (2026-07-23,
+    user's explicit layout request). Replaces the pre-Phase-6 single picker.
+    `show_encoder`/`show_axis_picker` are called from `MappingView.refresh()`
+    based on `MappingEngine.is_axis_mode` alone - there is no longer a UI control
+    to switch a fader between the two (Trigger and Target type columns, including
+    the OSC encoder/OSC axis combo, were removed from the Mapping View entirely,
+    2026-07-23); the engine's own encoder-mode machinery is unchanged, just not
+    user-toggleable from this view.
 
-    @spec UI-MAP-003, UI-MAP-006, UI-MAP-007, UI-MAP-014, UI-MAP-017
+    @spec UI-MAP-006, UI-MAP-007, UI-MAP-014, UI-MAP-017
     """
 
     def __init__(self, on_axis_change: Callable[[int, str, float, float], None], on_axis_clear: Callable[[int], None]) -> None:
@@ -66,17 +75,32 @@ class _AxisTargetEditor(QWidget):
         self._group_min_edits: list[QLineEdit] = []
         self._group_max_edits: list[QLineEdit] = []
         for group_index in range(1, _GROUP_COUNT + 1):
+            group_block = QWidget()
+            group_layout = QVBoxLayout(group_block)
+            group_layout.setContentsMargins(0, 0, 0, 0)
+            group_layout.setSpacing(2)
+
             combo = QComboBox()
+            combo.currentTextChanged.connect(lambda _text, g=group_index: self._emit_change(g))
+            group_layout.addWidget(combo)
+
+            bounds_row = QWidget()
+            bounds_layout = QHBoxLayout(bounds_row)
+            bounds_layout.setContentsMargins(0, 0, 0, 0)
             min_edit = QLineEdit("0")
             max_edit = QLineEdit("100")
             min_edit.setFixedWidth(40)
             max_edit.setFixedWidth(40)
-            combo.currentTextChanged.connect(lambda _text, g=group_index: self._emit_change(g))
             min_edit.textChanged.connect(lambda _text, g=group_index: self._emit_change(g))
             max_edit.textChanged.connect(lambda _text, g=group_index: self._emit_change(g))
-            axis_layout.addWidget(combo, 1)
-            axis_layout.addWidget(min_edit)
-            axis_layout.addWidget(max_edit)
+            bounds_layout.addWidget(QLabel("m"))
+            bounds_layout.addWidget(min_edit)
+            bounds_layout.addWidget(QLabel("M"))
+            bounds_layout.addWidget(max_edit)
+            bounds_layout.addStretch(1)
+            group_layout.addWidget(bounds_row)
+
+            axis_layout.addWidget(group_block, 1)
             self._group_combos.append(combo)
             self._group_min_edits.append(min_edit)
             self._group_max_edits.append(max_edit)
@@ -162,10 +186,13 @@ class _AxisTargetEditor(QWidget):
         self._on_axis_change(group_index, name, min_value, max_value)
 
 
+_DOT_FONT_SIZE_PX = 21  # 50% larger than the prior unstyled (~14px) default
+
+
 class _GroupIndicatorRow(QWidget):
-    """5 small lights, one per Group (leftmost = Group 1) - blue when active, grey
-    otherwise. Plain dots for now; sizing/spacing is not yet finalized
-    (`docs/llds/app-ui.md`).
+    """5 lights, one per Group (leftmost = Group 1) - blue when active, grey
+    otherwise, centered in the row. Plain dots for now; exact sizing/spacing is
+    not yet finalized (`docs/llds/app-ui.md`).
 
     @spec UI-MAP-015
     """
@@ -174,6 +201,7 @@ class _GroupIndicatorRow(QWidget):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addStretch(1)
         layout.addWidget(QLabel("Group:"))
         self._dots = [QLabel("●") for _ in range(_GROUP_COUNT)]
         for dot in self._dots:
@@ -182,7 +210,33 @@ class _GroupIndicatorRow(QWidget):
 
     def sync(self, lights: tuple) -> None:
         for dot, lit in zip(self._dots, lights):
-            dot.setStyleSheet(f"color: {'#2f6fed' if lit else '#888888'};")
+            color = "#2f6fed" if lit else "#888888"
+            dot.setStyleSheet(f"color: {color}; font-size: {_DOT_FONT_SIZE_PX}px;")
+
+
+_GROUP_LETTERS = "ABCDE"
+
+
+class _GroupHeaderRow(QWidget):
+    """Column letters A-E, one per Group picker, lettering which of a fader row's
+    5 two-row Group blocks (picker on top, m/M bounds below) belongs to which
+    Group. Placed as an actual row 0 in the same QTableWidget as the fader rows
+    (not a separate widget above it), so its column boundaries are guaranteed to
+    match theirs exactly - a widget floating above the table has no reliable way
+    to line up with a column Qt itself sizes via resizeColumnsToContents(). Each
+    letter takes the same stretch-1 slot per Group as `_AxisTargetEditor`'s
+    per-Group block, so it centers above that Group's whole block.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for letter in _GROUP_LETTERS:
+            label = QLabel(letter)
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("font-weight: 600;")
+            layout.addWidget(label, 1)
 
 
 class MappingView(QWidget):
@@ -194,7 +248,7 @@ class MappingView(QWidget):
     @spec UI-MAP-001, UI-MAP-002, UI-MAP-009, UI-MAP-010, UI-MAP-014, UI-MAP-015
     """
 
-    _COLUMNS = ["Name", "MIDI", "Trigger", "Target type", "Target"]
+    _COLUMNS = ["Name", "MIDI", "Target"]
 
     def __init__(
         self,
@@ -211,7 +265,9 @@ class MappingView(QWidget):
         self._group_indicator = _GroupIndicatorRow()
 
         rows = build_rows(self._engine)
-        self._table = QTableWidget(len(rows), len(self._COLUMNS))
+        # +1 for the A-E Group-letter header row (row 0), a real table row so its
+        # column boundaries are guaranteed to match every fader row's below it.
+        self._table = QTableWidget(len(rows) + 1, len(self._COLUMNS))
         self._table.setHorizontalHeaderLabels(self._COLUMNS)
         self._editors: dict = {}
         # Non-editable rows whose Target text isn't fixed at construction time -
@@ -220,25 +276,24 @@ class MappingView(QWidget):
         # non-editable row's text is a one-time fact set here and never revisited.
         self._dynamic_target_items: dict = {}
 
-        for row_index, row in enumerate(rows):
+        for column in range(2):
+            self._table.setItem(0, column, QTableWidgetItem(""))
+        self._table.setCellWidget(0, 2, _GroupHeaderRow())
+
+        for offset, row in enumerate(rows):
+            row_index = offset + 1
             self._table.setItem(row_index, 0, QTableWidgetItem(row.name))
             self._table.setItem(row_index, 1, QTableWidgetItem(row.midi_source))
-            self._table.setItem(row_index, 2, QTableWidgetItem(row.trigger))
             if row.editable:
-                type_combo = QComboBox()
-                type_combo.addItems(["OSC encoder", "OSC axis"])
                 editor = _AxisTargetEditor(
                     on_axis_change=lambda g, name, mn, mx, k=row.key: self._on_axis_change(k, g, name, mn, mx),
                     on_axis_clear=lambda g, k=row.key: self._on_axis_clear(k, g),
                 )
-                type_combo.currentTextChanged.connect(lambda text, k=row.key: self._on_type_changed(k, text))
-                self._table.setCellWidget(row_index, 3, type_combo)
-                self._table.setCellWidget(row_index, 4, editor)
-                self._editors[row.key] = (type_combo, editor)
+                self._table.setCellWidget(row_index, 2, editor)
+                self._editors[row.key] = editor
             else:
-                self._table.setItem(row_index, 3, QTableWidgetItem(row.target_type))
                 target_item = QTableWidgetItem(row.target)
-                self._table.setItem(row_index, 4, target_item)
+                self._table.setItem(row_index, 2, target_item)
                 if row.key == ("solo_websocket", None):
                     self._dynamic_target_items[row.key] = target_item
 
@@ -253,6 +308,11 @@ class MappingView(QWidget):
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         self._table.resizeColumnsToContents()
+        # Fader rows are now double-height (picker + m/M bounds stacked per
+        # Group, user's explicit layout request, 2026-07-23) - every other row
+        # stays its normal single-line height, since only cellWidgets (not plain
+        # QTableWidgetItem rows) actually need the extra vertical space.
+        self._table.resizeRowsToContents()
 
         self.refresh()
 
@@ -263,16 +323,6 @@ class MappingView(QWidget):
         for column in range(self._table.columnCount()):
             width += self._table.columnWidth(column)
         return width
-
-    def _on_type_changed(self, key, text: str) -> None:
-        _type_combo, editor = self._editors[key]
-        if text == "OSC axis":
-            self._engine.enter_axis_mode(key)
-            editor.show_axis_picker()
-        else:
-            editor.show_encoder("")  # replaced on the next refresh() tick
-            self._engine.clear_axis_target(key)
-            self._notify_group_axis_changed()
 
     def _on_axis_change(self, key, group: int, name: str, min_value: float, max_value: float) -> None:
         self._engine.set_axis_target(key, group, name, min_value, max_value)
@@ -306,14 +356,14 @@ class MappingView(QWidget):
             if row is not None and item.text() != row.target:
                 item.setText(row.target)
 
-        for key, (type_combo, editor) in self._editors.items():
+        for key, editor in self._editors.items():
             row = rows[key]
+            # Every fader stays in OSC axis mode as of this UI simplification -
+            # the OSC encoder <-> OSC axis toggle was removed from the Mapping
+            # View (user's explicit choice, 2026-07-23); MappingEngine's
+            # encoder-mode machinery itself is untouched, so this still defers
+            # to `is_axis_mode` rather than assuming.
             axis_mode = self._engine.is_axis_mode(key)
-            desired_type = "OSC axis" if axis_mode else "OSC encoder"
-            if not type_combo.view().isVisible() and type_combo.currentText() != desired_type:
-                with _signals_blocked(type_combo):
-                    type_combo.setCurrentText(desired_type)
-
             if not axis_mode:
                 editor.show_encoder(row.target)
                 continue
