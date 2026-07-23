@@ -28,7 +28,10 @@ def _format_bound(value: float) -> str:
 def _target_label(key: _Key, engine: MappingEngine) -> tuple[str, str]:
     if key in engine.profile.fader_keys:
         if engine.is_axis_mode(key):
-            axis = engine.axis_target(key)
+            # Group 1's assignment specifically - the summary row shows one value;
+            # the full per-Group detail is group_axis_picker_states() below
+            # (@spec UI-MAP-014).
+            axis = engine.axis_target(key, 1)
             if axis is not None:
                 bounds = f"{_format_bound(axis.min_value)}-{_format_bound(axis.max_value)}"
                 return "OSC axis", f"{axis.axis_name} ({bounds})"
@@ -136,6 +139,8 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
         )
     if ws_keys.solos:
         solo_ccs = sorted(number for _, number in ws_keys.solos)
+        g = engine.active_group
+        low, high = 1 + 8 * (g - 1), 8 + 8 * (g - 1)
         rows.append(
             RowView(
                 key=_SOLO_ROW_KEY,
@@ -143,7 +148,10 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
                 midi_source=f"CC{solo_ccs[0]}-{solo_ccs[-1]}, ch{channel + 1}",
                 trigger="Press",
                 target_type="WebSocket",
-                target="select-AX1 – select-AX8 (button N → AXN)",
+                # Recomputed every call from the active Group (@spec UI-MAP-013,
+                # MAP-GROUP-002) - "button N -> AXN" phrasing dropped in favor of the
+                # plain Group number, avoiding an awkward "+0" term at Group 1.
+                target=f"select-AX{low} – select-AX{high} (Group {g})",
                 editable=False,
             )
         )
@@ -174,16 +182,68 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
     return rows
 
 
+_GROUP_SWITCH_TARGETS = {
+    "previous": "Previous (wraps 5→1)",
+    "next": "Next (wraps 5→1)",
+}
+
+
+def _group_switch_rows(engine: MappingEngine) -> list[RowView]:
+    """Previous/Next Track are no longer OPINIONATED_MAP entries as of Phase 6
+    (MAP-GROUP-003, removed from OSC dispatch entirely) - rendered as fixed rows
+    here instead, the same treatment `_websocket_target_rows`/`_jog_wheel_rows`
+    already give entries that aren't table lookups. Present for whichever
+    direction(s) the active profile's `group_keys` declares - a profile
+    declaring only one of previous_track/next_track (MAP-GROUP-006) gets only
+    that row, the same "absent, not disabled" treatment as any other omitted
+    `transport` key.
+
+    @spec UI-MAP-016
+    """
+    channel = engine.profile.default_channel
+    group_keys = engine.profile.group_keys
+    rows: list[RowView] = []
+    if group_keys is None:
+        return rows
+
+    if group_keys.previous is not None:
+        rows.append(
+            RowView(
+                key=group_keys.previous,
+                name="Previous Track",
+                midi_source=midi_source_label(group_keys.previous, channel),
+                trigger="Press",
+                target_type="Group switch",
+                target=_GROUP_SWITCH_TARGETS["previous"],
+                editable=False,
+            )
+        )
+    if group_keys.next is not None:
+        rows.append(
+            RowView(
+                key=group_keys.next,
+                name="Next Track",
+                midi_source=midi_source_label(group_keys.next, channel),
+                trigger="Press",
+                target_type="Group switch",
+                target=_GROUP_SWITCH_TARGETS["next"],
+                editable=False,
+            )
+        )
+    return rows
+
+
 def build_rows(engine: MappingEngine) -> list[RowView]:
     """One row per entry in the active Controller Profile's opinionated map, in
     table order - except Knob/Mute entries, which are bank-derived and folded into
     their bank's Fader Channel row rather than shown as their own rows (their OSC
-    dispatch is unaffected) - plus the WebSocket-targeted rows (UI-MAP-013) and,
-    only for a profile with a jog wheel, two further rows for it (UI-MAP-012),
-    both appended last. A profile without a Scene button or jog wheel simply has
-    no such entry/rows to render - not a disabled placeholder, an absence.
+    dispatch is unaffected) - plus the WebSocket-targeted rows (UI-MAP-013),
+    the Group-switch rows (UI-MAP-016), and, only for a profile with a jog wheel,
+    two further rows for it (UI-MAP-012), all appended last. A profile without a
+    Scene button or jog wheel simply has no such entry/rows to render - not a
+    disabled placeholder, an absence.
 
-    @spec UI-MAP-001, UI-MAP-002, UI-MAP-012, UI-MAP-013
+    @spec UI-MAP-001, UI-MAP-002, UI-MAP-012, UI-MAP-013, UI-MAP-016
     """
     profile = engine.profile
     channel = profile.default_channel
@@ -206,6 +266,7 @@ def build_rows(engine: MappingEngine) -> list[RowView]:
     rows.extend(_websocket_target_rows(engine))
     if profile.has_jog_wheel:
         rows.extend(_jog_wheel_rows(channel))
+    rows.extend(_group_switch_rows(engine))
     return rows
 
 
@@ -229,6 +290,33 @@ def axis_picker_state(configured_name: "str | None", axes: "dict[str, float] | N
     if not axes:
         return AxisPickerState(enabled=False, placeholder="No axes found", candidates=(), current=configured_name)
     return AxisPickerState(enabled=True, placeholder=None, candidates=tuple(sorted(axes)), current=configured_name)
+
+
+def group_axis_picker_states(engine: MappingEngine, key: _Key, axes: "dict[str, float] | None") -> tuple[AxisPickerState, ...]:
+    """The 5 per-Group axis-picker states for one fader row (leftmost = Group 1),
+    replacing the pre-Phase-6 single picker. All 5 share the same discovered-name
+    candidate list, since axis discovery is project-wide, not per-Group - only
+    each picker's `current` selection varies.
+
+    @spec UI-MAP-014
+    """
+    return tuple(
+        axis_picker_state(
+            configured_name=(target.axis_name if (target := engine.axis_target(key, group)) is not None else None),
+            axes=axes,
+        )
+        for group in range(1, 6)
+    )
+
+
+def active_group_lights(engine: MappingEngine) -> tuple[bool, ...]:
+    """5 booleans, one per Group (leftmost = Group 1) - True for the currently
+    active Group, False for every other. Recomputed fresh on every call, the same
+    "no cached state" pattern as `build_rows`/`axis_picker_state`.
+
+    @spec UI-MAP-015
+    """
+    return tuple(group == engine.active_group for group in range(1, 6))
 
 
 def parse_axis_field(text: str) -> "float | None":

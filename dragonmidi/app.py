@@ -29,6 +29,7 @@ from .mapping import MappingEngine
 from .mapping_widgets import MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
 from .osc_io import AxisDiscovery, OscClient, OscListener
+from .preset_store import load_group_axis_targets, save_group_axis_targets
 from .queue_drain import drain_queue
 from .shutdown import run_shutdown_sequence
 from .signal_monitor import SignalMonitor
@@ -64,6 +65,11 @@ def _user_controllers_dir() -> Path:
     return Path.home() / "Documents" / "DragonMIDI" / "controllers"
 
 
+def _configurations_dir() -> Path:
+    """@spec MAP-STORE-001"""
+    return Path.home() / "Documents" / "DragonMIDI" / "configurations"
+
+
 def _default_profile(profiles: tuple[ControllerProfile, ...]) -> ControllerProfile:
     """@spec MIDI-PROFILE-004"""
     for profile in profiles:
@@ -89,6 +95,10 @@ class DragonMidiWindow(QMainWindow):
         self._midi_queue: "queue.Queue[MidiEvent]" = queue.Queue()
 
         self._mapping = MappingEngine(profile=self._default_profile)
+        # @spec MAP-STORE-002: load the default profile's persisted (Bank, Group)
+        # axis table before the Mapping View is built, so the initial render
+        # (UI-MAP-011) already reflects it.
+        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), self._default_profile.name))
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._websocket_output = WebSocketOutputAdapter()
         self._monitor = SignalMonitor()
@@ -177,7 +187,12 @@ class DragonMidiWindow(QMainWindow):
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Mapping"))
-        self._mapping_view = MappingView(self._mapping, self._axis_discovery, on_rescan=self._osc_listener.rescan)
+        self._mapping_view = MappingView(
+            self._mapping,
+            self._axis_discovery,
+            on_rescan=self._osc_listener.rescan,
+            on_group_axis_changed=self._save_group_axis_targets,
+        )
         layout.addWidget(self._mapping_view, 1)
 
         self.setCentralWidget(central)
@@ -196,10 +211,18 @@ class DragonMidiWindow(QMainWindow):
         """
         profile = self._controller_profiles[index]
         self._mapping.set_profile(profile)
+        # @spec MAP-STORE-002, MAP-STORE-007: loaded synchronously, in the same
+        # handler as set_profile() above and before the Mapping View refreshes -
+        # no caller can observe _group_axis_targets cleared-but-not-yet-reloaded.
+        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), profile.name))
         self._midi.set_profile(profile)
         self._profile_hint_label.setText(profile.setup_hint or "")
         self._profile_hint_label.setVisible(show_setup_hint(profile.setup_hint))  # @spec UI-PROFILE-003
         self._mapping_view.refresh()
+
+    def _save_group_axis_targets(self) -> None:
+        """@spec MAP-STORE-004"""
+        save_group_axis_targets(_configurations_dir(), self._mapping.profile.name, self._mapping.dump_group_axis_targets())
 
     def _on_apply_clicked(self) -> None:
         try:

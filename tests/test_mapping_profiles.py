@@ -29,9 +29,11 @@ BUTTON_CCS_TO_ADDRESS = {
     41: "/dragonframe/play",
     43: "/dragonframe/stepBackward",
     44: "/dragonframe/stepForward",
-    58: "/dragonframe/stepBackward",
-    59: "/dragonframe/stepForward",
 }
+# Previous/Next Track (CC58/59) are Group-switch-targeted as of Phase 6 (MAP-GROUP-003),
+# no longer OSC entries in either profile's opinionated map - excluded from this dict;
+# see test_mapping.py's Group Switching section for their coverage (profile-agnostic,
+# so not duplicated per-profile here).
 UNMAPPED_NANOKONTROL2_CCS = [60, 64, 65, 70, 71]  # Set Marker, Record 1-8 (R buttons)
 
 
@@ -107,6 +109,16 @@ def test_nanokontrol2_map_has_no_scene_button_entry() -> None:
     assert ("korg_scene", None) in OPINIONATED_MAP_STUDIO
 
 
+# @spec MAP-GROUP-003
+def test_previous_next_track_are_absent_from_both_opinionated_maps() -> None:
+    # Group-switch-targeted as of Phase 6, the same "removed from OPINIONATED_MAP
+    # entirely" treatment MAP-WS-009 already gives Stop/Cycle/Solo/Marker, for a
+    # different reason (internal-state-targeted instead of WebSocket-targeted).
+    for cc in (58, 59):
+        assert ("cc", cc) not in OPINIONATED_MAP_STUDIO
+        assert ("cc", cc) not in OPINIONATED_MAP_NANOKONTROL2
+
+
 @given(number=st.sampled_from(KNOB_CCS + MUTE_CCS + list(BUTTON_CCS_TO_ADDRESS)), value=st.integers(min_value=1, max_value=127))
 # @spec MAP-TABLE-001, MAP-PROFILE-002
 def test_nanokontrol2_shared_controls_match_on_its_own_default_channel(number: int, value: int) -> None:
@@ -128,7 +140,7 @@ def test_nanokontrol2_faders_default_to_axis_mode_like_studios(number: int, valu
     # the Studio.
     engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
     assert engine.process(cc_event(number, value, channel=NANOKONTROL2_CHANNEL), now=0.0) is None
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", number), 1, "PAN", 0.0, 100.0)
     result = engine.process(cc_event(number, value, channel=NANOKONTROL2_CHANNEL), now=0.0)
     assert result is not None
     assert result.address == "/dragonframe/axis/PAN/gotoPosition"
@@ -231,11 +243,11 @@ def test_set_profile_switches_active_map_and_channel() -> None:
 # @spec MAP-PROFILE-004
 def test_set_profile_wipes_axis_assignment() -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", 0), "PAN", 0.0, 100.0)
-    assert engine.axis_target(("cc", 0)) is not None
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    assert engine.axis_target(("cc", 0), 1) is not None
 
     engine.set_profile(NANOKONTROL2_PROFILE)
-    assert engine.axis_target(("cc", 0)) is None
+    assert engine.axis_target(("cc", 0), 1) is None
     assert engine.is_axis_mode(("cc", 0))  # reverted to the (default) axis mode, no encoder-mode override lingering
 
 
@@ -268,3 +280,27 @@ def test_set_profile_is_independent_of_device_being_found() -> None:
     engine = MappingEngine()
     engine.set_profile(NANOKONTROL2_PROFILE)
     assert engine.profile is NANOKONTROL2_PROFILE
+
+
+# @spec MAP-PROFILE-004, MAP-GROUP-007
+def test_set_profile_resets_active_group() -> None:
+    engine = MappingEngine()
+    engine.process(cc_event(59, 0, channel=STUDIO_CHANNEL), now=0.0)
+    engine.process(cc_event(59, 127, channel=STUDIO_CHANNEL), now=0.0)  # Next Track: Group 1 -> 2
+    assert engine.active_group == 2
+
+    engine.set_profile(NANOKONTROL2_PROFILE)
+    assert engine.active_group == 1
+
+
+# @spec MAP-PROFILE-004, MAP-GROUP-008
+def test_set_profile_wipes_group_axis_targets_for_every_group() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 3, "TILT", 0.0, 100.0)
+    assert engine.axis_target(("cc", 0), 1) is not None
+    assert engine.axis_target(("cc", 0), 3) is not None
+
+    engine.set_profile(NANOKONTROL2_PROFILE)
+    assert engine.axis_target(("cc", 0), 1) is None
+    assert engine.axis_target(("cc", 0), 3) is None

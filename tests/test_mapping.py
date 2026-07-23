@@ -11,6 +11,9 @@
 @spec MAP-JOGKEY-006, MAP-JOGKEY-007
 @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005, MAP-WS-006
 @spec MAP-WS-007, MAP-WS-008, MAP-WS-009
+@spec MAP-GROUP-001, MAP-GROUP-002, MAP-GROUP-003, MAP-GROUP-004, MAP-GROUP-005
+@spec MAP-GROUP-006, MAP-GROUP-007, MAP-GROUP-008, MAP-GROUP-009, MAP-GROUP-010
+@spec MAP-GROUP-011, MAP-GROUP-012
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.events import KeyCombo, MidiEvent, WebSocketCommand
-from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, MappingEngine
+from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, ControlsConfig, MappingEngine, build_profile
 
 FADER_CCS = list(range(0, 8))  # CC 0-7 -> encoder 1-8
 KNOB_CCS = list(range(16, 24))  # CC 16-23 -> encoder 9-16
@@ -30,12 +33,14 @@ BUTTON_CCS_TO_ADDRESS = {
     41: "/dragonframe/play",
     43: "/dragonframe/stepBackward",  # Rewind (<<)
     44: "/dragonframe/stepForward",  # Fast Forward (>>)
-    58: "/dragonframe/stepBackward",  # Previous Track
-    59: "/dragonframe/stepForward",  # Next Track
 }
 # Stop/Cycle/Previous Marker/Next Marker are WebSocket-targeted (MAP-WS-001, 003, 006, 007),
-# not OSC - tested separately below, not via BUTTON_CCS_TO_ADDRESS.
+# not OSC - tested separately below, not via BUTTON_CCS_TO_ADDRESS. Previous/Next Track are
+# Group-switch-targeted as of Phase 6 (MAP-GROUP-003) - produce neither OSC nor WebSocket
+# output; tested separately in the Group Switching section below, not via this dict either.
 WEBSOCKET_BUTTON_CCS = [42, 46, 61, 62]
+PREV_TRACK_CC = 58
+NEXT_TRACK_CC = 59
 UNMAPPED_CCS = [64, 65, 70, 71, 80, 87, 60, 47]  # Record/Select/Set Marker/Return to Zero
 JOG_CC = 110
 
@@ -278,7 +283,7 @@ def test_reset_clears_tracked_state_so_a_prior_press_no_longer_blocks_debounce()
 # @spec MAP-AXIS-001
 def test_axis_target_sends_gotoposition_scaled_into_min_max(number: int, axis_name: str, min_value: float, max_value: float, raw_value: int) -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), axis_name, min_value, max_value)
+    engine.set_axis_target(("cc", number), 1, axis_name, min_value, max_value)
     result = engine.process(cc_event(number, raw_value), now=0.0)
     assert result is not None
     assert result.address == f"/dragonframe/axis/{axis_name}/gotoPosition"
@@ -291,7 +296,7 @@ def test_axis_target_sends_gotoposition_scaled_into_min_max(number: int, axis_na
 # @spec MAP-AXIS-001
 def test_axis_target_repeating_identical_value_sends_only_once(number: int, value: int) -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", number), 1, "PAN", 0.0, 100.0)
     first = engine.process(cc_event(number, value), now=0.0)
     second = engine.process(cc_event(number, value), now=0.001)
     assert first is not None
@@ -305,7 +310,7 @@ def test_axis_target_repeating_identical_value_sends_only_once(number: int, valu
 # @spec MAP-AXIS-001
 def test_axis_target_sends_every_distinct_value_with_no_debounce(number: int, values: list[int]) -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", number), 1, "PAN", 0.0, 100.0)
     # Fire all distinct values at the same instant; a debounce window would drop some of these.
     results = [engine.process(cc_event(number, v), now=0.0) for v in values]
     assert all(r is not None for r in results)
@@ -317,7 +322,7 @@ def test_axis_target_still_respects_the_channel_16_invariant(number: int, channe
     # An axis-targeted fader is still a CC-sourced control; MAP-TABLE-001's channel
     # invariant must keep applying regardless of target type.
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", number), 1, "PAN", 0.0, 100.0)
     result = engine.process(cc_event(number, 100, channel=channel), now=0.0)
     assert result is None
 
@@ -333,14 +338,14 @@ def test_axis_target_still_respects_the_channel_16_invariant(number: int, channe
 # @spec MAP-AXIS-002
 def test_set_axis_target_accepts_any_real_min_max_pair(number: int, min_value: float, max_value: float) -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", min_value, max_value)  # must not raise, even if min > max
+    engine.set_axis_target(("cc", number), 1, "PAN", min_value, max_value)  # must not raise, even if min > max
 
 
 @given(number=st.sampled_from(FADER_CCS), constant=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False))
 # @spec MAP-AXIS-002
 def test_min_equal_max_produces_constant_output(number: int, constant: float) -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", constant, constant)
+    engine.set_axis_target(("cc", number), 1, "PAN", constant, constant)
     result_low = engine.process(cc_event(number, 0), now=0.0)
     result_high = engine.process(cc_event(number, 127), now=0.001)
     assert result_low is not None and result_low.args == (constant,)
@@ -353,7 +358,7 @@ def test_inverted_min_max_produces_reversed_mapping(number: int, raw_value: int)
     # min > max is a legitimate "reversed" mapping: a higher fader value should
     # produce a *lower* position, not be rejected.
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 100.0, 0.0)
+    engine.set_axis_target(("cc", number), 1, "PAN", 100.0, 0.0)
     result = engine.process(cc_event(number, raw_value), now=0.0)
     assert result is not None
     normalized = raw_value / 127.0
@@ -370,7 +375,7 @@ def test_axis_target_fires_even_for_a_name_no_longer_considered_discovered() -> 
     # discovered names is a UI-level gate; the engine must keep sending regardless of
     # whether that name is still considered valid by anything else.
     engine = MappingEngine()
-    engine.set_axis_target(("cc", 0), "NO_LONGER_DISCOVERED", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 1, "NO_LONGER_DISCOVERED", 0.0, 100.0)
     result = engine.process(cc_event(0, 64), now=0.0)
     assert result is not None
     assert result.address == "/dragonframe/axis/NO_LONGER_DISCOVERED/gotoPosition"
@@ -383,7 +388,7 @@ def test_axis_target_fires_even_for_a_name_no_longer_considered_discovered() -> 
 # @spec MAP-AXIS-004
 def test_set_axis_target_succeeds_for_fader_keys(number: int) -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)  # must not raise
+    engine.set_axis_target(("cc", number), 1, "PAN", 0.0, 100.0)  # must not raise
 
 
 @given(number=st.sampled_from(KNOB_CCS + MUTE_CCS + SOLO_CCS + list(BUTTON_CCS_TO_ADDRESS)))
@@ -391,7 +396,7 @@ def test_set_axis_target_succeeds_for_fader_keys(number: int) -> None:
 def test_set_axis_target_rejects_non_fader_keys(number: int) -> None:
     engine = MappingEngine()
     try:
-        engine.set_axis_target(("cc", number), "PAN", 0.0, 100.0)
+        engine.set_axis_target(("cc", number), 1, "PAN", 0.0, 100.0)
     except ValueError:
         return
     raise AssertionError(f"expected ValueError for non-fader key ('cc', {number})")
@@ -407,7 +412,7 @@ def test_setting_an_axis_target_discards_prior_encoder_dedup_state() -> None:
     engine.process(cc_event(0, 64), now=0.0)
     assert ("cc", 0) in engine.tracked_controls()
 
-    engine.set_axis_target(("cc", 0), "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
     # The same raw value that would have been deduped under the old target must fire
     # again under the new target, proving the switch discarded the prior dedup state.
     result = engine.process(cc_event(0, 64), now=0.001)
@@ -423,7 +428,7 @@ def test_setting_an_axis_target_discards_prior_encoder_dedup_state() -> None:
 def test_clear_axis_target_reverts_to_opinionated_encoder(number: int) -> None:
     key = ("cc", number)
     engine = MappingEngine()
-    engine.set_axis_target(key, "PAN", 0.0, 100.0)
+    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
     engine.clear_axis_target(key)
 
     result = engine.process(cc_event(number, 64), now=0.0)
@@ -437,7 +442,7 @@ def test_clear_axis_target_reverts_to_opinionated_encoder(number: int) -> None:
 def test_clear_axis_target_discards_dedup_state_from_the_axis_target(number: int) -> None:
     key = ("cc", number)
     engine = MappingEngine()
-    engine.set_axis_target(key, "PAN", 0.0, 100.0)
+    engine.set_axis_target(key, 1, "PAN", 0.0, 100.0)
     engine.process(cc_event(number, 64), now=0.0)  # establish previous-value state under the axis target
 
     engine.clear_axis_target(key)
@@ -519,7 +524,7 @@ def test_knob_first_reading_establishes_baseline_and_sends_nothing(fader_number:
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
     result = engine.process(cc_event(knob_number, raw), now=0.0)
     assert result is None
 
@@ -538,7 +543,7 @@ def test_knob_sends_step_position_as_the_change_since_its_own_last_reading(fader
     # it, so MAP-BANK-008's clamping never interferes - this test is only about the
     # delta formula; clamping (including the no-established-position default) has
     # its own dedicated tests below.
-    engine.set_axis_target(fader_key, "PAN", -1000.0, 1000.0)
+    engine.set_axis_target(fader_key, 1, "PAN", -1000.0, 1000.0)
     engine.process(cc_event(fader_number, 64), now=-1.0)  # establishes a mid-range position
     engine.process(cc_event(knob_number, first_raw), now=0.0)  # establish baseline
 
@@ -557,7 +562,7 @@ def test_mute_sends_setzero_when_bank_fader_has_axis(fader_number: int) -> None:
     fader_key = ("cc", fader_number)
     mute_number = fader_number + _MUTE_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
     engine.process(cc_event(mute_number, 0), now=0.0)  # ensure a known not-pressed starting state
     result = engine.process(cc_event(mute_number, 127), now=0.0)
     assert result is not None
@@ -588,7 +593,7 @@ def test_solo_sends_select_ax_regardless_of_bank_fader_axis_state(fader_number: 
     solo_number = fader_number + _SOLO_BANK_OFFSET
 
     engine_with_axis = MappingEngine()
-    engine_with_axis.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    engine_with_axis.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
     engine_with_axis.process_websocket(cc_event(solo_number, 0), now=0.0)
     result_with_axis = engine_with_axis.process_websocket(cc_event(solo_number, 127), now=0.0)
 
@@ -607,7 +612,7 @@ def test_knob_derived_step_position_deduped_on_identical_raw_value(fader_number:
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
     engine.process(cc_event(knob_number, 60), now=0.0)  # establish baseline
     first = engine.process(cc_event(knob_number, 90), now=0.001)
     second = engine.process(cc_event(knob_number, 90), now=0.002)  # identical raw value again
@@ -621,7 +626,7 @@ def test_knob_derived_step_position_deduped_on_identical_raw_value(fader_number:
 # @spec MAP-BANK-006
 def test_record_and_select_stay_unmapped_regardless_of_bank_axis(fader_number: int, bank_base: int) -> None:
     engine = MappingEngine()
-    engine.set_axis_target(("cc", fader_number), "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", fader_number), 1, "PAN", 0.0, 100.0)
     result = engine.process(cc_event(bank_base + fader_number, 127), now=0.0)
     assert result is None
 
@@ -635,7 +640,7 @@ def test_knob_dedup_discarded_on_encoder_to_axis_transition(fader_number: int) -
     engine.clear_axis_target(fader_key)  # explicit encoder mode
     engine.process(cc_event(knob_number, 0), now=0.0)  # encoder-mode dedup stores normalized 0.0
 
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # encoder -> axis transition
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)  # encoder -> axis transition
     # Without the MAP-BANK-007 discard, the stale normalized 0.0 would still be compared
     # against as if it were a raw baseline (0 - 0.0 == 0.0, a nonzero raw value like 50
     # would wrongly compute as a real delta of 50.0 instead of establishing a fresh baseline).
@@ -654,11 +659,11 @@ def test_knob_dedup_not_discarded_by_a_same_mode_axis_name_change(fader_number: 
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
     engine.process(cc_event(knob_number, 60), now=0.0)  # establish baseline
     engine.process(cc_event(knob_number, 90), now=0.5)  # real reading, previous now = 90
 
-    engine.set_axis_target(fader_key, "TILT", 0.0, 100.0)  # different name, still axis mode
+    engine.set_axis_target(fader_key, 1, "TILT", 0.0, 100.0)  # different name, still axis mode
     result = engine.process(cc_event(knob_number, 90), now=1.0)  # same raw value again
     assert result is None  # still deduped (delta=0) - no mode transition occurred
 
@@ -673,7 +678,7 @@ def test_enter_axis_mode_alone_discards_knob_dedup_on_transition(fader_number: i
     engine.process(cc_event(knob_number, 0), now=0.0)  # stale normalized 0.0 stored
 
     engine.enter_axis_mode(fader_key)  # transition back to axis mode, no name yet
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # already in axis mode - no further transition here
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)  # already in axis mode - no further transition here
     # Proves the discard happened in enter_axis_mode itself, not (redundantly) in this set_axis_target call.
     first = engine.process(cc_event(knob_number, 50), now=1.0)
     assert first is None
@@ -692,7 +697,7 @@ def test_knob_nudge_reduced_to_reach_the_lower_bound_exactly(fader_number: int) 
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)  # normalized*127 == raw_value, for easy math
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 127.0)  # normalized*127 == raw_value, for easy math
     engine.process(cc_event(fader_number, 5), now=-1.0)  # establishes position 5.0
     engine.process(cc_event(knob_number, 100), now=0.0)  # establish knob baseline
 
@@ -708,7 +713,7 @@ def test_knob_nudge_already_at_lower_bound_sends_nothing(fader_number: int) -> N
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 127.0)
     engine.process(cc_event(fader_number, 0), now=-1.0)  # establishes position 0.0, the floor itself
     engine.process(cc_event(knob_number, 100), now=0.0)  # establish knob baseline
 
@@ -722,7 +727,7 @@ def test_knob_nudge_reduced_to_reach_the_upper_bound_exactly(fader_number: int) 
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 127.0)
     engine.process(cc_event(fader_number, 122), now=-1.0)  # establishes position 122.0
     engine.process(cc_event(knob_number, 0), now=0.0)  # establish knob baseline
 
@@ -738,7 +743,7 @@ def test_knob_clamp_bounds_are_order_independent(fader_number: int) -> None:
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 127.0, 0.0)  # min > max
+    engine.set_axis_target(fader_key, 1, "PAN", 127.0, 0.0)  # min > max
     engine.process(cc_event(fader_number, 5), now=-1.0)  # normalized*(0-127)+127 == 122.0
     engine.process(cc_event(knob_number, 0), now=0.0)  # establish knob baseline
 
@@ -755,7 +760,7 @@ def test_knob_position_defaults_to_the_lower_bound_with_no_fader_send_and_no_liv
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 127.0)  # fader never sends a gotoPosition
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 127.0)  # fader never sends a gotoPosition
     engine.process(cc_event(knob_number, 100), now=0.0)  # establish knob baseline
 
     result = engine.process(cc_event(knob_number, 0), now=0.001)  # any negative delta
@@ -768,7 +773,7 @@ def test_knob_clamp_prefers_live_reported_position_over_internal_estimate(fader_
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # fader never sends -> internal estimate is 0.0 (the floor)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)  # fader never sends -> internal estimate is 0.0 (the floor)
     engine.process(cc_event(knob_number, 50), now=0.0)  # establish knob baseline
 
     # Without the live reading, this delta (-5.0) would clamp against the internal
@@ -787,7 +792,7 @@ def test_knob_clamp_falls_back_to_internal_estimate_when_no_live_reading_for_thi
     fader_key = ("cc", fader_number)
     knob_number = fader_number + _KNOB_BANK_OFFSET
     engine = MappingEngine()
-    engine.set_axis_target(fader_key, "PAN", 0.0, 100.0)  # internal estimate is 0.0 (the floor)
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)  # internal estimate is 0.0 (the floor)
     engine.process(cc_event(knob_number, 50), now=0.0)  # establish knob baseline
 
     # axis_positions has no entry for "PAN" - must fall back to the internal estimate
@@ -972,11 +977,26 @@ def test_stop_produces_no_osc_output() -> None:
 @given(fader_number=st.sampled_from(FADER_CCS))
 # @spec MAP-WS-002
 def test_solo_n_sends_select_ax_n(fader_number: int) -> None:
+    # Group 1 is the default active Group; N + 8*(1-1) == N, matching the pre-Phase-6
+    # formula exactly.
     solo_number = fader_number + _SOLO_BANK_OFFSET
     engine = MappingEngine()
     engine.process_websocket(cc_event(solo_number, 0), now=0.0)
     result = engine.process_websocket(cc_event(solo_number, 127), now=0.0)
     assert result == WebSocketCommand(f"select-AX{fader_number + 1}")
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-WS-002 (Phase 6: Group-aware offset)
+def test_solo_n_offset_follows_the_active_group(fader_number: int) -> None:
+    engine = MappingEngine()
+    engine.process(cc_event(NEXT_TRACK_CC, 0), now=0.0)
+    engine.process(cc_event(NEXT_TRACK_CC, 127), now=0.0)  # Group 1 -> 2
+    assert engine.active_group == 2
+    solo_number = fader_number + _SOLO_BANK_OFFSET
+    engine.process_websocket(cc_event(solo_number, 0), now=1.0)
+    result = engine.process_websocket(cc_event(solo_number, 127), now=1.0)
+    assert result == WebSocketCommand(f"select-AX{fader_number + 1 + 8}")  # N + 8*(2-1)
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
@@ -1138,3 +1158,316 @@ def test_websocket_control_on_wrong_channel_never_matches(cc: int, channel: int,
     engine = MappingEngine()
     result = engine.process_websocket(cc_event(cc, value, channel=channel), now=0.0, axis_positions={"PAN": 0.0})
     assert result is None
+
+
+# ============================================================================
+# Group Switching (MAP-GROUP-001 through MAP-GROUP-012, Phase 6)
+# ============================================================================
+
+
+def _press(engine: MappingEngine, cc: int, now: float, channel: int = CHANNEL) -> object:
+    engine.process(cc_event(cc, 0, channel=channel), now=now)
+    return engine.process(cc_event(cc, 127, channel=channel), now=now)
+
+
+def _collision_profile():
+    # previous_track deliberately shares CC110 with the jog wheel, to exercise
+    # MAP-GROUP-005's dispatch-order invariant.
+    controls = ControlsConfig(
+        faders=tuple(range(8)),
+        knobs=tuple(range(16, 24)),
+        mutes=tuple(range(48, 56)),
+        solos=tuple(range(32, 40)),
+        transport={"previous_track": 110, "next_track": 111},
+        jog_wheel=110,
+    )
+    return build_profile(
+        name="Collision Test",
+        match_substring="collisiontest",
+        has_native_mode=False,
+        default_channel=CHANNEL,
+        has_jog_wheel=True,
+        has_scene_button=False,
+        controls=controls,
+    )
+
+
+def _asymmetric_track_profile():
+    # Only next_track declared - MAP-GROUP-006's one-directional case.
+    controls = ControlsConfig(
+        faders=tuple(range(8)),
+        knobs=tuple(range(16, 24)),
+        mutes=tuple(range(48, 56)),
+        solos=tuple(range(32, 40)),
+        transport={"next_track": NEXT_TRACK_CC},
+        jog_wheel=None,
+    )
+    return build_profile(
+        name="Asymmetric Track Test",
+        match_substring="asymmetrictracktest",
+        has_native_mode=False,
+        default_channel=CHANNEL,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        controls=controls,
+    )
+
+
+# @spec MAP-GROUP-002
+def test_engine_starts_on_group_1() -> None:
+    engine = MappingEngine()
+    assert engine.active_group == 1
+
+
+# @spec MAP-GROUP-003
+def test_next_track_steps_active_group_forward() -> None:
+    engine = MappingEngine()
+    _press(engine, NEXT_TRACK_CC, now=0.0)
+    assert engine.active_group == 2
+
+
+# @spec MAP-GROUP-003
+def test_previous_track_steps_active_group_backward() -> None:
+    engine = MappingEngine()
+    _press(engine, NEXT_TRACK_CC, now=0.0)
+    _press(engine, NEXT_TRACK_CC, now=1.0)
+    assert engine.active_group == 3
+    _press(engine, PREV_TRACK_CC, now=2.0)
+    assert engine.active_group == 2
+
+
+# @spec MAP-GROUP-003
+def test_track_press_produces_no_osc_output() -> None:
+    engine = MappingEngine()
+    engine.process(cc_event(NEXT_TRACK_CC, 0), now=0.0)
+    assert engine.process(cc_event(NEXT_TRACK_CC, 127), now=0.0) is None
+
+
+# @spec MAP-GROUP-003
+def test_track_press_produces_no_websocket_output() -> None:
+    engine = MappingEngine()
+    engine.process_websocket(cc_event(NEXT_TRACK_CC, 0), now=0.0)
+    assert engine.process_websocket(cc_event(NEXT_TRACK_CC, 127), now=0.0) is None
+
+
+@given(gap=st.floats(min_value=0.0, max_value=0.079))
+# @spec MAP-GROUP-003 (debounced identically to MAP-DEBOUNCE-001)
+def test_track_second_press_inside_debounce_window_is_dropped(gap: float) -> None:
+    engine = MappingEngine()
+    _press(engine, NEXT_TRACK_CC, now=0.0)
+    engine.process(cc_event(NEXT_TRACK_CC, 0), now=gap / 2)
+    engine.process(cc_event(NEXT_TRACK_CC, 127), now=gap)
+    assert engine.active_group == 2  # second press dropped, did not advance to 3
+
+
+# @spec MAP-GROUP-004
+def test_next_track_wraps_from_group_5_to_group_1() -> None:
+    engine = MappingEngine()
+    for i in range(4):
+        _press(engine, NEXT_TRACK_CC, now=float(i))
+    assert engine.active_group == 5
+    _press(engine, NEXT_TRACK_CC, now=5.0)
+    assert engine.active_group == 1
+
+
+# @spec MAP-GROUP-004
+def test_previous_track_wraps_from_group_1_to_group_5() -> None:
+    engine = MappingEngine()
+    _press(engine, PREV_TRACK_CC, now=0.0)
+    assert engine.active_group == 5
+
+
+# @spec MAP-GROUP-005
+def test_track_dispatch_wins_over_jog_wheel_on_cc_collision() -> None:
+    engine = MappingEngine(profile=_collision_profile())
+    engine.process(cc_event(110, 0), now=0.0)
+    # Raw value 1 would be a clockwise jog-wheel message (stepForward) if the jog
+    # wheel's special-case ran first; MAP-GROUP-005 requires Track to be checked first.
+    result = engine.process(cc_event(110, 1), now=0.0)
+    assert result is None  # Group-switch produces no OSC, unlike stepForward
+    assert engine.active_group == 5  # previous_track direction, wraps from 1
+
+
+# @spec MAP-GROUP-006
+def test_profile_with_only_next_track_supports_only_that_direction() -> None:
+    engine = MappingEngine(profile=_asymmetric_track_profile())
+    engine.process(cc_event(NEXT_TRACK_CC, 0), now=0.0)
+    engine.process(cc_event(NEXT_TRACK_CC, 127), now=0.0)
+    assert engine.active_group == 2
+    # CC58 (Previous Track under the Studio/nanoKONTROL2 profiles) isn't declared as
+    # previous_track under this profile at all - an ordinary, unmatched CC message.
+    result = engine.process(cc_event(PREV_TRACK_CC, 127), now=1.0)
+    assert result is None
+    assert engine.active_group == 2  # unchanged
+
+
+# @spec MAP-GROUP-007
+def test_reset_does_not_change_active_group() -> None:
+    engine = MappingEngine()
+    _press(engine, NEXT_TRACK_CC, now=0.0)
+    assert engine.active_group == 2
+    engine.reset()
+    assert engine.active_group == 2  # survives an ordinary MIDI reconnect clear
+
+
+# @spec MAP-GROUP-008
+def test_axis_target_is_independent_per_group() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 2, "TILT", 0.0, 200.0)
+    assert engine.axis_target(("cc", 0), 1).axis_name == "PAN"
+    assert engine.axis_target(("cc", 0), 2).axis_name == "TILT"
+
+
+# @spec MAP-GROUP-008
+def test_editing_a_non_active_group_does_not_change_active_dispatch() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)  # Group 1, active
+    engine.set_axis_target(("cc", 0), 3, "TILT", 0.0, 100.0)  # Group 3, not active
+    result = engine.process(cc_event(0, 64), now=0.0)
+    assert result is not None
+    assert result.address == "/dragonframe/axis/PAN/gotoPosition"  # still Group 1's axis
+
+
+# @spec MAP-GROUP-008
+def test_switching_group_changes_which_axis_a_fader_addresses() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 2, "TILT", 0.0, 100.0)
+    _press(engine, NEXT_TRACK_CC, now=0.0)
+    assert engine.active_group == 2
+    result = engine.process(cc_event(0, 64), now=1.0)
+    assert result is not None
+    assert result.address == "/dragonframe/axis/TILT/gotoPosition"
+
+
+# @spec MAP-GROUP-009
+def test_clear_axis_target_clears_all_five_groups_and_enters_encoder_mode() -> None:
+    engine = MappingEngine()
+    for g in range(1, 6):
+        engine.set_axis_target(("cc", 0), g, "PAN", 0.0, 100.0)
+    engine.clear_axis_target(("cc", 0))
+    for g in range(1, 6):
+        assert engine.axis_target(("cc", 0), g) is None
+    assert not engine.is_axis_mode(("cc", 0))
+
+
+# @spec MAP-GROUP-009
+def test_clear_group_axis_target_clears_only_that_group() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 2, "TILT", 0.0, 100.0)
+    engine.clear_group_axis_target(("cc", 0), 1)
+    assert engine.axis_target(("cc", 0), 1) is None
+    assert engine.axis_target(("cc", 0), 2) is not None
+    assert engine.is_axis_mode(("cc", 0))  # still axis mode - not the full row-level toggle
+
+
+# @spec MAP-GROUP-009
+def test_clear_group_axis_target_on_an_empty_cell_is_a_noop() -> None:
+    engine = MappingEngine()
+    engine.clear_group_axis_target(("cc", 0), 1)  # must not raise
+    assert engine.axis_target(("cc", 0), 1) is None
+
+
+# @spec MAP-GROUP-010
+def test_editing_non_active_group_does_not_disturb_active_groups_dedup_state() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)  # active
+    first = engine.process(cc_event(0, 64), now=0.0)
+    assert first is not None
+    # Editing Group 3 while Group 1 is live must not reset Group 1's dedup baseline.
+    engine.set_axis_target(("cc", 0), 3, "TILT", 0.0, 100.0)
+    second = engine.process(cc_event(0, 64), now=1.0)  # same raw value as `first`
+    assert second is None  # still deduped - Group 1's baseline survived the Group-3 edit
+
+
+# @spec MAP-GROUP-010
+def test_clearing_non_active_group_does_not_disturb_active_groups_dedup_state() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 3, "TILT", 0.0, 100.0)
+    first = engine.process(cc_event(0, 64), now=0.0)
+    assert first is not None
+    engine.clear_group_axis_target(("cc", 0), 3)
+    second = engine.process(cc_event(0, 64), now=1.0)
+    assert second is None  # still deduped
+
+
+# @spec MAP-GROUP-011
+def test_group_switch_discards_dedup_for_axis_mode_banks() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 2, "PAN", 0.0, 100.0)
+    engine.process(cc_event(0, 64), now=0.0)  # establish a dedup baseline for value 64
+    _press(engine, NEXT_TRACK_CC, now=1.0)  # switch to Group 2
+    # If dedup state had survived the switch it would wrongly suppress this repeat;
+    # MAP-GROUP-011 requires it discarded for axis-mode Banks on every Group switch.
+    result = engine.process(cc_event(0, 64), now=2.0)
+    assert result is not None
+
+
+# @spec MAP-GROUP-011
+def test_group_switch_does_not_touch_encoder_mode_banks_dedup() -> None:
+    engine = MappingEngine()
+    engine.clear_axis_target(("cc", 0))  # OSC encoder mode
+    engine.process(cc_event(0, 64), now=0.0)  # establish a dedup baseline
+    _press(engine, NEXT_TRACK_CC, now=1.0)
+    # Encoder-mode dedup is untouched by a Group switch - the repeat must still be
+    # suppressed as a non-distinct value.
+    result = engine.process(cc_event(0, 64), now=2.0)
+    assert result is None
+
+
+# @spec MAP-GROUP-012
+def test_track_press_mid_gesture_takes_effect_on_the_very_next_value() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 2, "TILT", 0.0, 100.0)
+    engine.process(cc_event(0, 40), now=0.0)  # fader mid-drag under Group 1
+    _press(engine, NEXT_TRACK_CC, now=0.5)  # Track pressed mid-gesture
+    result = engine.process(cc_event(0, 41), now=1.0)  # next value from the same drag
+    assert result is not None
+    assert result.address == "/dragonframe/axis/TILT/gotoPosition"  # fires against the new Group immediately
+
+
+# --- MAP-STORE-002: MappingEngine's bulk-populate/dump methods used by preset_store.py ---
+
+
+# @spec MAP-STORE-002
+def test_load_group_axis_targets_populates_without_saving_or_raising() -> None:
+    engine = MappingEngine()
+    engine.load_group_axis_targets({1: {1: {"axis_name": "PAN", "min": 0.0, "max": 100.0}}})
+    target = engine.axis_target(("cc", 0), 1)  # Bank 1 -> Fader 1 -> CC 0 (Studio profile)
+    assert target is not None
+    assert target.axis_name == "PAN"
+    assert target.min_value == 0.0
+    assert target.max_value == 100.0
+
+
+# @spec MAP-STORE-002
+def test_load_group_axis_targets_puts_the_fader_in_axis_mode() -> None:
+    engine = MappingEngine()
+    engine.clear_axis_target(("cc", 0))  # start in encoder mode
+    engine.load_group_axis_targets({1: {1: {"axis_name": "PAN", "min": 0.0, "max": 100.0}}})
+    assert engine.is_axis_mode(("cc", 0))
+
+
+# @spec MAP-STORE-002
+def test_dump_group_axis_targets_round_trips_through_load() -> None:
+    engine = MappingEngine()
+    engine.set_axis_target(("cc", 0), 1, "PAN", 0.0, 100.0)
+    engine.set_axis_target(("cc", 0), 3, "TILT", -50.0, 50.0)
+    dumped = engine.dump_group_axis_targets()
+
+    fresh = MappingEngine()
+    fresh.load_group_axis_targets(dumped)
+    assert fresh.axis_target(("cc", 0), 1).axis_name == "PAN"
+    assert fresh.axis_target(("cc", 0), 3).axis_name == "TILT"
+    assert fresh.axis_target(("cc", 0), 2) is None  # untouched groups stay empty
+
+
+# @spec MAP-GROUP-008 (bank_fader_keys ordering)
+def test_studio_profile_bank_fader_keys_is_ordered_bank_1_through_8() -> None:
+    engine = MappingEngine()
+    assert engine.profile.bank_fader_keys == tuple(("cc", cc) for cc in FADER_CCS)

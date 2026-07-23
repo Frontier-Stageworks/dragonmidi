@@ -78,6 +78,19 @@ class WebSocketKeys:
     solos: tuple[_Key, ...]
 
 
+@dataclass(frozen=True)
+class GroupKeys:
+    """CC-sourced keys for Group switching (Previous/Next Track), per active
+    Controller Profile - parallel to WebSocketKeys, but Track produces neither an
+    OSC message nor a WebSocket command (@spec MAP-GROUP-003).
+
+    @spec MAP-GROUP-003
+    """
+
+    previous: "_Key | None"
+    next: "_Key | None"
+
+
 # Bank membership: Bank N = Fader N, Knob N, Mute N (Record N/Select N excluded, no
 # matching per-axis action exists for them - @spec MAP-BANK-006). Solo N is not a bank
 # member - it's an unconditional WebSocket target regardless of Fader N's axis state
@@ -89,8 +102,9 @@ _TRANSPORT_OSC_TARGETS: dict[str, tuple[str, str, tuple]] = {
     "play": ("press", "/dragonframe/play", ()),
     "rewind": ("press", "/dragonframe/stepBackward", ()),
     "fast_forward": ("press", "/dragonframe/stepForward", ()),
-    "previous_track": ("press", "/dragonframe/stepBackward", ()),
-    "next_track": ("press", "/dragonframe/stepForward", ()),
+    # previous_track/next_track are deliberately absent as of Phase 6 - they are
+    # Group-switch-targeted (MAP-GROUP-003), not OSC entries, the same "removed from
+    # OPINIONATED_MAP entirely" treatment MAP-WS-009 gives Stop/Cycle/Solo/Marker.
 }
 
 _TRANSPORT_DISPLAY_NAMES: dict[str, str] = {
@@ -172,18 +186,33 @@ def build_websocket_keys(controls: ControlsConfig) -> WebSocketKeys:
 
 def build_bank_membership(controls: ControlsConfig) -> "dict[str, object]":
     """Positional (not CC-arithmetic) Fader<->Knob/Mute pairing: Bank N = index N-1
-    in each of `faders`/`knobs`/`mutes`. Returns the four pieces `ControllerProfile`
-    stores directly (`fader_keys`, `knob_to_fader`, `mute_to_fader`, `fader_to_knob`)."""
+    in each of `faders`/`knobs`/`mutes`. Returns the five pieces `ControllerProfile`
+    stores directly (`fader_keys`, `knob_to_fader`, `mute_to_fader`, `fader_to_knob`,
+    `bank_fader_keys`)."""
     fader_keys = frozenset(("cc", cc) for cc in controls.faders)
     knob_to_fader = {("cc", knob_cc): ("cc", fader_cc) for fader_cc, knob_cc in zip(controls.faders, controls.knobs)}
     mute_to_fader = {("cc", mute_cc): ("cc", fader_cc) for fader_cc, mute_cc in zip(controls.faders, controls.mutes)}
     fader_to_knob = {fader_key: knob_key for knob_key, fader_key in knob_to_fader.items()}
+    # Ordered (index 0 = Bank 1), unlike fader_keys' frozenset - needed by the Preset
+    # Store to translate a persisted Bank index back to a fader key (@spec MAP-STORE-001).
+    bank_fader_keys = tuple(("cc", cc) for cc in controls.faders)
     return {
         "fader_keys": fader_keys,
         "knob_to_fader": knob_to_fader,
         "mute_to_fader": mute_to_fader,
         "fader_to_knob": fader_to_knob,
+        "bank_fader_keys": bank_fader_keys,
     }
+
+
+def build_group_keys(controls: ControlsConfig) -> GroupKeys:
+    """@spec MAP-GROUP-003, MAP-GROUP-006"""
+
+    def _key(name: str) -> "_Key | None":
+        cc = controls.transport.get(name)
+        return ("cc", cc) if cc is not None else None
+
+    return GroupKeys(previous=_key("previous_track"), next=_key("next_track"))
 
 
 def build_control_names(controls: ControlsConfig, has_scene_button: bool) -> dict[_Key, str]:
@@ -225,6 +254,7 @@ def build_profile(
         has_scene_button=has_scene_button,
         opinionated_map=build_opinionated_map(controls, has_scene_button),
         websocket_keys=build_websocket_keys(controls),
+        group_keys=build_group_keys(controls),
         setup_hint=setup_hint,
         control_names=build_control_names(controls, has_scene_button),
         **bank,
@@ -309,6 +339,10 @@ class MappingEngine:
     @spec MAP-WS-007, MAP-WS-008, MAP-WS-009
     @spec MAP-PROFILE-001, MAP-PROFILE-002, MAP-PROFILE-003, MAP-PROFILE-004
     @spec MAP-JOG-000, MAP-JOGKEY-000
+    @spec MAP-GROUP-001, MAP-GROUP-002, MAP-GROUP-003, MAP-GROUP-004, MAP-GROUP-005
+    @spec MAP-GROUP-006, MAP-GROUP-007, MAP-GROUP-008, MAP-GROUP-009, MAP-GROUP-010
+    @spec MAP-GROUP-011, MAP-GROUP-012
+    @spec MAP-STORE-002
     """
 
     def __init__(self, profile: ControllerProfile = STUDIO_PROFILE) -> None:
@@ -316,9 +350,12 @@ class MappingEngine:
         self._previous_value: dict[_Key, float] = {}
         self._pressed_state: dict[_Key, bool] = {}
         self._last_fired: dict[_Key, float] = {}
-        self._axis_targets: dict[_Key, _AxisTarget] = {}
+        # Keyed by (fader_key, group), group in 1..5 - one axis assignment per (Bank,
+        # Group) pairing, not one per Bank (@spec MAP-GROUP-008).
+        self._group_axis_targets: dict[tuple[_Key, int], _AxisTarget] = {}
         # Faders explicitly switched to OSC encoder mode; absence = OSC axis mode (the
-        # default - @spec MAP-AXIS-008).
+        # default - @spec MAP-AXIS-008). Per-fader, not per-(fader, group) - encoder
+        # mode doesn't vary with Group (@spec MAP-GROUP-009).
         self._encoder_mode: set[_Key] = set()
         # Fallback estimate of each fader's axis's current absolute position, keyed by
         # fader key, built entirely from DragonMIDI's own sends. Used to clamp Knob N's
@@ -328,12 +365,27 @@ class MappingEngine:
         self._axis_position: dict[_Key, float] = {}
         # Cycle's last-selected axis index, -1 = nothing selected yet (@spec MAP-WS-005).
         self._cycle_index: int = -1
+        # Active Group, 1-5 - unlike _cycle_index, 1 is always a valid starting state,
+        # not a "nothing selected" sentinel (@spec MAP-GROUP-002).
+        self._active_group: int = 1
+
+    @property
+    def active_group(self) -> int:
+        """Read-only - only changes through a legitimate Track </> press, the same
+        encapsulation `_cycle_index` already has.
+
+        @spec MAP-GROUP-002
+        """
+        return self._active_group
 
     def reset(self) -> None:
         self._previous_value.clear()
         self._pressed_state.clear()
         self._last_fired.clear()
         self._cycle_index = -1
+        # _active_group and _group_axis_targets deliberately survive an ordinary
+        # reconnect clear - only a Controller Profile switch resets them
+        # (@spec MAP-GROUP-007, see set_profile below).
 
     @property
     def profile(self) -> ControllerProfile:
@@ -351,9 +403,10 @@ class MappingEngine:
         """
         self._profile = profile
         self.reset()
-        self._axis_targets.clear()
+        self._group_axis_targets.clear()
         self._encoder_mode.clear()
         self._axis_position.clear()
+        self._active_group = 1  # @spec MAP-GROUP-007
 
     def tracked_controls(self) -> set[_Key]:
         return set(self._previous_value) | set(self._pressed_state) | set(self._last_fired)
@@ -367,6 +420,21 @@ class MappingEngine:
         knob_key = self._profile.fader_to_knob.get(fader_key)
         if knob_key is not None:
             self._previous_value.pop(knob_key, None)
+
+    def _step_active_group(self, direction: int) -> None:
+        """Steps `_active_group` by `direction` (+1/-1), wrapping at the 1-5
+        boundary rather than clamping, and discards dedup/position state for every
+        Bank currently in OSC axis (direct) mode - Banks in OSC encoder mode are
+        untouched, since their target doesn't depend on Group.
+
+        @spec MAP-GROUP-004, MAP-GROUP-011
+        """
+        self._active_group = ((self._active_group - 1 + direction) % 5) + 1
+        for fader_key in self._profile.bank_fader_keys:
+            if self.is_axis_mode(fader_key):
+                self._previous_value.pop(fader_key, None)
+                self._axis_position.pop(fader_key, None)
+                self._discard_bank_knob_dedup(fader_key)
 
     def enter_axis_mode(self, key: _Key) -> None:
         """Switch a fader into OSC axis (direct) mode without selecting a name yet.
@@ -382,42 +450,104 @@ class MappingEngine:
             self._discard_bank_knob_dedup(key)
         self._axis_position.pop(key, None)
 
-    def set_axis_target(self, key: _Key, axis_name: str, min_value: float, max_value: float) -> None:
-        """Retarget a fader to send gotoPosition to a named Dragonframe axis.
+    def set_axis_target(self, key: _Key, group: int, axis_name: str, min_value: float, max_value: float) -> None:
+        """Retarget Bank `key`'s fader to send gotoPosition to a named Dragonframe
+        axis, for the given Group (1-5) - independent of whichever Group is
+        currently active (@spec MAP-GROUP-008).
 
-        @spec MAP-AXIS-002, MAP-AXIS-004
+        @spec MAP-AXIS-002, MAP-AXIS-004, MAP-GROUP-008, MAP-GROUP-009, MAP-GROUP-010
         """
         if key not in self._profile.fader_keys:
             raise ValueError(f"OSC axis (direct) target is only available for fader controls, got {key!r}")
         was_encoder_mode = key in self._encoder_mode
         self._encoder_mode.discard(key)
         if was_encoder_mode:
+            # A mode transition is a per-fader event, not per-Group - it fires
+            # regardless of which Group was just configured.
             self._discard_bank_knob_dedup(key)
-        self._axis_targets[key] = _AxisTarget(axis_name, min_value, max_value)
-        # Switching target discards prior dedup state for this key (LLD: "switching a
-        # mapping entry's target type discards the previous target's configuration").
-        self._previous_value.pop(key, None)
-        # A new axis name (or new min/max) invalidates any tracked position estimate,
-        # even without a mode transition - it may be a different axis entirely.
-        self._axis_position.pop(key, None)
+        self._group_axis_targets[(key, group)] = _AxisTarget(axis_name, min_value, max_value)
+        if group == self._active_group:
+            # Switching target discards prior dedup state for this key (LLD: "switching a
+            # mapping entry's target type discards the previous target's configuration").
+            # Scoped to the active Group only - editing a background Group's assignment
+            # must not disturb the active Group's in-flight dedup/position state
+            # (@spec MAP-GROUP-010).
+            self._previous_value.pop(key, None)
+            self._axis_position.pop(key, None)
 
-    def axis_target(self, key: _Key) -> _AxisTarget | None:
-        """Read-only lookup of a fader's current OSC axis (direct) target, if any."""
-        return self._axis_targets.get(key)
+    def axis_target(self, key: _Key, group: int) -> _AxisTarget | None:
+        """Read-only lookup of a fader's current OSC axis (direct) target for the
+        given Group, if any.
+
+        @spec MAP-GROUP-008
+        """
+        return self._group_axis_targets.get((key, group))
 
     def clear_axis_target(self, key: _Key) -> None:
-        """Revert a fader from its OSC axis (direct) target back to its opinionated
-        OSC encoder channel target. A no-op if the key has no axis target set.
+        """Revert a fader from OSC axis (direct) mode back to its opinionated OSC
+        encoder channel target, for every Group at once - the row-level
+        encoder/axis toggle. A no-op if the key has no axis target set in any Group.
 
-        @spec MAP-AXIS-007
+        @spec MAP-AXIS-007, MAP-GROUP-009
         """
         was_encoder_mode = key in self._encoder_mode
         self._encoder_mode.add(key)
-        self._axis_targets.pop(key, None)
+        for group in range(1, 6):
+            self._group_axis_targets.pop((key, group), None)
         self._previous_value.pop(key, None)
         self._axis_position.pop(key, None)
         if not was_encoder_mode:
             self._discard_bank_knob_dedup(key)
+
+    def clear_group_axis_target(self, key: _Key, group: int) -> None:
+        """Clear only one Group's axis assignment for a fader, leaving OSC axis
+        (direct) mode and every other Group's assignment for that fader untouched -
+        distinct from `clear_axis_target`'s full row-level toggle. A no-op if that
+        (key, group) pair has no axis target set.
+
+        @spec MAP-GROUP-009, MAP-GROUP-010
+        """
+        self._group_axis_targets.pop((key, group), None)
+        if group == self._active_group:
+            self._previous_value.pop(key, None)
+            self._axis_position.pop(key, None)
+
+    def load_group_axis_targets(self, bank_axes: "dict[int, dict[int, dict]]") -> None:
+        """Bulk-populate `_group_axis_targets` directly from the Preset Store's
+        validated, JSON-native shape (`{bank_index: {group_index: {"axis_name",
+        "min", "max"}}}`), translating Bank index -> fader key via
+        `ControllerProfile.bank_fader_keys`. No save side effect - this is the
+        bulk-populate load path, not a loop of `set_axis_target` calls. Does not
+        touch dedup/position state, since no live device input has occurred yet.
+
+        @spec MAP-STORE-002
+        """
+        bank_fader_keys = self._profile.bank_fader_keys
+        for bank_index, groups in bank_axes.items():
+            if not (1 <= bank_index <= len(bank_fader_keys)):
+                continue
+            fader_key = bank_fader_keys[bank_index - 1]
+            self._encoder_mode.discard(fader_key)
+            for group, entry in groups.items():
+                self._group_axis_targets[(fader_key, group)] = _AxisTarget(entry["axis_name"], entry["min"], entry["max"])
+
+    def dump_group_axis_targets(self) -> "dict[int, dict[int, dict]]":
+        """Reverse of `load_group_axis_targets`, for the Preset Store to write out.
+
+        @spec MAP-STORE-002
+        """
+        bank_index_by_fader_key = {key: i + 1 for i, key in enumerate(self._profile.bank_fader_keys)}
+        result: dict[int, dict[int, dict]] = {}
+        for (fader_key, group), target in self._group_axis_targets.items():
+            bank_index = bank_index_by_fader_key.get(fader_key)
+            if bank_index is None:
+                continue
+            result.setdefault(bank_index, {})[group] = {
+                "axis_name": target.axis_name,
+                "min": target.min_value,
+                "max": target.max_value,
+            }
+        return result
 
     def process(self, event: MidiEvent, now: float, axis_positions: "dict[str, float] | None" = None) -> OscMessage | None:
         """`axis_positions` is the OSC Listener's most recently observed position per
@@ -437,18 +567,33 @@ class MappingEngine:
                 return None
             key = (event.type, event.number)
 
+            # Checked immediately after the channel-match check, before every other
+            # dispatch path (including the jog wheel below) - a CC collision between
+            # a Group-switch key and any other control resolves in favor of Group
+            # switching (@spec MAP-GROUP-005).
+            group_keys = self._profile.group_keys
+            if group_keys is not None:
+                if key == group_keys.previous:
+                    if self._press_edge(key, event, now):
+                        self._step_active_group(-1)
+                    return None
+                if key == group_keys.next:
+                    if self._press_edge(key, event, now):
+                        self._step_active_group(1)
+                    return None
+
             if self._profile.has_jog_wheel and key == _JOG_WHEEL_KEY:
                 return self._process_jog(event)
 
             if key in self._profile.fader_keys and self.is_axis_mode(key):
-                axis_target = self._axis_targets.get(key)
+                axis_target = self._group_axis_targets.get((key, self._active_group))
                 if axis_target is not None:
                     return self._process_axis_target(key, event, axis_target)
                 return None  # axis mode, no name chosen yet - @spec MAP-AXIS-009
 
             fader_key = self._profile.bank_fader_key(key)
             if fader_key is not None and self.is_axis_mode(fader_key):
-                axis_target = self._axis_targets.get(fader_key)
+                axis_target = self._group_axis_targets.get((fader_key, self._active_group))
                 if axis_target is not None:
                     return self._process_bank_derived(key, event, now, fader_key, axis_target, axis_positions)
                 # Bank's fader is in axis mode but has no name yet: falls through to
@@ -618,7 +763,9 @@ class MappingEngine:
         if key in ws_keys.solos:
             if not self._press_edge(key, event, now):
                 return None
-            axis_number = ws_keys.solos.index(key) + 1
+            # Group-aware as of Phase 6: Solo N in Group g addresses N + 8*(g-1)
+            # (@spec MAP-WS-002, MAP-GROUP-002).
+            axis_number = ws_keys.solos.index(key) + 1 + 8 * (self._active_group - 1)
             return WebSocketCommand(f"select-AX{axis_number}")
 
         if key == ws_keys.cycle:
