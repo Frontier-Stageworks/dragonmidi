@@ -11,7 +11,8 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QGridLayout,
+    QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -47,6 +48,74 @@ DEFAULT_PROFILE_NAME = "nanoKONTROL Studio"
 # hostname, and a 5-digit port number) rather than stretching to fill the row.
 _HOST_FIELD_MAX_WIDTH = 110
 _PORT_FIELD_MAX_WIDTH = 55
+# Bounded the same way as the host/port fields - a controller name has no
+# reason to claim more than this much width (2026-07-23, user's explicit choice).
+_CONTROLLER_COMBO_MAX_WIDTH = 250
+
+# Evokes Frontier Stageworks' cream/black/mustard, monospace-technical look
+# (2026-07-23, user's explicit choice) - not an exact port, just the same
+# palette/typography family applied to Qt's native widgets.
+_INK = "#171717"
+_PAPER = "#F0EEE4"
+_ACCENT = "#E8B923"
+_APP_STYLESHEET = f"""
+QWidget {{
+    background-color: {_PAPER};
+    color: {_INK};
+    font-family: Menlo, Monaco, "Courier New", monospace;
+}}
+QGroupBox {{
+    border: 2px solid {_INK};
+    border-radius: 0px;
+    margin-top: 14px;
+    padding-top: 10px;
+    font-weight: bold;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background-color: {_PAPER};
+}}
+QPushButton {{
+    background-color: {_PAPER};
+    border: 2px solid {_INK};
+    border-radius: 0px;
+    padding: 5px 14px;
+    font-weight: bold;
+}}
+QPushButton:hover {{
+    background-color: #efd98a;
+}}
+QPushButton:pressed {{
+    background-color: {_ACCENT};
+}}
+QPushButton#primaryButton {{
+    background-color: {_ACCENT};
+}}
+QPushButton#primaryButton:hover {{
+    background-color: #f0c53d;
+}}
+QLineEdit, QComboBox {{
+    border: 1px solid {_INK};
+    border-radius: 0px;
+    padding: 3px 6px;
+    background-color: white;
+}}
+QTableWidget {{
+    border: 2px solid {_INK};
+    gridline-color: {_INK};
+    background-color: white;
+}}
+QHeaderView::section {{
+    background-color: {_INK};
+    color: {_PAPER};
+    padding: 4px;
+    border: none;
+    font-weight: bold;
+}}
+"""
 
 
 def _asset_path(filename: str) -> str | None:
@@ -149,12 +218,32 @@ class DragonMidiWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
 
-        default_index = next(i for i, p in enumerate(self._controller_profiles) if p is self._default_profile)
+        layout.addWidget(self._build_controller_group())
+        layout.addWidget(self._build_status_group())
+        layout.addWidget(self._build_network_group())
 
-        profile_form = QGridLayout()
-        profile_form.addWidget(QLabel("Controller"), 0, 0)
+        layout.addWidget(QLabel("Mapping"))
+        self._mapping_view = MappingView(
+            self._mapping,
+            self._axis_discovery,
+            on_rescan=self._osc_listener.rescan,
+            on_group_axis_changed=self._save_group_axis_targets,
+        )
+        layout.addWidget(self._mapping_view, 1)
+
+        self.setCentralWidget(central)
+        self.resize(self._mapping_view.table_width_hint() + 60, 700)
+
+    def _build_controller_group(self) -> QGroupBox:
+        group = QGroupBox("Controller")
+        layout = QVBoxLayout(group)
+
+        combo_row = QHBoxLayout()
+        combo_row.addWidget(QLabel("Controller"))
         self._profile_combo = QComboBox()
         self._profile_combo.addItems([profile.name for profile in self._controller_profiles])
+        self._profile_combo.setMaximumWidth(_CONTROLLER_COMBO_MAX_WIDTH)
+        default_index = next(i for i, p in enumerate(self._controller_profiles) if p is self._default_profile)
         # setCurrentIndex() before connecting the signal, so selecting the default
         # profile (which may not be index 0 - the dropdown lists user-local profiles
         # first, @spec PROFILE-LOAD-004) doesn't itself fire a redundant initial
@@ -162,8 +251,9 @@ class DragonMidiWindow(QMainWindow):
         # from their constructors.
         self._profile_combo.setCurrentIndex(default_index)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
-        profile_form.addWidget(self._profile_combo, 0, 1)
-        layout.addLayout(profile_form)
+        combo_row.addWidget(self._profile_combo)
+        combo_row.addStretch(1)
+        layout.addLayout(combo_row)
 
         self._configuration_dialog = ConfigurationDialog(self._mapping)
         configuration_button = QPushButton("Configuration…")
@@ -181,48 +271,49 @@ class DragonMidiWindow(QMainWindow):
         if load_failure_text is not None:
             layout.addWidget(QLabel(load_failure_text))
 
+        return group
+
+    def _build_status_group(self) -> QGroupBox:
+        group = QGroupBox("Status")
+        layout = QVBoxLayout(group)
         self._midi_row = IndicatorRow("MIDI signal")
         self._dragonframe_row = IndicatorRow("Dragonframe signal")
         layout.addWidget(self._midi_row)
         layout.addWidget(self._dragonframe_row)
+        return group
 
-        sending_to_row = QHBoxLayout()
-        sending_to_row.addWidget(QLabel("Sending to"))
+    def _build_network_group(self) -> QGroupBox:
+        group = QGroupBox("Network")
+        layout = QVBoxLayout(group)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
+
+        sending_to_container = QWidget()
+        sending_to_row = QHBoxLayout(sending_to_container)
+        sending_to_row.setContentsMargins(0, 0, 0, 0)
         self._host_edit = QLineEdit(self._config.applied.host)
         self._host_edit.setMaximumWidth(_HOST_FIELD_MAX_WIDTH)
         self._df_port_edit = QLineEdit(str(self._config.applied.dragonframe_port))
         self._df_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
         sending_to_row.addWidget(self._host_edit)
         sending_to_row.addWidget(self._df_port_edit)
-        sending_to_row.addStretch(1)
-        layout.addLayout(sending_to_row)
+        form.addRow("Sending to", sending_to_container)
 
-        listen_port_row = QHBoxLayout()
-        listen_port_row.addWidget(QLabel("Listen port"))
         self._listen_port_edit = QLineEdit(str(self._config.applied.listen_port))
         self._listen_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
-        listen_port_row.addWidget(self._listen_port_edit)
-        listen_port_row.addStretch(1)
-        layout.addLayout(listen_port_row)
+        form.addRow("Listen port", self._listen_port_edit)
+        layout.addLayout(form)
 
         apply_button = QPushButton("Apply")
+        apply_button.setObjectName("primaryButton")
         apply_button.clicked.connect(self._on_apply_clicked)
         apply_row = QHBoxLayout()
         apply_row.addWidget(apply_button)
         apply_row.addStretch(1)
         layout.addLayout(apply_row)
 
-        layout.addWidget(QLabel("Mapping"))
-        self._mapping_view = MappingView(
-            self._mapping,
-            self._axis_discovery,
-            on_rescan=self._osc_listener.rescan,
-            on_group_axis_changed=self._save_group_axis_targets,
-        )
-        layout.addWidget(self._mapping_view, 1)
-
-        self.setCentralWidget(central)
-        self.resize(self._mapping_view.table_width_hint() + 60, 700)
+        return group
 
     def _on_midi_connection_change(self, connected: bool, device_name: str | None) -> None:
         self._midi_connected = connected
@@ -319,6 +410,7 @@ class DragonMidiWindow(QMainWindow):
 
 def run() -> None:
     app = QApplication(sys.argv)
+    app.setStyleSheet(_APP_STYLESHEET)
     icon_path = _asset_path("dragonmidi.png")
     if icon_path:
         app.setWindowIcon(QIcon(icon_path))
