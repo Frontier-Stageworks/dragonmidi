@@ -44,10 +44,10 @@ DragonMIDI ships with a ready-to-use set of defaults — no setup required to st
 
 | Control | What it does in Dragonframe |
 |---|---|
-| Faders 1-8 | Drive a motion-control axis directly — pick which one in the Mapping table (see [Controlling a motor axis](#controlling-a-motor-axis) below) |
-| Knobs 1-8 | Fine-tune nudge for the axis its own fader is driving (see below); drives an OSC encoder channel instead if that fader has no axis picked |
-| Mute 1-8 | Marks the axis's *current* position as its zero reference, once its fader has an axis assigned; otherwise resets the fallback encoder channel |
-| Solo 1-8 | Selects that motion-control axis, for use with Marker ◄/► below (see [Selecting and jogging an axis](#selecting-and-jogging-an-axis)) |
+| Faders 1-8 | Drive a motion-control axis directly — pick which one in the Mapping table, separately for each of 5 Groups (see [Controlling a motor axis](#controlling-a-motor-axis) and [Reaching more than 8 axes with Groups](#reaching-more-than-8-axes-with-groups) below) |
+| Knobs 1-8 | Fine-tune nudge for the axis its own fader is driving in the currently active Group (see below); drives an OSC encoder channel instead if that fader has no axis picked for that Group |
+| Mute 1-8 | Marks the axis's *current* position as its zero reference, once its fader has an axis assigned in the active Group; otherwise resets the fallback encoder channel |
+| Solo 1-8 | Selects that motion-control axis in the currently active Group, for use with Marker ◄/► below (see [Selecting and jogging an axis](#selecting-and-jogging-an-axis) and [Reaching more than 8 axes with Groups](#reaching-more-than-8-axes-with-groups)) |
 | Jog wheel | Step through the timeline frame-by-frame — turn clockwise to step forward, counterclockwise to step backward, one frame per detent. Also steps frames inside the Arc Motion Control workspace (see note below), where the main timeline step doesn't reach |
 | Return to Zero | Not assigned — no matching Dragonframe action |
 | Play | Play back your shot frames |
@@ -56,7 +56,7 @@ DragonMIDI ships with a ready-to-use set of defaults — no setup required to st
 | Rewind (◄◄) / Fast Forward (►►) | Step one frame backward / forward |
 | Cycle | Selects the next motion-control axis in turn, cycling back to the first after the last (see [Selecting and jogging an axis](#selecting-and-jogging-an-axis)) |
 | Marker ◄/► | Jog the currently-selected axis backward/forward, one step per press (see [Selecting and jogging an axis](#selecting-and-jogging-an-axis)) |
-| Track ◄/► | Step one frame backward / forward |
+| Track ◄/► | Switch to the previous/next Group (see [Reaching more than 8 axes with Groups](#reaching-more-than-8-axes-with-groups) below) |
 | Set Marker | Not assigned — no matching Dragonframe action |
 | Scene button | Black out the display |
 
@@ -94,22 +94,31 @@ Each fader, together with the knob and Mute button directly above/below it in th
 
 (Solo isn't part of this bank behavior — see [Selecting and jogging an axis](#selecting-and-jogging-an-axis) below.)
 
-Faders start out already in this mode with no axis picked yet — until you pick one, that fader (and its bank) produces no output. To assign one:
+Faders start out already in this mode with no axis picked yet — until you pick one (for whichever Group is active, see [Reaching more than 8 axes with Groups](#reaching-more-than-8-axes-with-groups) below), that fader (and its bank) produces no output. To assign one:
 
-1. In the app's Mapping table, find the fader's row. It defaults to **Target type: OSC axis** with an empty dropdown.
-2. The dropdown lists the axis names DragonMIDI found in your currently-open Dragonframe project. Pick one.
+1. In the app's Mapping table, find the fader's row — it's now double-height, with one column per Group (labeled **A** through **E**) separated by vertical rules.
+2. In the Group's column, the top dropdown lists the axis names DragonMIDI found in your currently-open Dragonframe project. Pick one.
    - If it says **"Discovering…"**, DragonMIDI is still checking — wait a second and it'll populate.
    - If it says **"No axes found"**, your current Dragonframe project doesn't have any motion-control axes set up yet.
    - Just added a new axis in Dragonframe, or opened a different project? Click **Rescan axes** to refresh the list.
-3. Enter a **min** and **max** value next to the dropdown — this is the range the axis moves across as you slide the fader from empty to full. The knob's nudge is kept inside this same range (it stops at whichever bound it reaches, never overshoots); Mute's zero action isn't affected by min/max — it's a fixed Dragonframe command.
-
-If you'd rather use the older encoder-channel approach for a given fader instead (see [Configuring Dragonframe](#configuring-dragonframe) below), switch that fader's **Target type** to **OSC encoder** — its bank's knob and Mute fall back to their encoder-channel/reset behavior too.
+3. Below the dropdown, enter a value in the **m** (min) and **M** (max) boxes — this is the range the axis moves across as you slide the fader from empty to full. The knob's nudge is kept inside this same range (it stops at whichever bound it reaches, never overshoots); Mute's zero action isn't affected by min/max — it's a fixed Dragonframe command.
 
 **Important:** for the fader to actually move the axis, that axis's **Function** must be set to **Manual** in Dragonframe's Arc Motion Control workspace (axis settings). If it's left on `Function: Normal` without a real motor attached, Dragonframe will silently accept the commands without moving anything — this is a Dragonframe-side setting DragonMIDI can't detect or fix for you.
 
 **Watch out for accidental Mute presses:** Dragonframe has no OSC command to move an axis to a stored zero position — `setZero` is the only related command, and it *recalibrates* the reference point to wherever the axis currently is. Bumping Mute mid-shoot won't move anything, but it will quietly redefine that axis's zero to its current position.
 
-Bank assignments reset back to the defaults every time you restart DragonMIDI — they aren't saved between sessions yet.
+Axis assignments — every Group's, for every fader — are saved automatically as you make them, and reloaded the next time you launch DragonMIDI with the same controller selected. They're stored per controller in `~/Documents/DragonMIDI/configurations/`.
+
+## Reaching more than 8 axes with Groups
+
+8 faders can only reach 8 axes at once — Groups let the same 8 faders reach up to 40. A **Group** is a complete, independent set of axis assignments for all 8 faders; there are 5 of them, and only one is "active" — driving the physical controls — at a time.
+
+- **Track ◄/► switches which Group is active**, wrapping around (past Group 5 goes back to Group 1, and vice versa). This doesn't touch OSC or send anything to Dragonframe by itself — it just changes which set of axis assignments your faders/knobs/Mute buttons are currently driving.
+- **The Mapping table shows all 5 Groups at once**, side by side, in columns labeled **A** through **E** — so you can set up every Group's assignments ahead of time without switching back and forth. Editing a Group's picker doesn't require that Group to be the active one; you can configure Group C while Group A is live on the controller.
+- **A row of 5 lights above the table** — also labeled A-E — shows which Group is currently active (lit blue); the rest are gray.
+- **Solo N shifts with the active Group.** In Group A, Solo 1 selects axis 1, same as always; in Group B, Solo 1 selects axis 9 (the 1st axis *of that Group*, i.e. axis `1 + 8×(Group's position - 1)`); and so on through Group E's axes 33-40.
+
+Everything else about assigning and driving an axis works exactly as described above — you're just doing it once per Group instead of once total.
 
 ## Selecting and jogging an axis
 
@@ -117,14 +126,14 @@ Solo, Cycle, Stop, and Marker ◄/► work together, independently of the fader 
 
 | Control | Behavior |
 |---|---|
-| Solo N | Selects axis N on Dragonframe's motion-control side, whether or not that axis has a fader assigned |
-| Cycle | Selects the next axis in turn (1, 2, 3, …), wrapping back to the first after the last |
+| Solo N | Selects an axis on Dragonframe's motion-control side — which one depends on the active Group (see [Reaching more than 8 axes with Groups](#reaching-more-than-8-axes-with-groups) above) — whether or not that axis has a fader assigned |
+| Cycle | Selects the next axis in turn across *all* your project's axes (1, 2, 3, …), wrapping back to the first after the last — independent of Groups |
 | Marker ◄/► | Jogs whichever axis was last selected by Solo or Cycle, one step per press |
 | Stop | Emergency-stops motion-control movement |
 
 Marker ◄/► does nothing until you've pressed Solo or Cycle at least once in the current Dragonframe session — there's no default selected axis. This selection lives inside Dragonframe itself, not DragonMIDI, so it also survives independently of anything DragonMIDI tracks.
 
-These four don't require picking an axis name or a min/max range — Solo addresses axes by their fixed position (1st, 2nd, …) in Dragonframe's own motion-control setup, not by the name you'd see in the fader's axis picker.
+These four don't require picking an axis name or a min/max range — Solo addresses axes by their fixed position in Dragonframe's own motion-control setup, not by the name you'd see in the fader's axis picker.
 
 ## Installing
 
@@ -169,7 +178,7 @@ One-time setup, per machine:
 2. Enable **OSC Input** on UDP port `7010`.
 3. Enable **OSC Output**, sending to `127.0.0.1` port `7011`.
 
-That's it for the transport/shoot/marker buttons, and for Solo/Cycle/Stop/Marker ◄/►, to work. A fader/knob/Mute bank left on OSC encoder mode instead of picking an axis needs one more step: open Dragonframe's **Arc Motion Control** workspace and, for each axis, set its **OSC encoder channel** to match the control driving it (Fader 1 → channel 1, Knob 1 → channel 9, and so on — see the table above), plus the scale/absolute-vs-relative setting for that axis.
+That's it for the transport/shoot/marker buttons, and for Solo/Cycle/Stop/Marker ◄/►, to work. A **Knob or Mute whose bank's fader has no axis picked for the active Group** automatically falls back to sending an OSC encoder channel instead (no toggle needed — see [Controlling a motor axis](#controlling-a-motor-axis) above) — if you want that fallback to actually move something, open Dragonframe's **Arc Motion Control** workspace and set the matching axis's **OSC encoder channel** to the one that control sends (Knob 1 → channel 9, Mute 1 → its reset channel, and so on — see the table above), plus the scale/absolute-vs-relative setting for that axis. The fader itself has no such fallback from the current UI — an unassigned fader stays silent rather than driving an encoder channel.
 
 Once you've configured a rig's axes once, you can reuse that setup in future projects: in the Arc Motion Control workspace, use **Export | Arc Axis Setup (ARCX)** to save it, then **Import | Arc Axis Setup (ARCX)** in a new project instead of redoing it by hand.
 
@@ -177,9 +186,10 @@ Solo/Cycle/Stop/Marker ◄/► use a second connection Dragonframe opens on its 
 
 ## Current limitations
 
-- Only faders have their own axis picker. Knobs and Mute automatically follow whichever axis their bank's fader is set to (nudge / zero) — they can't be pointed at a *different* axis independently. Return to Zero isn't mapped to anything.
-- Fixed at 8 fader/knob/Mute banks and 8 Solo targets — there's no bank-shift to reach a 9th+ axis.
-- No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment, but not reassign what any other control does, and nothing is saved between restarts.
+- Only faders have their own axis picker. Knobs and Mute automatically follow whichever axis their bank's fader is set to (nudge / zero) in the active Group — they can't be pointed at a *different* axis independently. Return to Zero isn't mapped to anything.
+- Capped at 5 Groups (40 axes total, `docs/llds/static-mapping.md § Group Switching`) — there's no way to add a 6th from the app itself.
+- The older OSC-encoder-channel option for a fader (see [Configuring Dragonframe](#configuring-dragonframe)) isn't reachable from the app anymore — every fader always behaves as direct-axis. If you need that fallback, it's still supported by the underlying engine, just not exposed in the current UI.
+- No custom mapping editor yet — you can retarget a fader's (and its bank's) axis assignment per Group, but not reassign what any other control does.
 - Only the KORG nanoKONTROL Studio and nanoKONTROL2 are supported — no other MIDI controllers.
 - The Controller dropdown's selection isn't remembered between restarts — DragonMIDI always starts on nanoKONTROL Studio; switch it back to nanoKONTROL2 each time if that's what you're using.
 - If another application also connects to Dragonframe's WebSocket integration on the same local port, only one can have Solo/Cycle/Stop/Marker ◄/► working at a time.
