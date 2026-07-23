@@ -218,9 +218,10 @@ class DragonMidiWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
 
-        layout.addWidget(self._build_controller_group())
-        layout.addWidget(self._build_status_group())
-        layout.addWidget(self._build_network_group())
+        top_row = QHBoxLayout()
+        top_row.addWidget(self._build_status_group())
+        top_row.addWidget(self._build_configuration_group())
+        layout.addLayout(top_row)
 
         layout.addWidget(QLabel("Mapping"))
         self._mapping_view = MappingView(
@@ -234,8 +235,22 @@ class DragonMidiWindow(QMainWindow):
         self.setCentralWidget(central)
         self.resize(self._mapping_view.table_width_hint() + 60, 700)
 
-    def _build_controller_group(self) -> QGroupBox:
-        group = QGroupBox("Controller")
+    def _build_status_group(self) -> QGroupBox:
+        group = QGroupBox("Status")
+        layout = QVBoxLayout(group)
+        self._midi_row = IndicatorRow("MIDI signal")
+        self._dragonframe_row = IndicatorRow("Dragonframe signal")
+        layout.addWidget(self._midi_row)
+        layout.addWidget(self._dragonframe_row)
+        layout.addStretch(1)
+        return group
+
+    def _build_configuration_group(self) -> QGroupBox:
+        """Controller selection and network settings share one "Configuration"
+        panel, side-by-side with Status (2026-07-23, user's explicit choice) -
+        both are settings a user sets and rarely revisits, unlike Status's
+        continuously-live indicators."""
+        group = QGroupBox("Configuration")
         layout = QVBoxLayout(group)
 
         combo_row = QHBoxLayout()
@@ -270,21 +285,6 @@ class DragonMidiWindow(QMainWindow):
         load_failure_text = config_load_failure_label(len(self._load_result.failures))
         if load_failure_text is not None:
             layout.addWidget(QLabel(load_failure_text))
-
-        return group
-
-    def _build_status_group(self) -> QGroupBox:
-        group = QGroupBox("Status")
-        layout = QVBoxLayout(group)
-        self._midi_row = IndicatorRow("MIDI signal")
-        self._dragonframe_row = IndicatorRow("Dragonframe signal")
-        layout.addWidget(self._midi_row)
-        layout.addWidget(self._dragonframe_row)
-        return group
-
-    def _build_network_group(self) -> QGroupBox:
-        group = QGroupBox("Network")
-        layout = QVBoxLayout(group)
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
