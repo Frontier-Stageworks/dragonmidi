@@ -10,6 +10,8 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
+import dataclasses
+
 from dragonmidi.events import MidiEvent
 from dragonmidi.mapping import (
     NANOKONTROL2_CHANNEL,
@@ -17,8 +19,10 @@ from dragonmidi.mapping import (
     OPINIONATED_MAP_NANOKONTROL2,
     OPINIONATED_MAP_STUDIO,
     STUDIO_CHANNEL,
+    STUDIO_CONTROLS,
     STUDIO_PROFILE,
     MappingEngine,
+    build_profile,
 )
 
 FADER_CCS = list(range(8))
@@ -316,3 +320,72 @@ def test_set_profile_wipes_group_axis_targets_for_every_group() -> None:
     engine.set_profile(NANOKONTROL2_PROFILE)
     assert engine.axis_target(("cc", 0), 1) is None
     assert engine.axis_target(("cc", 0), 3) is None
+
+
+# --- MAP-PROFILE-004: full post-switch trace isolation (not just the first event) ---
+#
+# The tests above each check exactly one thing immediately after set_profile() - they
+# don't rule out a stale value surfacing only on a LATER post-switch event (e.g. a knob
+# dedup baseline that only misbehaves on a second nudge). A property test comparing an
+# entire post-switch trace against a freshly constructed engine closes that gap.
+
+# A synthetic profile that deliberately reuses Studio's Fader 1 CC (0) for a
+# WebSocket-targeted "stop" role instead - the adversarial case: _Key ("cc", 0) means
+# something completely different (continuous fader vs. a press-edge WebSocket command)
+# depending on which profile is active, and both profiles use the same CC number for it.
+_COLLIDING_CONTROLS = dataclasses.replace(STUDIO_CONTROLS, transport={**STUDIO_CONTROLS.transport, "stop": 0})
+_COLLIDING_PROFILE = build_profile(
+    name="Colliding Test Profile",
+    match_substring="collidingtestprofile",
+    has_native_mode=False,
+    default_channel=STUDIO_CHANNEL,
+    has_jog_wheel=False,
+    has_scene_button=False,
+    controls=_COLLIDING_CONTROLS,
+)
+
+# CCs that produce a real, exercisable effect on at least one of Studio /
+# _COLLIDING_PROFILE, restricted to ones both profiles actually process on the shared
+# channel (STUDIO_CHANNEL) so the generated events are not silently dropped by the
+# channel-match check before ever reaching the interesting dispatch logic.
+_EXERCISABLE_CCS = list(range(8)) + list(range(16, 24)) + list(range(48, 56)) + [41, 42, 43, 44, 45, 46, 58, 59, 61, 62]
+
+
+def _event_seq(draw_values: list[tuple[int, int]]) -> list[MidiEvent]:
+    return [cc_event(cc, value, channel=STUDIO_CHANNEL) for cc, value in draw_values]
+
+
+@given(
+    pre_switch=st.lists(st.tuples(st.sampled_from(_EXERCISABLE_CCS), st.integers(min_value=0, max_value=127)), min_size=1, max_size=15),
+    post_switch=st.lists(st.tuples(st.sampled_from(_EXERCISABLE_CCS), st.integers(min_value=0, max_value=127)), min_size=1, max_size=15),
+)
+# @spec MAP-PROFILE-004
+def test_set_profile_full_post_switch_trace_matches_a_fresh_engine(
+    pre_switch: list[tuple[int, int]], post_switch: list[tuple[int, int]]
+) -> None:
+    """Property: after set_profile(), the ENTIRE trace of process()/process_websocket()
+    outputs for a subsequent event sequence - not just its first element - is identical
+    to what a freshly constructed engine on the same (colliding) profile would produce
+    for that same sequence. Any leaked pre-switch state, however delayed, would diverge
+    the two traces at the first affected event."""
+    pre_events = _event_seq(pre_switch)
+    post_events = _event_seq(post_switch)
+
+    switched_engine = MappingEngine()  # starts on Studio
+    for i, event in enumerate(pre_events):
+        switched_engine.process(event, now=float(i) * 0.001)
+        switched_engine.process_websocket(event, now=float(i) * 0.001, axis_positions={"PAN": 0.0})
+    switched_engine.set_profile(_COLLIDING_PROFILE)
+
+    fresh_engine = MappingEngine(profile=_COLLIDING_PROFILE)
+
+    base_t = 1000.0
+    for i, event in enumerate(post_events):
+        t = base_t + float(i) * 0.001
+        switched_process = switched_engine.process(event, now=t)
+        fresh_process = fresh_engine.process(event, now=t)
+        assert switched_process == fresh_process, f"process() diverged at post-switch event {i}: {event!r}"
+
+        switched_ws = switched_engine.process_websocket(event, now=t, axis_positions={"PAN": 0.0})
+        fresh_ws = fresh_engine.process_websocket(event, now=t, axis_positions={"PAN": 0.0})
+        assert switched_ws == fresh_ws, f"process_websocket() diverged at post-switch event {i}: {event!r}"

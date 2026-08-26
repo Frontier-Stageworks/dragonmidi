@@ -816,6 +816,28 @@ def test_knob_clamp_bounds_are_order_independent(fader_number: int) -> None:
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BANK-008
+def test_knob_clamp_bounds_order_independence_does_not_clamp_an_interior_position(fader_number: int) -> None:
+    """Companion to test_knob_clamp_bounds_are_order_independent above: a nudge landing
+    well INSIDE the range, not just at the boundary, distinguishes correct sorted-bound
+    clamping from a formula that fails to sort min/max first. A correct clamp sends the
+    delta unmodified; an unsorted clamp collapses to a constant wrong value
+    (max(min_value, min(max_value, x)) with min_value=127 > max_value=0 evaluates to
+    127.0 for any x, not just out-of-range ones) - a boundary-only nudge can't tell the
+    two apart, since both happen to produce the same result there."""
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 127.0, 0.0)  # min > max
+    engine.process(cc_event(fader_number, 66), now=-1.0)  # normalized*(0-127)+127 -> position == 61.0
+    engine.process(cc_event(knob_number, 60), now=0.0)  # establish knob baseline
+
+    result = engine.process(cc_event(knob_number, 70), now=0.001)  # requested delta +1.0, well inside [0, 127]
+    assert result is not None
+    assert result.args == (1.0,)  # unclamped - a broken order-dependent formula would instead force 127.0
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
 # @spec MAP-BANK-009
 def test_knob_position_defaults_to_the_lower_bound_with_no_fader_send_and_no_live_reading(
     fader_number: int,
@@ -862,6 +884,170 @@ def test_knob_clamp_falls_back_to_internal_estimate_when_no_live_reading_for_thi
     # (0.0), which is already at the floor, so the negative delta sends nothing.
     result = engine.process(cc_event(knob_number, 0), now=0.001, axis_positions={"OTHER_AXIS": 999.0})
     assert result is None
+
+
+# --- Knob position clamping, multi-nudge sequences (MAP-BANK-008, MAP-BANK-009) ---
+#
+# The single-nudge example tests above (MAP-BANK-008/009) each apply exactly one knob
+# event. MAP-BANK-008's actual claim ("never moves outside the range") is about the
+# tracked position across an accumulating SEQUENCE of nudges, which no existing test
+# exercised - a property test over generated sequences, reconstructing the tracked
+# position purely from process()'s returned deltas (no private-attribute access, matching
+# this file's existing black-box style), closes that gap.
+
+
+@given(
+    low=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    span=st.floats(min_value=0.001, max_value=500.0, allow_nan=False, allow_infinity=False),
+    raw_values=st.lists(st.integers(min_value=0, max_value=127), min_size=2, max_size=30),
+    reversed_bounds=st.booleans(),
+    use_live_reading=st.booleans(),
+)
+# @spec MAP-BANK-008, MAP-BANK-009
+def test_knob_nudge_sequence_never_leaves_range_at_any_step(
+    low: float,
+    span: float,
+    raw_values: list[int],
+    reversed_bounds: bool,
+    use_live_reading: bool,
+) -> None:
+    """Property: for ANY sequence of knob raw values (including repeats, large jumps,
+    reversals of direction), the tracked position after EVERY step - not just the last
+    one - stays within [low, high]. Exercises both the internal-estimate-accumulation
+    path (MAP-BANK-009) and the live-reading-authoritative path, since the live/estimate
+    choice must not itself let the accumulated position drift out of range over many
+    steps."""
+    high = low + span
+    fader_min, fader_max = (high, low) if reversed_bounds else (low, high)
+
+    fader_key = ("cc", FADER_CCS[0])
+    knob_number = FADER_CCS[0] + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", fader_min, fader_max)
+
+    tracked_position = low  # MAP-BANK-009: absent fader/live/estimate, assumed at the floor
+    for i, raw in enumerate(raw_values):
+        axis_positions = {"PAN": tracked_position} if use_live_reading else None
+        result = engine.process(cc_event(knob_number, raw), now=float(i) * 0.001, axis_positions=axis_positions)
+        if result is not None:
+            tracked_position += result.args[0]
+            assert low - 1e-6 <= tracked_position <= high + 1e-6, f"step {i}: {tracked_position} outside [{low}, {high}]"
+
+
+# --- Knob position clamping, out-of-range starting position (MAP-BANK-010) ---
+#
+# Concrete witnesses first (confirms the scenario is actually reachable, not just
+# hypothesis-generated), then a property test over the general case.
+
+
+# @spec MAP-BANK-010
+def test_knob_nudge_from_above_range_live_position_moves_down_toward_upper_bound() -> None:
+    """A live reading above the configured range (e.g. the user's range is narrower than
+    Dragonframe's real axis travel) must be corrected toward the ceiling, even though the
+    physical nudge itself is upward (further out of range)."""
+    fader_key = ("cc", FADER_CCS[0])
+    knob_number = FADER_CCS[0] + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
+    engine.process(cc_event(knob_number, 50), now=0.0)  # establish knob baseline
+
+    # Live position (150.0) is already 50.0 above the ceiling (100.0). The nudge itself
+    # requests +5.0 (raw delta +10 * 0.1), pointing further out of range.
+    result = engine.process(cc_event(knob_number, 60), now=0.001, axis_positions={"PAN": 150.0})
+    assert result is not None
+    assert result.args == (-50.0,)  # corrects down to exactly the ceiling (100.0), not up
+
+
+# @spec MAP-BANK-010
+def test_knob_nudge_from_below_range_live_position_moves_up_toward_lower_bound() -> None:
+    """Mirror of the above: a live reading below the floor is corrected upward, even
+    though the physical nudge itself is downward (further out of range)."""
+    fader_key = ("cc", FADER_CCS[0])
+    knob_number = FADER_CCS[0] + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
+    engine.process(cc_event(knob_number, 50), now=0.0)  # establish knob baseline
+
+    # Live position (-30.0) is already 30.0 below the floor (0.0). The nudge requests
+    # -5.0 (raw delta -10 * 0.1), pointing further out of range.
+    result = engine.process(cc_event(knob_number, 40), now=0.001, axis_positions={"PAN": -30.0})
+    assert result is not None
+    assert result.args == (30.0,)  # corrects up to exactly the floor (0.0), not down
+
+
+# @spec MAP-BANK-010
+def test_knob_nudge_recovery_then_second_nudge_behaves_as_ordinary_in_range_case() -> None:
+    """After one corrective nudge, the internal estimate is back in-range, so a second
+    nudge (with no live reading this time) follows MAP-BANK-008's ordinary path, not a
+    repeat of the recovery case."""
+    fader_key = ("cc", FADER_CCS[0])
+    knob_number = FADER_CCS[0] + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
+    engine.process(cc_event(knob_number, 50), now=0.0)  # establish knob baseline
+
+    first = engine.process(cc_event(knob_number, 60), now=0.001, axis_positions={"PAN": 150.0})
+    assert first is not None
+    assert first.args == (-50.0,)  # recovered to exactly 100.0 (the ceiling)
+
+    # Second nudge: no live reading provided this time, so it must use the internal
+    # estimate - which the first call already corrected to 100.0 (in-range). A further
+    # positive nudge from exactly the ceiling sends nothing (MAP-BANK-008's ordinary
+    # "already at boundary" case), not another large corrective jump.
+    second = engine.process(cc_event(knob_number, 70), now=0.002)
+    assert second is None
+
+
+def _apply_knob_nudge_from_out_of_range_start(
+    low: float, span: float, overshoot: float, starts_above: bool, raw_delta: int, reversed_bounds: bool
+):
+    """Shared setup for both MAP-BANK-010/011 property tests below - returns
+    (starting_position, high, result)."""
+    high = low + span
+    fader_min, fader_max = (high, low) if reversed_bounds else (low, high)
+
+    fader_key = ("cc", FADER_CCS[0])
+    knob_number = FADER_CCS[0] + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", fader_min, fader_max)
+    engine.process(cc_event(knob_number, 60), now=0.0)  # establish knob baseline at raw_value 60
+
+    starting_position = high + overshoot if starts_above else low - overshoot
+    next_raw = max(0, min(127, 60 + raw_delta))
+    event = cc_event(knob_number, next_raw)
+    result = engine.process(event, now=0.001, axis_positions={"PAN": starting_position})
+    return starting_position, high, next_raw, result
+
+
+@given(
+    low=st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    span=st.floats(min_value=0.001, max_value=500.0, allow_nan=False, allow_infinity=False),
+    overshoot=st.floats(min_value=0.001, max_value=500.0, allow_nan=False, allow_infinity=False),
+    starts_above=st.booleans(),
+    raw_delta=st.integers(min_value=-127, max_value=127).filter(lambda d: d != 0),
+    reversed_bounds=st.booleans(),
+)
+# @spec MAP-BANK-010
+def test_knob_nudge_from_out_of_range_start_never_sends_a_position_outside_range(
+    low: float,
+    span: float,
+    overshoot: float,
+    starts_above: bool,
+    raw_delta: int,
+    reversed_bounds: bool,
+) -> None:
+    """Property: for ANY out-of-range starting live position (above or below), and ANY
+    nonzero nudge in either direction and any magnitude, the resulting position - if a
+    message is sent - is always within [low, high]. This is MAP-BANK-008's original
+    boundedness guarantee, extended to hold even when the starting position was itself
+    out of range (MAP-BANK-010)."""
+    starting_position, high, next_raw, result = _apply_knob_nudge_from_out_of_range_start(
+        low, span, overshoot, starts_above, raw_delta, reversed_bounds
+    )
+    if next_raw == 60 or result is None:
+        return  # no send == nothing to check the position of
+    resulting_position = starting_position + result.args[0]
+    assert (high - span) - 1e-6 <= resulting_position <= high + 1e-6  # (high - span) == low
 
 
 # --- Jog Wheel Frame Stepping (MAP-JOG-001 through MAP-JOG-005) ---

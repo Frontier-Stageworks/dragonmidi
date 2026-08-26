@@ -5,24 +5,28 @@
 @spec OSC-CONFIG-001, OSC-CONFIG-002
 @spec OSC-DISCOVER-001, OSC-DISCOVER-002, OSC-DISCOVER-003, OSC-DISCOVER-004
 @spec OSC-DISCOVER-005, OSC-DISCOVER-006, OSC-DISCOVER-007, OSC-DISCOVER-008, OSC-DISCOVER-009
+@spec OSC-DISCOVER-010, OSC-DISCOVER-011, OSC-DISCOVER-012
 @spec OSC-BACKEND-001
 """
 
 from __future__ import annotations
 
+import logging
 import socket
 import struct
 import threading
 import time
 
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from dragonmidi.osc_io import (
     DEFAULT_DRAGONFRAME_HOST,
     DEFAULT_DRAGONFRAME_PORT,
     DEFAULT_LISTEN_PORT,
+    MAX_BUNDLE_DEPTH,
     AxisDiscovery,
+    BundleBoundsError,
     OscClient,
     OscListener,
     decode_osc_packet,
@@ -394,6 +398,146 @@ def test_decode_osc_packet_recurses_into_a_nested_bundle() -> None:
     outer_bundle = _build_bundle([inner_bundle])
     messages = decode_osc_packet(outer_bundle)
     assert messages == [("/dragonframe/axis/PAN", (1.0,))]
+
+
+# ---------------------------------------------------------------------------
+# Bundle decode bounds (OSC-DISCOVER-010, OSC-DISCOVER-011, OSC-DISCOVER-012)
+#
+# Deterministic boundary regression tests, each anchoring one of the specific
+# malformed shapes identified during the MAPS assurance pass that motivated these
+# specs - not a substitute for the fuzz-supported test further below, but named
+# regression anchors for exactly the cases this review found, the same pattern
+# MAP-BANK-008/009's historical-bug regression tests use.
+# ---------------------------------------------------------------------------
+
+
+def _build_bundle_with_raw_size(message: bytes, declared_size: int) -> bytes:
+    """Like _build_bundle, but the element's declared int32 size field is set
+    explicitly rather than derived from len(message) - lets a test construct a
+    size/content mismatch deliberately."""
+    body = bytearray(b"#bundle\x00")
+    body += b"\x00" * 8
+    body += struct.pack(">i", declared_size)
+    body += message
+    return bytes(body)
+
+
+def _nested_bundle(depth: int) -> bytes:
+    """A #bundle nested `depth` levels deep, innermost containing one real message."""
+    packet = encode_osc_message("/dragonframe/axis/PAN", 1.0)
+    for _ in range(depth):
+        packet = _build_bundle([packet])
+    return packet
+
+
+# @spec OSC-DISCOVER-010
+def test_decode_osc_packet_raises_on_negative_element_size() -> None:
+    message = encode_osc_message("/dragonframe/axis/PAN", 1.0)
+    bundle = _build_bundle_with_raw_size(message, -1)
+    try:
+        decode_osc_packet(bundle)
+        raised = False
+    except BundleBoundsError:
+        raised = True
+    assert raised
+
+
+# @spec OSC-DISCOVER-010
+def test_decode_osc_packet_raises_on_zero_element_size() -> None:
+    message = encode_osc_message("/dragonframe/axis/PAN", 1.0)
+    bundle = _build_bundle_with_raw_size(message, 0)
+    try:
+        decode_osc_packet(bundle)
+        raised = False
+    except BundleBoundsError:
+        raised = True
+    assert raised
+
+
+# @spec OSC-DISCOVER-010
+def test_decode_osc_packet_raises_when_element_size_exceeds_remaining_buffer() -> None:
+    message = encode_osc_message("/dragonframe/axis/PAN", 1.0)
+    bundle = _build_bundle_with_raw_size(message, len(message) + 100)  # claims more bytes than exist
+    try:
+        decode_osc_packet(bundle)
+        raised = False
+    except BundleBoundsError:
+        raised = True
+    assert raised
+
+
+# @spec OSC-DISCOVER-010
+def test_decode_osc_packet_accepts_element_size_exactly_matching_remaining_buffer() -> None:
+    """Boundary case: the element's declared size exactly consumes what's left in the
+    buffer (not more) - this must remain valid, not be rejected by the >= vs > choice
+    in the bounds check."""
+    message = encode_osc_message("/dragonframe/axis/PAN", 1.0)
+    bundle = _build_bundle_with_raw_size(message, len(message))  # exact match, not oversized
+    messages = decode_osc_packet(bundle)
+    assert messages == [("/dragonframe/axis/PAN", (1.0,))]
+
+
+# @spec OSC-DISCOVER-011
+def test_decode_osc_packet_accepts_nesting_exactly_at_the_depth_cap() -> None:
+    packet = _nested_bundle(MAX_BUNDLE_DEPTH)
+    messages = decode_osc_packet(packet)
+    assert messages == [("/dragonframe/axis/PAN", (1.0,))]
+
+
+# @spec OSC-DISCOVER-011
+def test_decode_osc_packet_raises_when_nesting_exceeds_the_depth_cap() -> None:
+    packet = _nested_bundle(MAX_BUNDLE_DEPTH + 1)
+    try:
+        decode_osc_packet(packet)
+        raised = False
+    except BundleBoundsError:
+        raised = True
+    assert raised
+
+
+# @spec OSC-DISCOVER-012
+def test_handle_datagram_logs_bundle_bounds_violation_at_debug_level(caplog) -> None:
+    message = encode_osc_message("/dragonframe/axis/PAN", 1.0)
+    bundle = _build_bundle_with_raw_size(message, -1)
+    discovery = AxisDiscovery()
+    with caplog.at_level(logging.DEBUG, logger="dragonmidi.osc_io"):
+        discovery.handle_datagram(bundle)  # must not raise - caught and logged
+    assert any("BundleBoundsError" in record.message or "bundle" in record.message.lower() for record in caplog.records)
+
+
+# @spec OSC-DISCOVER-007
+def test_handle_datagram_does_not_log_for_ordinary_malformed_content(caplog) -> None:
+    """Unlike a bundle-bounds violation (OSC-DISCOVER-012), every other decode failure
+    stays exactly as silent as before - no new logging asymmetry for the ordinary case."""
+    discovery = AxisDiscovery()
+    with caplog.at_level(logging.DEBUG, logger="dragonmidi.osc_io"):
+        discovery.handle_datagram(b"not a valid OSC packet at all")  # truncated/garbage, not a bundle-bounds issue
+    assert caplog.records == []
+
+
+# A property/fuzz test: decode_osc_packet must never hang, for arbitrary structured
+# malformed-bundle input - the actual evidence for the "bounded" claim is the guards
+# above (deterministic, load-bearing); this is supporting, exploratory evidence for
+# shapes the four deterministic cases above didn't specifically anticipate. Bounded via
+# hypothesis's own per-example deadline (not a subprocess/watchdog - a full
+# execution-isolated harness is future work, noted as a residual gap in
+# docs/maps/dragonmidi-system/property-register.md MAPS-005) - sufficient to catch a
+# hang within this test run rather than only via an external CI timeout.
+@given(
+    declared_size=st.integers(min_value=-(2**31), max_value=2**31 - 1),
+    nesting_depth=st.integers(min_value=0, max_value=12),
+    payload=st.binary(max_size=64),
+)
+@settings(deadline=500)  # milliseconds per example - a hang fails the example, not the whole run
+# @spec OSC-DISCOVER-010, OSC-DISCOVER-011
+def test_decode_osc_packet_never_hangs_on_structured_malformed_bundles(declared_size: int, nesting_depth: int, payload: bytes) -> None:
+    packet = _build_bundle_with_raw_size(payload, declared_size)
+    for _ in range(nesting_depth):
+        packet = _build_bundle([packet])
+    try:
+        decode_osc_packet(packet)
+    except Exception:
+        pass  # any exception is fine - the property is termination, not success
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import socket
 import struct
 import threading
 import time
 from collections.abc import Callable
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 # @spec OSC-CONFIG-001
 DEFAULT_DRAGONFRAME_HOST = "127.0.0.1"
@@ -14,6 +17,22 @@ DEFAULT_LISTEN_PORT = 7011
 DISCOVERY_TIMEOUT_SECONDS = 2.0
 AXIS_ADDRESS_PREFIX = "/dragonframe/axis/"
 GET_ALL_POSITION_ADDRESS = "/dragonframe/axis/getAllPosition"
+
+# @spec OSC-DISCOVER-011
+MAX_BUNDLE_DEPTH = 8
+
+
+class BundleBoundsError(ValueError):
+    """Raised when a #bundle element's declared size is non-positive or exceeds the
+    remaining buffer, or when nesting exceeds MAX_BUNDLE_DEPTH.
+
+    A distinct type from the generic decode-failure ValueErrors elsewhere in this
+    module so `AxisDiscovery.handle_datagram` can log this specific failure mode at
+    debug level (@spec OSC-DISCOVER-012) while every other decode failure stays as
+    silent as it was before this class existed.
+
+    @spec OSC-DISCOVER-010, OSC-DISCOVER-011
+    """
 
 
 class UdpSocket(Protocol):
@@ -107,26 +126,37 @@ def decode_osc_message(data: bytes) -> tuple[str, tuple]:
     return address, tuple(args)
 
 
-def decode_osc_packet(data: bytes) -> list[tuple[str, tuple]]:
+def decode_osc_packet(data: bytes, _depth: int = 0) -> list[tuple[str, tuple]]:
     """Decode a top-level OSC packet, which may be a single message or a
     #bundle wrapping multiple (possibly nested) messages. Always returns a
     flat list of (address, args) tuples.
 
-    No recursion-depth or size-consistency bound is imposed - Dragonframe is
-    a trusted local peer, not untrusted input.
+    Bundle element sizes and nesting depth are bounds-checked (@spec
+    OSC-DISCOVER-010, OSC-DISCOVER-011) - the listening port accepts traffic
+    from any local process, not only a well-behaved Dragonframe, so trusting
+    a declared size/depth unconditionally is a real hang/stack-exhaustion
+    path, not merely a theoretical one.
+
+    `_depth` is an internal recursion counter, not part of the public
+    interface - external callers always start at the default (0).
 
     @spec OSC-DISCOVER-004
     """
     if data.startswith(b"#bundle\x00"):
+        if _depth >= MAX_BUNDLE_DEPTH:
+            raise BundleBoundsError(f"bundle nesting exceeds MAX_BUNDLE_DEPTH ({MAX_BUNDLE_DEPTH})")
         offset = 8  # "#bundle\0" is exactly 8 bytes, no padding needed
         offset += 8  # 8-byte OSC time tag, ignored here
         messages: list[tuple[str, tuple]] = []
         while offset < len(data):
             (element_size,) = struct.unpack_from(">i", data, offset)
             offset += 4
+            remaining = len(data) - offset
+            if element_size <= 0 or element_size > remaining:
+                raise BundleBoundsError(f"bundle element declared size {element_size} invalid for {remaining} remaining bytes")
             element = data[offset : offset + element_size]
             offset += element_size
-            messages.extend(decode_osc_packet(element))
+            messages.extend(decode_osc_packet(element, _depth + 1))
         return messages
     return [decode_osc_message(data)]
 
@@ -157,6 +187,12 @@ class AxisDiscovery:
     def handle_datagram(self, data: bytes) -> None:
         try:
             messages = decode_osc_packet(data)
+        except BundleBoundsError as exc:
+            # @spec OSC-DISCOVER-012: unlike other decode failures, this specific
+            # failure mode is a flagged hang-path concern, not an ordinary malformed
+            # packet - logged at debug level so it isn't invisible even in debug logs.
+            logger.debug("Rejected malformed bundle: %s", exc)
+            return
         except Exception:
             return  # malformed/truncated framing is tolerated, not raised
         for address, args in messages:
