@@ -404,35 +404,28 @@ Claim dimensions:
   - no-connection drop
         ↓
 Evidence mapped to claim dimensions (evidence-matrix.md):
-  all four dimensions -> EVID-007, example tests written in
-  tests/test_websocket_output.py (correctness evidence purpose). Content
-  confirmed correct by source inspection; NOT confirmed by a passing
-  execution — see Current support and residual gap below.
+  all four dimensions -> EVID-007, example tests in
+  tests/test_websocket_output.py (correctness evidence purpose), 22/22
+  passing under the project's declared environment (.venv, Python 3.11.15,
+  websockets==16.1.1 per pyproject.toml). A — covered.
         ↓
 Enforcement mechanisms:
   single _connection slot (supersedes on reconnect)
         ↓
 Meta-evidence / discrimination:
   not independently mutation-tested; encode tests assert exact JSON shape,
-  discriminating by construction, if and when the suite runs
+  discriminating by construction
         ↓
 Risk/assumption treatment:
   Accept risk: delivery-failure visibility (correctness-assurance.md §6.1) —
   explicit HLD decision, not part of this claim
         ↓
 Current support:
-  NOT established by a passing test run. A test artifact covering all four
-  named dimensions exists in source and is confirmed correct by inspection,
-  but has never executed successfully in this environment, and no prior
-  known-good run is relied on. Status: evidence artifact exists, execution
-  unverified.
+  Established for all four named dimensions by an executed, passing test
+  suite.
         ↓
 Residual gaps:
-  - Description: test suite fails to import in this dev environment
-    (websockets module not installed) — this is the reason the claim cannot
-    currently be called established, not a minor footnote
-    Gap type: environment-platform validation gap
-    Gap disposition: resolve through LID/design
+  none currently identified.
         ↓
 Disposition / next action:
   Authority: SPECIFIED
@@ -440,11 +433,10 @@ Disposition / next action:
   Claim nature: Property
   Lifecycle: Enduring
   Disposition: Approved
-  Evidence summary: Test artifact exists, confirmed correct by inspection;
-    execution unverified — not "Example-tested" in the passing-run sense
+  Evidence summary: Example-tested
   Layering assessment: single method plus a structural connection-slot
-    mechanism, once execution is confirmed
-  Freshness: stale — renewal needed; no execution has occurred
+    mechanism
+  Freshness: current as of 2026-08-26
   Correctness-assurance.md section: §3.7
 ```
 

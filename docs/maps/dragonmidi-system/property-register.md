@@ -218,9 +218,9 @@ Note: `MAP-TABLE-001/002/003/005`'s runtime dispatch behavior (does `MappingEngi
 - **Prioritization rationale:** `E-Stop` is an explicit safety-relevant function (motion-control emergency stop); narrower exposure than the mapping-wide chokepoints, but consequence-if-false is not merely cosmetic
 - **Priority:** high
 - **Disposition:** Approved
-- **Evidence coverage:** a test targeting all four claim dimensions exists in source (`tests/test_websocket_output.py`); none of it is confirmed by a passing execution in this environment — see Evidence state and Residual gaps
-- **Evidence state (set):** Test artifact exists, all four claim dimensions targeted (confirmed correct by source inspection). Execution status: unverified — the suite currently fails to import in this environment (`websockets` package not installed), and there is no prior known-good run this assessment relies on. Not "Example-tested" in the sense of a confirmed passing run.
-- **Residual gaps:** environment-platform validation gap — `tests/test_websocket_output.py` fails to import in this development environment. Until resolved, this property's evidence status is "artifact exists, execution unverified," not "established." Type: Environment-platform validation gap. Disposition: Resolve through LID/design — routed to `evidence-handoff.md`.
+- **Evidence coverage:** all four claim dimensions covered — see `EVID-007`
+- **Evidence state (set):** Example-tested — `tests/test_websocket_output.py` executes and passes (22/22) under the project's declared environment (`.venv`, Python 3.11.15, `websockets==16.1.1` per `pyproject.toml`)
+- **Residual gaps:** none currently identified
 - **Evidence-matrix row:** `EVID-007`
 
 ### DM-008: Keystroke synthesis releases pressed modifiers when a press or lookup call fails

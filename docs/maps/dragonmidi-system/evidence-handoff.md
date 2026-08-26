@@ -2,31 +2,16 @@
 
 Phase 7 artifact. The downstream implementer is LID (`CLAUDE.md` declares `## LID Mode: Full`) — MAPS specifies; it does not implement.
 
-**Not every approved property appears here.** `DM-001`, `DM-002`, `DM-003`, `DM-004`, `DM-005`, `DM-006`, `DM-EA-003` have realized evidence for their primary claim with no open residual gap requiring action — see `property-register.md`/`evidence-matrix.md`. `DM-009` and `DM-EA-001` concluded "additional evidence: none justified" (`evidence-matrix.md` `EVID-009`, `EVID-010`) — that conclusion lives there, not here. (`DM-004`'s golden-value test was specified here and has since been realized — `tests/test_mapping_config_schema.py`, mutation-verified 2026-08-26; only its secondary, deferred third-party-generalization gap remains listed below.)
+**Not every approved property appears here.** `DM-001`, `DM-002`, `DM-003`, `DM-004`, `DM-005`, `DM-006`, `DM-007`, `DM-EA-003` have realized evidence for their primary claim with no open residual gap requiring action — see `property-register.md`/`evidence-matrix.md`. `DM-009` and `DM-EA-001` concluded "additional evidence: none justified" (`evidence-matrix.md` `EVID-009`, `EVID-010`) — that conclusion lives there, not here.
 
 ## Gap disposition routing
 
 | Property / gap | Gap disposition | Block used below |
 |---|---|---|
 | `DM-004`, third-party-profile generalization gap | Defer | No action scheduled |
-| `DM-007`, environment-platform validation gap | Resolve through LID/design | Design-decision handoff (light — dependency install, not a design choice) |
 | `DM-008`, doubly-failing-`release()` gap | Defer | No action scheduled |
 | `DM-EA-002`, initial verification | Manual/operational verification | Manual verification procedure |
 | `DM-EA-002`, generalization-beyond-tested-configuration gap | Accept risk | No action scheduled |
-
-## Design-decision handoff
-
-### DM-007 — Design-decision handoff (dependency, not a design choice)
-
-**Owner:** whoever maintains the dev environment / CI configuration for this repository.
-
-**Gap type:** Environment-platform validation gap.
-
-**Question to resolve:** `tests/test_websocket_output.py` fails to import in this development environment because the `websockets` package is not installed. Install/pin `websockets` as a declared dev dependency (or confirm it already is one and the environment is out of sync) so the test suite backing `DM-007` can actually be executed, not merely inspected.
-
-**Once resolved:** re-run `tests/test_websocket_output.py` to confirm it's still green; update `DM-007`'s Freshness in `property-register.md`/`evidence-matrix.md` from "stale — renewal needed" to "current," and remove this residual gap.
-
-**Not MAPS's call to make:** this is dev-environment/dependency-management housekeeping, not an assurance-argument decision — recorded here only because it currently blocks re-executing `DM-007`'s evidence.
 
 ## No action scheduled
 

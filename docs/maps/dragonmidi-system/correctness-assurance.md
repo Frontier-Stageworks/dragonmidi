@@ -125,16 +125,16 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 
 | Dimension | Discharge |
 |---|---|
-| `E-Stop` (bare trigger) encode | example test (written; execution unverified — see Current support) |
-| ranged command encode (`select-AXn`/`jog-AXn`) | example test (written; execution unverified) |
-| delivery when connected | example test (written; execution unverified) |
-| no-connection drop | example test (written; execution unverified) |
+| `E-Stop` (bare trigger) encode | covered |
+| ranged command encode (`select-AXn`/`jog-AXn`) | covered |
+| delivery when connected | covered |
+| no-connection drop | covered |
 
 | Claim | Property Type | Evidence IDs | Current support |
 |---|---|---|---|
-| A press-transition on a WebSocket-mapped control sends exactly one correctly-shaped command when connected, and no send when not connected | Functional correctness; Determinism | `EVID-007` | **Not established by a passing test run.** An example-test artifact covering all four named dimensions exists in `tests/test_websocket_output.py` and is confirmed correct by direct source inspection, but the suite currently fails to import in this development environment (`websockets` package not installed) and has not been executed successfully. No prior known-good run is being relied on. Status: evidence artifact exists, execution currently unverified. |
+| A press-transition on a WebSocket-mapped control sends exactly one correctly-shaped command when connected, and no send when not connected | Functional correctness; Determinism | `EVID-007` | **Established.** `tests/test_websocket_output.py` (22 tests) passes under the project's declared environment (`.venv`, Python 3.11.15, `websockets==16.1.1` per `pyproject.toml`). |
 
-**Coverage notes:** `E-Stop` specifically is the motion-control emergency-stop function named in the HLD's Success Metrics — this claim is what makes that function's *dispatch* trustworthy; it does not cover delivery-failure *visibility* (§6.1, a separate, deliberately-unaddressed concern). Inspection of test code is not equivalent to a passing test result — this row should be read as "specified and plausible," not "verified," until `tests/test_websocket_output.py` actually executes in a working environment.
+**Coverage notes:** `E-Stop` specifically is the motion-control emergency-stop function named in the HLD's Success Metrics — this claim is what makes that function's *dispatch* trustworthy; it does not cover delivery-failure *visibility* (§6.1, a separate, deliberately-unaddressed concern).
 
 ### 3.8 Keystroke Output Stuck-Modifier Safety (press/lookup failures only)
 
@@ -169,9 +169,8 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 
 | Role | Item | Catches / enforces / treats | Does NOT establish |
 |---|---|---|---|
-| Direct evidence | Example tests, executed (`DM-002`, `DM-005`, `DM-006`, `DM-008`, `DM-009`) | Specific named scenarios and boundary conditions | Behavior outside the tested cases |
+| Direct evidence | Example tests, executed (`DM-002`, `DM-005`, `DM-006`, `DM-007`, `DM-008`, `DM-009`) | Specific named scenarios and boundary conditions | Behavior outside the tested cases |
 | Direct evidence | Hand-derived golden-value tests, executed and mutation-verified (`DM-004`) | Static table content (key membership, per-entry `kind`/`address`/`args`), independent of the implementation's own code path | Runtime dispatch behavior; third-party Controller Profiles |
-| Direct evidence | Example test artifact, written but unexecuted in this environment (`DM-007`) | Nothing yet — content is plausible by inspection only | A passing result; do not treat as equivalent to the executed rows above |
 | Direct evidence | Property-based tests (`DM-001`–`003`) | Broad sampled coverage of generated input/sequence spaces | Universality — sampled evidence, not proof |
 | Direct evidence | Hypothesis fuzz campaign (`DM-001`) | Unstructured/adversarially-shaped malformed input, deadline-bounded | Guaranteed termination proof; bounded by the deadline and generator strategy |
 | Direct evidence | Manual verification, once run (`DM-EA-002`, `DM-EA-003`) | Real-hardware/real-Dragonframe behavior no code-level test can reach | Behavior across untested hardware/firmware/Dragonframe versions |
@@ -217,13 +216,6 @@ A keystroke-mapped control (the jog wheel's Arc Motion Control stepping) can aff
 
 `DM-EA-002` (§5.2) has no evidence at all yet — a wrong assumption here would silently target the wrong physical axis via `select-AXn`/`jog-AXn`/Solo, with no error. A manual verification procedure is specified (`evidence-handoff.md`) but requires hands-on access to a running Dragonframe instance and has not been executed. Even once executed, it establishes correspondence only for the specific version/project/ordering tested — the general claim (every project, every ordering, every version) has no available evidence path and remains permanently assumed.
 
-### 6.5 WebSocket evidence artifact exists but has never been executed successfully
-
-`tests/test_websocket_output.py` (backing `DM-007`, §3.7) fails to import in this development environment because the `websockets` package is not installed. Its content is confirmed correct by direct source inspection, but it has never been run to a passing result in this environment, and no prior known-good run is on record. `DM-007` is therefore not currently an established claim — it is a specified, plausible claim backed by an unexecuted test artifact. Not a code defect; an environment gap, but one with a real effect on this claim's current status, not just a footnote.
-
-### 6.6 A known-flaky test, unrelated to any claim in this document
-
-`test_listener_resends_discovery_query_on_rebind` is intermittently flaky, independent of any code covered by the claims above — noted so a future reader doesn't mistake its failures for evidence against any claim in this document.
 
 ## 7. Trusted Base
 
@@ -239,7 +231,7 @@ A keystroke-mapped control (the jog wheel's Arc Motion Control stepping) can aff
 - Bank-derived knob nudges keep the tracked axis position within its configured range, including recovery from an out-of-range starting position, verified by property tests and mutation-confirmed to actually discriminate a broken clamp formula (§3.3).
 - **Opinionated map static table content is correct for both bundled profiles** — established by hand-derived, mutation-verified golden-value tests, independent of `build_opinionated_map`'s own code path. Third-party profiles remain unaddressed, and this says nothing about whether `MappingEngine.process()` correctly dispatches from this table at runtime — that is a separate, currently untracked concern (§3.4, §6.3).
 - Malformed Controller Profile config files and malformed Preset Store entries are rejected without affecting other valid data (§3.5, §3.6).
-- **WebSocket-targeted command dispatch (including `E-Stop`) is specified and backed by a written test artifact, but is not currently established by a passing execution** — the test suite cannot run in this development environment (§3.7, §6.5). A delivery failure, even when the code is correct, also produces no operator-visible signal (§6.1).
+- WebSocket-targeted command dispatch (including `E-Stop`) encodes and sends correctly when connected, and is dropped (not queued or errored) when not, established by an executed test suite (§3.7). A delivery failure, even when the code is correct, produces no operator-visible signal (§6.1).
 - Keystroke synthesis releases every pressed modifier when a press or lookup call fails; a failing `release()` call itself is explicitly outside this claim, not covered (§3.8).
 - Group-switch dispatch precedence and dedup-discard rules hold per existing coverage (§3.9).
 - Dragonframe is trusted as a local peer, not defended against as adversarial (§5.1); AXn axis identity is assumed and currently unverified, and even a future manual check would only ever confirm the tested configuration, not the general claim (§5.2, §6.4); the nanoKONTROL2 default CC map is verified once, behaviorally, against one physical unit, with generalization to other units/firmware unverified (§5.2).
