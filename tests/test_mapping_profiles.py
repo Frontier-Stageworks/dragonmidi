@@ -360,9 +360,7 @@ def _event_seq(draw_values: list[tuple[int, int]]) -> list[MidiEvent]:
     post_switch=st.lists(st.tuples(st.sampled_from(_EXERCISABLE_CCS), st.integers(min_value=0, max_value=127)), min_size=1, max_size=15),
 )
 # @spec MAP-PROFILE-004
-def test_set_profile_full_post_switch_trace_matches_a_fresh_engine(
-    pre_switch: list[tuple[int, int]], post_switch: list[tuple[int, int]]
-) -> None:
+def test_set_profile_full_post_switch_trace_matches_a_fresh_engine(pre_switch: list[tuple[int, int]], post_switch: list[tuple[int, int]]) -> None:
     """Property: after set_profile(), the ENTIRE trace of process()/process_websocket()
     outputs for a subsequent event sequence - not just its first element - is identical
     to what a freshly constructed engine on the same (colliding) profile would produce

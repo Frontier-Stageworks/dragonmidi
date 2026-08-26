@@ -998,9 +998,7 @@ def test_knob_nudge_recovery_then_second_nudge_behaves_as_ordinary_in_range_case
     assert second is None
 
 
-def _apply_knob_nudge_from_out_of_range_start(
-    low: float, span: float, overshoot: float, starts_above: bool, raw_delta: int, reversed_bounds: bool
-):
+def _apply_knob_nudge_from_out_of_range_start(low: float, span: float, overshoot: float, starts_above: bool, raw_delta: int, reversed_bounds: bool):
     """Shared setup for both MAP-BANK-010/011 property tests below - returns
     (starting_position, high, result)."""
     high = low + span
