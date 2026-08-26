@@ -1,259 +1,398 @@
 # Property Register
 
-Phase 2/3/4 artifact. Merged with evidence-matrix fields per `docs/workflow.md § Artifact scaling for small tasks` — seven properties, one segment, doesn't warrant a separate `evidence-matrix.md` file.
+Phase 2/3 artifact. The authoritative list of admitted assurance concerns and properties. See `docs/property-discovery.md` and `docs/prioritization.md`.
 
-**Six independent axes, never collapsed.** Origin, Claim nature, Disposition, Evidence state (a *set*), Residual gaps (a *collection* — zero or more, each independently typed and dispositioned), and Freshness are tracked separately per `SKILL.md § The property state model`. "Assumption" never appears as a Disposition or Evidence-state value — it is a Claim nature. **Origin is never changed by a finding about evidence quality** — a SPECIFIED property whose existing test turns out circular or non-discriminating stays SPECIFIED; that finding is a Residual-gap entry (Gap type: Evidence missing), not an Origin downgrade. **A property is never split or merged merely to give a gap its own field** — Residual gaps being a collection is precisely what avoids that pressure; a property is split only when its sub-claims are genuinely separate assurance questions.
+This register supersedes the prior DragonMIDI MAPS package's `MAPS-001`..`MAPS-007` IDs entirely; none are reused (`docs/maps/dragonmidi-system/` git history retains the superseded package).
 
-Built from `system-assurance-map.md`'s chokepoints and failure paths.
+## Concern Classification
+
+Every concern `system-assurance-map.md` raised, with its role and resulting disposition.
+
+| Phase 1 item | Concern role | Disposition |
+|---|---|---|
+| `decode_osc_packet` malformed-bundle robustness (chokepoint + failure path) | Current assurance property | Registered — `DM-001` |
+| `MappingEngine.process()`/`.process_websocket()`/`.process_keystroke()` general dispatch correctness | Current assurance property | Merged — the materially risky sub-concern (Group-switch dispatch precedence) is `DM-009`; general per-control-type routing has no identified gap beyond the existing example-test suite and is not separately tracked |
+| `MappingEngine.set_profile()` full state isolation (chokepoint + failure path) | Current assurance property | Registered — `DM-002` |
+| Bank-derived knob clamp-to-range formula, incl. out-of-range recovery (chokepoint + failure path) | Current assurance property | Registered — `DM-003` |
+| `build_opinionated_map` / shared-helper synthesis correctness (chokepoint + failure path + known-fragile area) | Current assurance property | Registered — `DM-004` (freshly worded against the current Opinionated Table/Bank-Derivation specs, not against historical constants) |
+| `MAP-CONFIG-003` as literally worded ("identical in content to... pre-Phase-5 `OPINIONATED_MAP_STUDIO`/`_NANOKONTROL2` constants") | Migration/transition acceptance criterion | Retired/completed — Phase 5 shipped; no pre-Phase-5 hardcoded implementation remains in production (the named constants are now themselves derived from the function this criterion was bridging away from). See `Rejected / withdrawn` below. Its live successor concern is `DM-004`. |
+| `controller_profile_loader.py` config parsing/validation robustness | Current assurance property | Registered — `DM-005` |
+| `preset_store.py` Bank/Group index bounds validation (chokepoint + failure path) | Current assurance property | Registered — `DM-006` |
+| `E-Stop`/WebSocket command correct encode+dispatch on press-edge | Current assurance property | Registered — `DM-007` |
+| `E-Stop`/WebSocket command delivery has no operator-visible failure signal | Accepted or deferred risk | Tracked outside the register — already an explicit HLD decision ("fails silently, not as a new status indicator... deferred, not ruled out"); recorded directly in `correctness-assurance.md § 6`, not a property |
+| Keystroke output stuck-modifier release ordering on failure | Current assurance property | Registered — `DM-008` |
+| Group-switch dispatch precedence and dedup-discard rules (`MAP-GROUP-005/007/011`) | Current assurance property | Registered — `DM-009` (lower priority; existing coverage, evidence design likely concludes little/no additional work — see Prioritization) |
+| Dragonframe trusted-local-peer assumption | External assumption | Registered — `DM-EA-001` |
+| AXn axis-identity/discovery-order assumption | External assumption | Registered — `DM-EA-002` |
+| nanoKONTROL2 default CC map matches real hardware | External assumption | Registered — `DM-EA-003` |
+| No frontmost-window detection before keystroke delivery | Accepted or deferred risk | Tracked outside the register — explicit HLD Non-Goal; recorded directly in `correctness-assurance.md § 6` |
+| Single-Dragonframe-connection-at-a-time WebSocket assumption | External assumption (minor) | Merged — folded into `DM-007`'s Assumptions field rather than separately registered; no independent evidence path exists to verify Dragonframe's own connection behavior beyond what DragonMIDI's own code structurally enforces |
+| `build_opinionated_map` circularity (existing test compares the function's output to constants derived from itself) | N/A — a finding about evidence quality, not a concern of its own | Folded into `DM-004`'s evidence design (Phase 4A); does not affect `DM-004`'s Authority (`docs/property-discovery.md § Authority is never downgraded by a finding about evidence quality`) |
+| `decode_osc_packet`'s original "prevents a hang" justification, found overclaimed by direct testing | N/A — a finding about claim wording, not a concern of its own | Folded into `DM-001`'s claim wording (registered narrower, as a bounded-input-handling/well-typed-rejection claim, not a hang-prevention claim) |
+| `test_listener_resends_discovery_query_on_rebind` flakiness | N/A — test-infrastructure defect, not an assurance concern | Out of scope for this MAPS pass — confirmed pre-existing and unrelated via `git stash`; a LID/test-maintenance matter, not tracked as a residual gap of any property here |
+| Higher-level goal: bridge should not corrupt/misdirect Dragonframe motion-control state under malformed/adversarial input | Higher-level assurance goal | Tracked in `system-assurance-map.md`; decomposes into `DM-001`, `DM-003`, `DM-004`, `DM-006` |
+| Higher-level goal: safety-relevant WebSocket commands should reliably reach Dragonframe, or failure should be visible | Higher-level assurance goal | Tracked in `system-assurance-map.md`; decomposes into `DM-007` (correctness half) plus the accepted-risk note above (visibility half) |
+| Higher-level goal: every profile's synthesized opinionated map should match intended behavior | Higher-level assurance goal | Tracked in `system-assurance-map.md`; decomposes into `DM-004` |
 
 ## Register
 
-### MAPS-001: WebSocket E-Stop transport readiness observability
+### DM-001: OSC bundle-decode robustness
 
-- **Behavioral segment:** WebSocket Output Adapter (`websocket_output.py`), Status UI
-- **Claim:** The operator has some way to determine, without physically pressing Stop, whether DragonMIDI's WebSocket server is currently bound *and* has a live peer connection ("transport appears ready") versus unbound or bound-with-no-connection ("transport not ready"). Stated in terms of what is actually observed: **internal state** — the adapter's bind/connection state (`WS-LIFECYCLE-*`, `WS-CONN-*`); **observable proxy exposed** — a proposed Status UI indicator surfacing that internal state; **end-to-end outcome NOT established by this claim** — whether a specific E-Stop command reaches and is acted on by Dragonframe. This is a single property with two independent residual gaps (below), not two properties — the transport-readiness half and the peer-identity half are the same assurance question (can the operator trust E-Stop?) viewed from its two independent causes, and splitting them into separate IDs would only satisfy field cardinality, not represent a genuinely separate claim.
-- **Quantifiers in the claim:** for every point in time after the indicator exists, its displayed state matches the adapter's actual bind/connection state at that moment — a small, enumerable state-machine correspondence claim (three states: unbound / bound-no-connection / bound-with-connection), not a large generatable space. The peer-identity dimension is effectively "for every E-Stop send, the connected peer is Dragonframe" — a dimension no current evidence method can reach at all (see the second residual gap below).
-- **Canonical definition:** "transport appears ready" = server bound AND an active peer connection present, per the existing `WS-CONN-*` connection model. `WS-CONN-004/005/006`'s connection-supersede logic accepts any local process passing the path check, with no origin or authentication check, so a second connection silently displaces the first — this is why "transport appears ready" and "E-Stop is deliverable" are different claims, not a wording nicety.
-- **Valid initial-state domain:** n/a (state-machine visibility claim, not boundedness/isolation/conservation).
-- **Property class:** Operational properties (state-machine visibility) + Compatibility/trust-identity (external), for the two dimensions respectively.
-- **Origin:** INFERRED — no existing spec states either dimension of this claim. The transport-readiness scoping is a smaller ask than the HLD's Non-Goal ("no third status indicator") rules out, since it extends the existing bind-result observability pattern (`WS-LIFECYCLE-002`); the peer-identity dimension is MAPS surfacing a risk no spec currently addresses (the HLD's E-Stop success metric covers correct behavior under normal single-client operation, not this adversarial-connection scenario).
-- **Claim nature:** Property — a claim about DragonMIDI's own adapter and its trust boundary, even though *closing* the peer-identity dimension would require Dragonframe's cooperation. That external-cooperation fact belongs in that gap's Gap disposition, not in Claim nature — DragonMIDI's own design is what's incomplete, not an external system's documented behavior.
-- **Source evidence:** `docs/high-level-design.md` Key Design Decisions ("WebSocket output fails silently on bind failure"); `websocket_output.py` `WS-SEND-003`/`WS-RUNTIME-003`, `WS-CONN-002` through `WS-CONN-006`; `system-assurance-map.md` High-consequence failure paths and Trust boundaries.
-- **Confidence in intent:** low against the HLD as currently written (which rules out a third indicator) — user has confirmed this should be top priority regardless.
-- **Consequence if false:** operator presses physical Stop believing E-Stop fired; motion-control hardware keeps moving with no indication anything is wrong until physically observed. For the peer-identity dimension specifically: an impostor local process could intercept or supersede the WebSocket connection, silently defeating E-Stop with no error and no distinguishing signal.
-- **Downstream dependencies:** none.
-- **Preconditions:** WebSocket Output Adapter is the only path for E-Stop (`docs/high-level-design.md` Non-Goals: "no command exists" via OSC/keystroke for this).
-- **Assumptions:** resolving the peer-identity gap assumes Dragonframe would participate in some future identifying handshake — outside this project's unilateral control.
-- **Prioritization rationale:** highest consequence-if-false in the whole system; user-confirmed top priority; the transport-readiness gap is genuinely achievable now, independent of whether the peer-identity gap ever closes.
+- **Behavioral segment:** OSC I/O (`docs/llds/osc-io.md`)
+- **Claim:** `decode_osc_packet` never raises an unhandled exception for any byte input, and specifically rejects non-positive or out-of-bounds declared `element_size` and nesting beyond `MAX_BUNDLE_DEPTH` (8) by raising the well-typed `BundleBoundsError`, which `AxisDiscovery.handle_datagram` catches and logs rather than propagating.
+- **Quantifiers in the claim:** for every byte-string input (arbitrary malformed content); for every nesting depth; for every declared `element_size` value.
+- **Claim dimensions:**
+  - negative `element_size`
+  - zero `element_size`
+  - `element_size` exceeding remaining buffer
+  - nesting depth at/beyond `MAX_BUNDLE_DEPTH`
+  - arbitrary malformed byte input generally (termination / no crash)
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a — stateless per-call decode, no persistent invariant to bound
+- **Property class:** Boundedness; Error/failure semantics
+- **Discovery source:** implementation observation + EARS requirement
+- **Authority:** SPECIFIED — Authority basis: `OSC-DISCOVER-010`, `OSC-DISCOVER-011`, `OSC-DISCOVER-012` (`docs/specs/osc-io.md`), confirmed user intent
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/osc_io.py` (`BundleBoundsError`, `MAX_BUNDLE_DEPTH`); `docs/specs/osc-io.md`
+- **Confidence in intent:** high
+- **Consequence if false:** unbounded recursion cost or an unhandled exception in the OSC Listener thread, potentially affecting every subsequent direct-axis mapping that depends on discovered axis names
+- **Downstream dependencies:** `AxisDiscovery`, every direct-axis Mapping View feature
+- **Preconditions:** none
+- **Assumptions:** Dragonframe is a trusted local peer (`DM-EA-001`) — these guards are a robustness/contract boundary, not a defense against a deliberately adversarial sender
+- **Prioritization rationale:** chokepoint for all OSC traffic; high likelihood ordinary tests miss malformed-framing edge cases; consequence bounded by `DM-EA-001`, so not maximal
+- **Priority:** medium
+- **Disposition:** Approved
+- **Evidence coverage:** all claim dimensions covered — see `EVID-001`
+- **Evidence state (set):** Example-tested; Property-tested (fuzz); Structural enforcement + verification; Supported by multiple complementary layers
+- **Residual gaps:** none currently identified
+- **Evidence-matrix row:** `EVID-001`
+
+### DM-002: Controller Profile switch fully isolates per-control engine state
+
+- **Behavioral segment:** Static Mapping / Mapping Engine (`docs/llds/static-mapping.md`)
+- **Claim:** After `MappingEngine.set_profile()` returns, no dedup state, Group index, axis-target assignment, or bank-derived tracked position from the previous profile influences any subsequent MIDI event's dispatch.
+- **Quantifiers in the claim:** for every subsequent operation after a profile switch (not merely the first).
+- **Claim dimensions:** n/a — single-instance claim (the full post-switch trace is one claim, not several sub-parts)
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** the engine may be in any reachable state at the moment `set_profile()` is called; the claim is about the state immediately after the call
+- **Property class:** Isolation; State-machine safety
+- **Discovery source:** EARS requirement
+- **Authority:** SPECIFIED — Authority basis: `MAP-PROFILE-004` (`docs/specs/static-mapping.md`)
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/mapping.py::MappingEngine.set_profile`; `docs/specs/static-mapping.md`
+- **Confidence in intent:** high
+- **Consequence if false:** a control fires an action derived from the wrong (previous) profile immediately after a switch
+- **Downstream dependencies:** every control's dispatch correctness
+- **Preconditions:** none
+- **Assumptions:** none beyond ordinary single-threaded engine access
+- **Prioritization rationale:** silent-failure risk on every profile switch (a common operation for anyone using more than one controller)
+- **Priority:** medium
+- **Disposition:** Approved
+- **Evidence coverage:** n/a — single-instance claim, fully covered — see `EVID-002`
+- **Evidence state (set):** Property-tested
+- **Residual gaps:** none currently identified
+- **Evidence-matrix row:** `EVID-002`
+
+### DM-003: Bank-derived knob nudge never sends an out-of-range axis position
+
+- **Behavioral segment:** Static Mapping — Bank Derivation (`docs/llds/static-mapping.md`)
+- **Claim:** For any Bank with a real axis name assigned in the active Group, every derived `stepPosition` send keeps the tracked axis position within the fader's configured `[min, max]` range — including when the tracked position (live-reported or internally estimated) starts outside that range at the time of a nudge.
+- **Quantifiers in the claim:** for every knob-nudge sequence, any starting tracked position (in-range or out-of-range), any sequence length.
+- **Claim dimensions:**
+  - in-range starting position, ordinary clamp behavior
+  - out-of-range starting position, first corrective nudge
+  - out-of-range starting position, full multi-step nudge sequence
+  - interior (non-boundary) landing position, order-independence of the clamp formula
+- **Canonical definition:** "effective bounds" = the lower and higher of the two configured `min`/`max` values, regardless of which is named which (`MAP-BANK-008`)
+- **Valid initial-state domain:** tracked position may start anywhere in ℝ, not only within `[min, max]` — this is explicitly part of the claim (`MAP-BANK-010`), not a separate recovery claim
+- **Property class:** Boundedness; Numeric correctness
+- **Discovery source:** EARS requirement
+- **Authority:** SPECIFIED — Authority basis: `MAP-BANK-008`, `MAP-BANK-009`, `MAP-BANK-010` (`docs/specs/static-mapping.md`)
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/mapping.py::_process_bank_derived`; `docs/specs/static-mapping.md`
+- **Confidence in intent:** high
+- **Consequence if false:** Dragonframe receives a position command outside the user-configured safe range — a physical/motion-control consequence, not merely a display bug
+- **Downstream dependencies:** every Bank with a direct-axis assignment
+- **Preconditions:** Bank's fader has a real axis name assigned in the active Group
+- **Assumptions:** Dragonframe's reported live position, when available, is itself accurate (external assumption not separately tracked — Dragonframe's OSC output fidelity is outside this project's control and not currently a registered concern)
+- **Prioritization rationale:** physical/motion-control safety consequence (an out-of-range axis command); common usage path (every knob nudge on an axis-assigned Bank)
 - **Priority:** high
 - **Disposition:** Approved
-- **Evidence state (set):** No evidence
-- **Residual gaps (collection):**
-  - Gap: transport-readiness signal does not exist — no Status UI indicator reflects the WebSocket adapter's bind/connection state. — Type: Operational observability gap — Disposition: Resolve through LID/design — Owner: the user, via a LID pass — Freshness: n/a
-  - Gap: connected-peer identity / end-to-end E-Stop delivery is unestablished — the adapter cannot distinguish Dragonframe from any other local process passing the path check, and no unilateral design exists to close this. — Type: Design missing — Disposition: Accept risk (no unilateral resolution path exists without Dragonframe-side protocol cooperation) — Owner/sign-off: the user, tracked as a known, permanent limitation — Freshness: n/a
-- **Claim type:** State-machine visibility (transport-readiness dimension) / trust-identity boundary claim (peer-identity dimension).
-- **Formalizability:** n/a for both.
-- **Executable oracle quality:** strong once the transport-readiness signal is built — small, enumerable state space (3 states), an example-based lifecycle test is a strong oracle for that claim shape. None available for the peer-identity dimension — no evidence method reaches it.
-- **Reference category:** n/a (no differential testing for either dimension).
-- **Primary evidence method:** transport-readiness — ordinary/lifecycle example testing, once a design exists, matching the existing `WS-LIFECYCLE-*` test style. Peer-identity — none currently viable; `docs/evidence-selection.md`'s "ACCEPT AS EXPLICIT ASSUMPTION" is the only applicable option, tracked as a residual risk, not an evidence method with active work behind it.
-- **Supporting evidence:** none for either dimension.
-- **Evidence strength tier:** n/a (not a boundedness/resource-safety claim).
-- **Quantifier coverage check:** transport-readiness — pre-handoff n/a; the state space is small and fully enumerable, so an example-based test covering all three states and their transitions trivially satisfies the claim's quantifier. Peer-identity — n/a, no evidence plan exists to check.
-- **Wording check:** load-bearing for this pass — no artifact anywhere may let the transport-readiness observable be read as establishing the peer-identity/E2E-delivery dimension. Checked across `correctness-assurance.md`, `assurance-case.md`, `evidence-handoff.md`, and this register: confirmed clean.
-- **Vacuity check:** n/a — no evidence exists yet for either dimension. Once the transport-readiness signal is built, its evidence must actually flip the underlying adapter state and observe the indicator update, not merely assert a mocked value — record this expectation in the eventual handoff.
+- **Evidence coverage:** all claim dimensions covered — see `EVID-003`
+- **Evidence state (set):** Example-tested; Property-tested; Structural enforcement + verification; Supported by multiple complementary layers
+- **Residual gaps:** none currently identified
+- **Evidence-matrix row:** `EVID-003`
 
-### MAPS-002: Controller Profile CC-collision detection
+### DM-004: Synthesized opinionated map matches the specified per-control behavior
 
-- **Behavioral segment:** Controller Profile config schema / loader (`mapping.py::validate_controls_config`, `controller_profile_loader.py`)
-- **Claim (a) — dispatch order under a Group-switch/other-control CC collision:** when a Group-switch key (Previous/Next Track) shares a CC with any other control, `process()` resolves the collision in favor of Group switching, deterministically (`MAP-GROUP-005`).
-- **Claim (b) — general cross-field CC-uniqueness:** loading a Controller Profile config file whose `controls:` block assigns the same CC number to two different, non-Group-switch control roles either (a) is rejected at load time with a clear error, or (b) has fully deterministic, documented resolution behavior for every possible collision pair.
-- **Quantifiers in the claim:** (a) for the one specific Group-switch-vs-other collision case, dispatch order is fixed — a single-instance claim, not a large space. (b) for every possible cross-field collision pair — unquantified today; no validation logic exists to have a coverage question about.
-- **Canonical definition:** n/a.
-- **Valid initial-state domain:** n/a (representation-invariant/boundary-decoder class, not boundedness/isolation/conservation).
-- **Property class:** (a) State-machine safety (dispatch determinism). (b) Boundary/decoder correctness (validation completeness) + representation invariant (CC-to-role mapping should be injective within a profile).
-- **Origin:** (a) SPECIFIED (`MAP-GROUP-005`). (b) **SPECIFIED — as an explicitly accepted, deferred gap**, not a silent oversight: `docs/llds/static-mapping.md` Open Questions #7 states plainly that rejecting duplicate CCs "not yet specified"; `docs/llds/midi-input.md` line 151 documents the closest related case (`match_substring` collisions) as "logged, not refused," a stated project-wide tolerance for this class of authoring mistake.
-- **Claim nature:** Property (both sub-claims — DragonMIDI's own config-loading behavior, no external system involved).
-- **Source evidence:** `mapping.py::validate_controls_config` (checks only per-field length and jog-wheel presence, no cross-field uniqueness); `docs/llds/static-mapping.md` lines 171, 216, 381 (three places documenting (b) as an accepted gap).
-- **Confidence in intent:** high that (b)'s gap is deliberate as currently documented — user asked to track it anyway.
-- **Consequence if false (b):** a third-party-authored profile silently double-maps a control (last-dict-write-wins in `build_opinionated_map`'s dict-merge order, or a fader/transport ambiguity) — the contributor gets wrong behavior with no error message pointing at the cause.
-- **Downstream dependencies:** every property that assumes a profile's opinionated map is internally consistent (MAPS-004, MAPS-006).
-- **Preconditions (b):** only reachable via a user-authored YAML profile — the two bundled profiles are hand-verified and known collision-free.
-- **Assumptions:** none.
-- **Prioritization rationale:** (b) is the one boundary where non-maintainer content becomes live behavior with zero review gate; user requested tracking despite the documented deferral.
-- **Priority:** (a) low — already correct and tested, no action needed. (b) medium — real risk, deliberately deferred.
-- **Disposition:** (a) Approved. (b) **Deferred** — acknowledged as real, not pursued now; revisit trigger below.
-- **Evidence state (set):** (a) Example-tested (`test_mapping.py`, `MAP-GROUP-005` cases). (b) No evidence.
-- **Residual gaps (collection):**
-  - (a): none.
-  - (b) Gap: no cross-field CC-uniqueness validation exists in the Controller Profile loader. — Type: Design missing — the validation logic itself has no design or implementation; the LLD decision that exists is a decision *not* to build it yet, not a design for the check itself. — Disposition: Defer — per the existing, explicit LLD deferral. — Revisit trigger: contributor base for third-party profiles growing past "a handful of trusted people." — Freshness: n/a.
-- **Claim type (b):** representation invariant (if the deferral were reversed).
-- **Reference category:** n/a.
-- **Primary evidence method (b, if the deferral is ever reversed):** property-based testing — generate randomized `ControlsConfig` instances (including deliberately duplicated CCs across fields) and assert a `detect_cc_collisions()` function's output against a simple set-cardinality oracle.
-- **Evidence strength tier (b):** n/a today (no guard exists to evaluate); if reversed, the natural design is Structural enforcement + verification — a validating function paired with boundary tests, not fuzzing alone.
-- **Quantifier coverage check / Wording check / Vacuity check:** n/a — no evidence plan is active for (b); this row exists so the analysis isn't lost if the deferral is ever revisited.
+- **Behavioral segment:** Static Mapping — Controller Profile Config Schema / Opinionated Table (`docs/llds/static-mapping.md`)
+- **Claim:** For any Controller Profile (bundled or third-party), `build_opinionated_map` (via `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()`) synthesizes a MIDI-event-to-OSC/keystroke/WebSocket-target table that matches what the Opinionated Table and Bank Derivation specs (`MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008`) require for that profile's declared `controls:` block.
+- **Quantifiers in the claim:** for every entry the shared helpers can produce, for any valid `controls:` declaration (not merely the two bundled profiles' specific CC values).
+- **Claim dimensions:**
+  - fader entries (`_fader_entries()`)
+  - knob entries (`_knob_entries()`)
+  - mute entries (`_mute_entries()`)
+  - shared button entries (`_shared_button_entries()`, incl. transport, Scene button override behavior)
+  - absent-key handling (`MAP-CONFIG-004` — an omitted `transport` key produces no row, not a disabled one)
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a — pure synthesis function, no persistent state
+- **Property class:** Functional correctness; Refinement/equivalence (config declaration → derived table)
+- **Discovery source:** EARS requirement + implementation observation
+- **Authority:** SPECIFIED — Authority basis: `MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008` (`docs/specs/static-mapping.md`). This claim is worded against the *current* Opinionated Table/Bank-Derivation spec text, not against the retired pre-Phase-5 historical constants (see `Rejected / withdrawn` below) — the two are related but not the same claim.
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/mapping.py::build_opinionated_map` and shared helpers; `docs/specs/static-mapping.md`
+- **Confidence in intent:** high
+- **Consequence if false:** every control on every Controller Profile using the shared helpers (both bundled profiles, and any third-party config) is silently mis-mapped — the single highest blast-radius chokepoint in the mapping layer
+- **Downstream dependencies:** every profile's runtime behavior; `controller_profile_loader.py`'s output correctness depends on this transitively
+- **Preconditions:** a syntactically valid `controls:` declaration (malformed declarations are `DM-005`'s concern, not this one)
+- **Assumptions:** none beyond the config schema itself being correctly documented
+- **Prioritization rationale:** highest-blast-radius chokepoint in the mapping layer; existing test (`test_mapping_config_schema.py:76,81`) is circular (compares the function's output to constants derived from the same function) — this is a genuine, currently-uncovered correctness gap, not merely a stale record
+- **Priority:** highest
+- **Disposition:** Approved
+- **Evidence coverage:** planned — see `EVID-004` for the per-dimension plan (fader/knob/mute/shared-button/absent-key)
+- **Evidence state (set):** No evidence (correctness); existing test provides regression/change-detection value only (`docs/evidence-selection.md § Self-derived snapshots are not correctness evidence`) — not correctness evidence, and must not be described as such in `correctness-assurance.md`. Evidence planned.
+- **Residual gaps:** evidence missing — no evidence currently establishes this claim is *correct*, only that it's self-consistent over time. Type: Evidence missing. Disposition: Produce evidence — routed to `evidence-handoff.md`.
+- **Evidence-matrix row:** `EVID-004`
 
-### MAPS-003: Dragonframe WebSocket AXn-ordering assumption
+### DM-005: Controller Profile config parsing degrades gracefully on malformed input
 
-- **Behavioral segment:** `MappingEngine.process_websocket()` (Cycle, Group-aware Solo)
-- **Claim:** For every axis DragonMIDI discovers via OSC `getAllPosition`, Dragonframe's WebSocket-side `AXn` index for that axis equals DragonMIDI's OSC-discovery-order index for it (used by `select-AXn`).
-- **Quantifiers in the claim:** for every discovered axis — a correspondence claim between two fixed numbering schemes for one specific project's axis set, not a claim over a generatable input space (which is exactly why no automated evidence method applies — see Evidence selection below).
-- **Canonical definition:** n/a beyond the claim itself.
-- **Valid initial-state domain:** n/a.
-- **Property class:** External assumption / compatibility property (interop with an external, unverified numbering scheme)
-- **Origin:** SPECIFIED as an *assumption* — explicitly written into `process_websocket()`'s own docstring as "the accepted assumption" and cross-referenced from `docs/llds/static-mapping.md`. Not SPECIFIED as a *confirmed fact*.
-- **Claim nature:** **External assumption** — a claim about Dragonframe's internal behavior, a system this project does not control. This is the claim's permanent nature, independent of whether it has ever been checked (see Evidence state / Freshness below, which are the axes that actually change).
-- **Source evidence:** `mapping.py` `process_websocket()` docstring; `docs/llds/static-mapping.md` WebSocket-Targeted Controls section.
-- **Confidence in intent:** the assumption's existence is well-documented; its truth is not — user has confirmed it remains unverified against real Dragonframe.
-- **Consequence if false:** Cycle and Solo select the wrong physical axis — silent misdirection (a `select-AXn` command still succeeds, it just targets the wrong axis), with high blast radius on a live rig if noticed late.
-- **Downstream dependencies:** MAPS-001's peer-identity gap conceptually (silent-wrong-behavior class) but functionally independent.
-- **Preconditions:** only matters once axis discovery has found ≥1 axis and Group/Cycle actually gets used.
-- **Assumptions:** this property *is* the assumption; nothing further underlies it.
-- **Prioritization rationale:** unverifiable by unit testing (depends on real Dragonframe internal numbering, which DragonMIDI cannot query); high consequence, silent failure mode.
-- **Priority:** high (as a documented, unverified assumption — not a code-fix task, since there's no code to fix).
-- **Disposition:** Approved (as an assumption to actively track toward verification).
-- **Evidence state (set):** No evidence. (Would become `Manually verified (as of <Dragonframe version>, <date>)` once the procedure below is run and logged — Evidence state and Freshness are the axes that move; Claim nature never does.)
-- **Residual gaps (collection):**
-  - Gap: no verification has occurred against real Dragonframe. — Type: External verification unavailable or missing — Disposition: Manual/operational verification — Owner: the user (or whoever has hands-on Dragonframe access) — Freshness: n/a (no verification has yet occurred to have a freshness state; once first verified, becomes "current," moving to "stale — renewal needed" whenever Dragonframe's version changes).
-- **Claim type:** compatibility/interop claim against an external, closed system with no available reference implementation to differential-test against.
-- **Formalizability:** n/a.
-- **Reference category:** n/a (Dragonframe cannot serve as a scriptable reference for differential testing).
-- **Primary evidence method:** an explicit, documented **operational verification procedure**: with a real project loaded in Dragonframe, deliberately create an axis ordering that is *not* alphabetical/creation order (to rule out coincidental agreement), fire `select-AXn` for each discovered axis in turn, and log-confirm via Dragonframe's debug log (the same `HARD STOP`-style precedent used for E-Stop) that the intended axis highlights each time. One-time or per-Dragonframe-version, not automatable.
-- **Supporting evidence:** none.
-- **Evidence strength tier:** n/a (not a boundedness/resource-safety claim).
-- **Quantifier coverage check:** the procedure covers ≥3 axes in a deliberately non-trivial order, closing the "coincidental agreement on a small/ordered set" gap a 1-axis or alphabetically-ordered check would leave open.
-- **Wording check:** must never be described as "verified" in `correctness-assurance.md` until the procedure has actually run — checked, clean.
-- **Vacuity check:** n/a until the procedure runs; the procedure itself is designed to discriminate (non-trivial ordering rules out a false positive from coincidental agreement), satisfying the pre-handoff reachability requirement.
+- **Behavioral segment:** MIDI Input — Controller Profile Loading (`docs/llds/midi-input.md`)
+- **Claim:** A malformed or invalid Controller Profile config file (missing required field, wrong type, malformed YAML, invalid `controls:` shape) is skipped with a logged warning and does not prevent the remaining valid profiles (bundled or user-local) from loading, and does not crash the app.
+- **Quantifiers in the claim:** for every malformed-file shape in `_REQUIRED_FIELDS`/type-validation's domain.
+- **Claim dimensions:**
+  - missing required top-level field
+  - wrong type for a required field (`name`, flags, `default_channel`, `setup_hint`)
+  - malformed `controls:` block (not a mapping, missing sub-field)
+  - malformed YAML syntax
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** Error/failure semantics; Deployment/configuration safety
+- **Discovery source:** EARS requirement
+- **Authority:** SPECIFIED — Authority basis: `PROFILE-LOAD-002`, `PROFILE-LOAD-008`, `PROFILE-LOAD-009`, `PROFILE-LOAD-010` (`docs/specs/midi-input.md`)
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/controller_profile_loader.py`
+- **Confidence in intent:** high
+- **Consequence if false:** one malformed third-party config file (a likely occurrence, given the HLD's non-programmer-contributor target audience) could take down profile discovery for every controller, including the bundled ones
+- **Downstream dependencies:** Controller Profile dropdown population, every profile's availability
+- **Preconditions:** none
+- **Assumptions:** none
+- **Prioritization rationale:** moderate blast radius (one malformed third-party file could theoretically affect discovery of others); defensive code and per-file isolation already in place with existing example coverage
+- **Priority:** medium
+- **Disposition:** Approved
+- **Evidence coverage:** all named dimensions covered — see `EVID-005`
+- **Evidence state (set):** Example-tested
+- **Residual gaps:** none currently identified
+- **Evidence-matrix row:** `EVID-005`
 
-### MAPS-004: Knob-nudge clamp bound invariant
+### DM-006: Preset Store rejects out-of-range Bank/Group indices rather than misdirecting
 
-- **Behavioral segment:** `MappingEngine._process_bank_derived` (`mapping.py:636-676`)
-- **Claim (a) — in-bounds start:** for any sequence of Knob N raw-value deltas and any interleaving of live (`axis_positions`) vs. internally-estimated position readings, given the tracked position starts within `[min(min_value, max_value), max(min_value, max_value)]`, it stays within that range after every step, and the sent delta never overshoots the bound.
-- **Claim (b) — out-of-range start:** given the tracked position starts *outside* `[low, high]` — a realistic input, since a live reading comes from Dragonframe, whose actual axis limits are independent of DragonMIDI's user-entered `min`/`max` — the resulting position, if a message is sent, is always within `[low, high]`. `MAP-BANK-008`'s clamp formula (`clamped_position = max(low, min(high, current_position + delta))`) applies unconditionally, with no distinct code path; no further guarantee is made about *which* position within range it lands on.
-- **Together, (a) and (b) partition the full domain** (position starts in-range or out-of-range — no third case) — the invariant is now stated for every reachable starting state, not silently assuming the happy path.
-- **Quantifiers in the claim:** (a) "for any delta sequence, for any live/estimate interleaving, at every step" — full-sequence, not single-nudge. (b) "for any out-of-range starting position, any nonzero delta" — single-step, since the claim is only about the immediate clamp result, not a multi-step recovery trajectory.
-- **Canonical definition:** "in bounds" = `[min(min_value, max_value), max(min_value, max_value)]`, per `MAP-BANK-008`'s explicit tie-break rule for reversed min/max.
-- **Valid initial-state domain:** (a) position ∈ `[low, high]` at the start of the sequence — stated explicitly, not implicit. (b) position ∉ `[low, high]` — the complementary domain, also explicit.
-- **Property class:** Boundedness / numeric correctness
-- **Origin:** SPECIFIED — (a) `MAP-BANK-008`, `MAP-BANK-009`; (b) `MAP-BANK-010`.
-- **Claim nature:** Property.
-- **Source evidence:** EARS specs above; `mapping.py::_process_bank_derived`; git history `81d1397`, `f63a84a` (two historical production bugs, both in-bounds-start scenarios).
-- **Confidence in intent:** high — fully specified.
-- **Consequence if false:** axis creeps outside its configured safe range on real motion-control hardware; this exact class of bug has occurred in production before.
-- **Downstream dependencies:** none upstream.
-- **Preconditions:** Bank N's fader has a real axis assigned in the active Group; engine is in axis mode.
-- **Assumptions:** floating-point arithmetic behaves per IEEE-754 double semantics (Python `float`) — trusted base, not separately verified.
-- **Prioritization rationale:** only area in the whole system with a confirmed prior production bug; specified, numeric, directly drives physical hardware position.
+- **Behavioral segment:** Preset Store (`docs/llds/static-mapping.md § Preset Store`)
+- **Claim:** `load_group_axis_targets` skips (with a logged warning) any Bank index outside `[1, 8]` or Group index outside `[1, 5]` found in a persisted file, rather than allowing it to reach code that resolves Bank/Group indices positionally (where an unvalidated `0` or negative index could resolve via Python negative indexing to the wrong Bank).
+- **Quantifiers in the claim:** for every Bank index value, every Group index value, every malformed entry shape found in a persisted file.
+- **Claim dimensions:**
+  - Bank index below range (`<= 0`)
+  - Bank index above range (`> 8`)
+  - Group index below/above range
+  - malformed entry shape (missing `axis_name`/`min`/`max`, wrong type)
+  - unreadable/non-JSON file (treated as empty table, not an error)
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** Boundedness; Error/failure semantics
+- **Discovery source:** implementation observation
+- **Authority:** SPECIFIED — Authority basis: `MAP-STORE-001/002/003` (`docs/specs/static-mapping.md`)
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/preset_store.py::load_group_axis_targets`, `_parse_index`, `_validate_entry`
+- **Confidence in intent:** high
+- **Consequence if false:** a corrupted or hand-edited Preset Store file could silently misdirect an axis assignment to the wrong Bank via Python's negative-indexing behavior — a specific, previously-identified risk the guard exists to close
+- **Downstream dependencies:** every (Bank, Group) axis assignment loaded at startup/profile switch
+- **Preconditions:** none
+- **Assumptions:** none
+- **Prioritization rationale:** guard already in place and tested; low exposure in practice (Preset Store files are normally only written by the app itself, not hand-edited)
+- **Priority:** low-medium
+- **Disposition:** Approved
+- **Evidence coverage:** all named dimensions covered — see `EVID-006`
+- **Evidence state (set):** Example-tested
+- **Residual gaps:** none currently identified as blocking (see `EVID-006` for a light, non-blocking boundary-value confirmation note)
+- **Evidence-matrix row:** `EVID-006`
+
+### DM-007: WebSocket-targeted commands encode and dispatch correctly on press-edge
+
+- **Behavioral segment:** WebSocket Output (`docs/llds/websocket-output.md`)
+- **Claim:** For a control mapped to a WebSocket target (`E-Stop`, `select-AXn`, `jog-AXn`), a press-transition produces exactly one correctly-shaped `{"input": ...}` JSON send to the currently-connected peer, with no send when no connection is active.
+- **Quantifiers in the claim:** for every press-transition, every WebSocket target name, any connection state (connected / not connected).
+- **Claim dimensions:**
+  - `E-Stop` (fixed input name, no params)
+  - `select-AXn` (Group-aware offset, `MAP-WS-002`)
+  - `jog-AXn` (per-axis incremental jog)
+  - no-connection case (send is dropped, not queued or errored)
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** Functional correctness; Determinism
+- **Discovery source:** EARS requirement
+- **Authority:** SPECIFIED — Authority basis: `WS-SEND-001` through `WS-SEND-008`, `MAP-WS-001` through `MAP-WS-009` (`docs/specs/websocket-output.md`, `docs/specs/static-mapping.md`)
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/websocket_output.py`, `dragonmidi/mapping.py`
+- **Confidence in intent:** high
+- **Consequence if false:** `E-Stop` specifically is a motion-control emergency-stop function — a wrong or duplicated send is a safety-relevant correctness defect, not merely a UX bug
+- **Downstream dependencies:** none beyond Dragonframe's own handling of the command
+- **Preconditions:** a WebSocket connection is currently active (delivery when no connection exists is explicitly out of scope for *this* claim — see the Accepted-risk note in `system-assurance-map.md` for the separate, deliberately-unaddressed visibility gap)
+- **Assumptions:** at most one Dragonframe client connects at a time (structurally enforced by `WebSocketOutputAdapter`'s single `_connection` slot; never independently confirmed against Dragonframe's own connection behavior — a minor, unregistered external assumption, not expected to be revisited without evidence of Dragonframe opening multiple connections)
+- **Prioritization rationale:** `E-Stop` is an explicit safety-relevant function (motion-control emergency stop); narrower exposure than the mapping-wide chokepoints, but consequence-if-false is not merely cosmetic
 - **Priority:** high
-- **Disposition:** Approved (both sub-claims).
-- **Evidence state (set):** Example-tested (two named tests anchoring `81d1397`/`f63a84a`); **Property-tested** (single-nudge and full multi-step-sequence properties, in-bounds and out-of-range generator groups); **Supported by multiple complementary layers** (structural enforcement — the clamp formula itself — paired with both example-based and property-based verification of it; not claimed as *independent* layers, since the tests and the production code they verify all derive from the same spec and exercise the same implementation — see Evidence strength tier below for the distinct claim that *is* warranted).
-- **Residual gaps (collection):** none currently identified.
-- **Freshness:** n/a.
-- **Claim type:** boundedness/conservation-style invariant over a large input space (delta sequences × live/estimate interleavings × initial-state domain).
-- **Evidence strength tier:** **Structural enforcement + verification.** `clamped_position = max(low, min(high, ...))` is the structural guard — it makes the invariant true by construction for every case, not merely reduces the failure space. `test_knob_clamp_bounds_order_independence_does_not_clamp_an_interior_position` (added this pass, verified by mutation to distinguish the correct clamp from a broken order-dependent one that the pre-existing boundary-only test could not) plus the property tests are the verification layer confirming the guard fires correctly across randomized inputs, not merely asserted to exist. This is the strongest available tier, not sampled exploration alone — and it is a claim about *strength*, not about *independence*: the guard and its tests are complementary evidence for the same implementation, not two independently-derived checks.
-- **Quantifier coverage check:** confirmed by direct inspection of `tests/test_mapping.py` — `test_knob_nudge_sequence_never_leaves_range_at_any_step` reconstructs the tracked position from `process()`'s returned deltas and asserts the invariant after *every* step in a generated sequence of 2–30 values, not just the final one; `test_knob_nudge_from_out_of_range_start_never_sends_a_position_outside_range` generates the starting position outside `[low, high]` explicitly via a dedicated `overshoot`/`starts_above` strategy dimension. Both oracles match their claim's quantifiers.
-- **Wording check:** no universal-language overclaim found — the claim's "always"/"any" wording is backed by the enforcement+verification pair above, not sampled evidence alone.
-- **Vacuity check:** Precondition witnessed satisfiable — yes, concrete witness tests (`test_knob_nudge_from_above_range_live_position_moves_down_toward_upper_bound` etc.) demonstrate the out-of-range scenario is real and reachable with specific numbers, not merely hypothesis-generated. Oracle reachability — confirmed by inspection: generators include reversed bounds, large deltas relative to span, and both live/estimate paths. **Mutation/reintroduction — actually performed, not merely required:** the `max`/`min` clamp was removed and confirmed to make four tests fail (restored, re-confirmed green); `sorted()` on reversed min/max was dropped separately and confirmed to make the new interior-point test fail while the pre-existing boundary-only test kept passing (the exact gap that motivated adding the interior-point test), then restored. Both results recorded here as the discriminating-evidence record this pass requires.
+- **Disposition:** Approved
+- **Evidence coverage:** all claim dimensions covered — see `EVID-007`
+- **Evidence state (set):** Example-tested
+- **Residual gaps:** environment-platform validation gap (test suite currently fails to import in this dev environment — `websockets` not installed; not a code defect) — Type: Environment-platform validation gap. Disposition: Resolve through LID/design — routed to `evidence-handoff.md`.
+- **Evidence-matrix row:** `EVID-007`
 
-### MAPS-005: `decode_osc_packet` malformed-bundle robustness
+### DM-008: Keystroke synthesis never leaves a modifier key stuck after a failed press
 
-- **Behavioral segment:** `osc_io.py::decode_osc_packet`
-- **Claim:** `decode_osc_packet` raises `BundleBoundsError` for a `#bundle` with a non-positive/overlong `element_size` or nesting beyond `MAX_BUNDLE_DEPTH` (8), rather than relying on Python's slicing semantics or its own interpreter recursion limit for safety. This is a robustness/contract claim, not a claim that a hang is being prevented: direct testing (a 3,000-level nested bundle; negative and zero `element_size` inputs) found the pre-guard code already safe against those specific inputs — a non-positive `element_size` always produces an empty Python slice, which always fails to decode immediately, and uncapped nesting safely raises `RecursionError`, already caught by the existing broad exception handler. The guards replace that incidental safety with an explicit, documented one.
-- **Quantifiers in the claim:** "for any byte string" is the engineering target the guards are built to satisfy for the specific malformed shapes named above — not a claim that every possible byte string has been exhaustively verified (see Wording check below).
-- **Canonical definition:** n/a.
-- **Valid initial-state domain:** n/a — `decode_osc_packet` is a pure function of its input bytes, no persistent state to have a starting domain.
-- **Property class:** Boundary/decoder correctness, error/failure semantics, boundedness
-- **Origin:** **SPECIFIED.** The guards' behavior is now an explicit EARS requirement — `OSC-DISCOVER-010`, `OSC-DISCOVER-011`, `OSC-DISCOVER-012` (`docs/specs/osc-io.md`, all `[x]`) — not a residual CODE-OBSERVED/INFERRED classification carried forward from before those specs existed. The path here matches `docs/property-discovery.md`'s "approving new intent" case directly: the guards did not exist in the code at all before the user's approval (nothing to have "observed"), the user affirmatively decided they should be built, and a LID Phase 2/3 pass subsequently landed real EARS IDs for them — Origin is SPECIFIED on that independent, mechanical basis, not retained as `INFERRED, confirmed <date>`.
-- **Claim nature:** Property.
-- **Source evidence:** `docs/specs/osc-io.md` `OSC-DISCOVER-010/011/012`; `osc_io.py::decode_osc_packet`; `handle_datagram`'s broad `except Exception`.
-- **Confidence in intent:** high — fully specified, and implemented to match.
-- **Consequence if false:** an undocumented, implicit reliance on Python's own recursion limit and slicing semantics for safety, plus an unnecessary stack walk on malformed deeply-nested input before failing.
-- **Downstream dependencies:** axis discovery (MAPS-003 territory), Dragonframe-signal liveness.
-- **Preconditions:** any process on the local machine can send to DragonMIDI's listen port; no authentication exists.
-- **Assumptions:** the "trusted local peer" framing this design reverses is documented in `docs/llds/osc-io.md`'s Decisions & Alternatives, not restated here.
-- **Prioritization rationale:** explicit guards replace an implicit, refactor-fragile safety property with a documented one, and bound the stack-walk cost of malformed input on a background thread.
+- **Behavioral segment:** Keystroke Output (`docs/llds/keystroke-output.md`)
+- **Claim:** If pressing a modifier or the main key raises during `KeystrokeOutputAdapter.send()`, every modifier already pressed for that call is still released (in reverse order), even though the failure is otherwise swallowed and logged rather than propagated.
+- **Quantifiers in the claim:** for every combination of which press/release call raises (modifier press, main key press, main key release), for any number of modifiers.
+- **Claim dimensions:** n/a — single-instance claim (the finally-block release guarantee is one claim)
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** Error/failure semantics; Safety
+- **Discovery source:** implementation observation
+- **Authority:** SPECIFIED — Authority basis: `KEY-SEND-001` through `KEY-SEND-006` (`docs/specs/keystroke-output.md`)
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/keystroke_output.py::KeystrokeOutputAdapter.send`
+- **Confidence in intent:** high
+- **Consequence if false:** a stuck modifier key at the OS level corrupts every subsequent real keystroke system-wide until manually cleared — explicitly called out in the code's own reasoning as "a far worse failure than one missed send"
+- **Downstream dependencies:** every keystroke-mapped control, and every other application receiving keyboard input afterward
+- **Preconditions:** none
+- **Assumptions:** the backend's `release()` call itself doesn't also fail in a way that leaves the OS-level key state stuck
+- **Prioritization rationale:** high consequence-if-false (a stuck modifier corrupts all subsequent keyboard input system-wide) but only reachable via an already-rare backend-failure path
 - **Priority:** medium
-- **Disposition:** Approved and **implemented**.
-- **Evidence state (set):** Example-tested (6 deterministic regression tests: negative/zero/oversized `element_size`, exact-boundary-still-valid, depth-cap-exact-still-valid, depth-cap-exceeded, plus 2 logging tests); **Fuzz-supported** (1 `hypothesis` structured-fuzz test, per-example deadline); **Supported by multiple complementary layers** (structural enforcement paired with both deterministic and sampled verification — complementary failure-detection strengths, not an independence claim; the guards and every test that exercises them share the same production implementation).
-- **Residual gaps (collection):** none currently identified for the stated claim; see Vacuity check for one recorded scope note (not a gap in what's claimed).
-- **Freshness:** n/a.
-- **Claim type:** boundary/decoder robustness under malformed input, established via explicit enforcement rather than search evidence alone.
-- **Evidence strength tier:** **Structural enforcement + verification.** `BundleBoundsError` and `MAX_BUNDLE_DEPTH = 8` are the structural guards, enforced inside `decode_osc_packet` itself (not only `handle_datagram`'s wrapper). The six deterministic regression tests verify each guard fires at its stated limit — including the two boundary-valid-not-rejected cases (`element_size` exactly matching remaining bytes; nesting exactly at the cap), confirming the guards don't over-reject. The fuzz test is supporting, exploratory evidence for shapes the guards weren't specifically written for, not the primary basis for the claim.
-- **Quantifier coverage check:** confirmed by direct inspection of `tests/test_osc_io.py` — the fuzz test (`test_decode_osc_packet_never_hangs_on_structured_malformed_bundles`) generates `declared_size` across the full `int32` range, `nesting_depth` 0–12 (spanning both under and over the 8-level cap), and arbitrary binary payloads, with a per-example deadline as the hang oracle.
-- **Wording check:** the claim's universal wording ("for any byte string") is explicitly qualified in the Claim field above as the engineering target the guards satisfy for the named malformed shapes, distinct from a claim that fuzzing alone exhaustively verified arbitrary input — matches `docs/claim-validation.md § 3`'s required split.
-- **Vacuity check:** Precondition — n/a (no nontrivial precondition; any byte string is a valid input). Oracle reachability — confirmed by inspection: the fuzz generator explicitly constructs `#bundle`-framed payloads with randomized declared sizes rather than relying on unstructured byte fuzzing to stumble onto the shape. **Mutation/reintroduction — actually performed:** both guards were deliberately removed (reverting `decode_osc_packet` to the pre-guard implementation) and confirmed to make 5 of 7 new deterministic/logging tests fail (the two accept-cases — exact-boundary and exact-depth — correctly kept passing, confirming the guards don't over-reject); restored and the full `test_osc_io.py` suite re-confirmed green. One residual scope note, not a gap in what's claimed: the fuzz test's hang oracle is `hypothesis`'s per-example deadline rather than a subprocess/watchdog execution-isolation harness — sufficient given the underlying hang risk this guards against was itself found not to reproduce in direct testing (see Claim), but recorded here in case that judgment is revisited.
+- **Disposition:** Approved
+- **Evidence coverage:** n/a — single-instance claim, covered — see `EVID-008`
+- **Evidence state (set):** Example-tested
+- **Residual gaps:** evidence missing — a doubly-failing `release()` sequence's ordering isn't explicitly asserted. Type: Evidence missing. Disposition: Defer — judged low-value given Priority: medium; tracked in `evidence-handoff.md` (No action scheduled).
+- **Evidence-matrix row:** `EVID-008`
 
-### MAPS-006: Controller Profile switch state-clear completeness
+### DM-009: Group-switch dispatch precedence and dedup-state discard
 
-- **Behavioral segment:** `MappingEngine.set_profile` (`mapping.py:394-409`)
-- **Claim:** After `set_profile(new_profile)`, no per-control state tracked under the *previous* profile (dedup values, press state, debounce timestamps, axis positions, Group axis assignments, encoder mode) influences any subsequent `process()`/`process_websocket()`/`process_keystroke()` call under the new profile — even when the old and new profiles reuse the same CC number for semantically different controls.
-- **Quantifiers in the claim:** "any subsequent" call, across the full post-switch sequence, for all three output paths — not merely the first call after the switch, and not merely two of the three paths.
-- **Canonical definition:** "no state leak" = every `process()`/`process_websocket()`/`process_keystroke()` call across an entire post-switch event sequence produces output identical, call-for-call, to what a freshly constructed `MappingEngine(new_profile)` fed only that same sequence would produce.
-- **Valid initial-state domain:** n/a in the boundedness sense; the isolation claim's own "before" state (arbitrary prior-profile activity) is exactly what the generator varies, not a fixed precondition to state separately.
-- **Property class:** Isolation
-- **Origin:** SPECIFIED — `MAP-PROFILE-004` states the switch "clears every piece of tracked state, including axis assignments and encoder-mode overrides."
-- **Claim nature:** Property.
-- **Source evidence:** `docs/specs/static-mapping.md` `MAP-PROFILE-004`; `mapping.py::set_profile`/`reset`.
-- **Confidence in intent:** high.
-- **Consequence if false:** switching Controller Profiles mid-session leaks stale state — a control on the new profile inherits a dedup baseline or axis position meant for a different physical control on the old profile, producing a wrong output with no error, possibly several events after the switch.
-- **Downstream dependencies:** every property that assumes a profile's behavior is self-contained (MAPS-002, MAPS-004).
-- **Preconditions:** requires an actual profile switch at runtime.
-- **Assumptions:** `reset()`'s own completeness (called from within `set_profile`) — same invariant one level down, not separately registered.
-- **Prioritization rationale:** direct isolation property on the one state machine every other property depends on being clean.
-- **Priority:** medium
-- **Disposition:** Approved.
-- **Evidence state (set):** Example-tested (`test_mapping_profiles.py`, first-call-only example tests, `process()`/`process_websocket()`); **Property-tested** (full post-switch trace, `process()`/`process_websocket()`, verified by direct inspection — see Quantifier coverage check); **Discharged by structural argument** (`process_keystroke()`) — `mapping.py` documents this method as "Stateless — allocates and consults no per-control state," so the claim's isolation requirement holds for it by construction: there is no per-control state for a stale profile to leak into in the first place. This is not an untested exclusion; it is a distinct form of evidence that the claim's full three-output-path scope is satisfied.
-- **Residual gaps (collection):** none currently identified — the claim's full scope (all three output paths) is now covered, `process()`/`process_websocket()` by property test and `process_keystroke()` by structural argument.
-- **Freshness:** n/a.
-- **Claim type:** isolation between two "sessions" (profile A's state, profile B's state) of the same engine instance.
-- **Evidence strength tier:** n/a (isolation property, not boundedness/resource-safety — the strength-tier field is scoped to that class).
-- **Quantifier coverage check — confirmed by direct inspection of `tests/test_mapping_profiles.py`, not trusted from prior prose:** `test_set_profile_full_post_switch_trace_matches_a_fresh_engine` drives a synthetic profile (`_COLLIDING_PROFILE`, deliberately reusing Studio's Fader-1 CC for a different, WebSocket-targeted control role) through a `hypothesis`-generated pre-switch event sequence (1–15 events), switches, then drives a *second* generated event sequence (1–15 events, not a single event) — feeding it to both the switched engine and a freshly constructed `MappingEngine(profile_B)`, asserting `process()` and `process_websocket()` return identical values call-for-call across the whole second sequence. This exercises dedup state, press/release state, debounce, axis-position estimates, Group assignments, and encoder mode collectively, and CC-overlap across profiles by construction of `_COLLIDING_PROFILE`. `process_keystroke()` is covered separately by the structural argument recorded in Evidence state above, not by this oracle — together the two forms of evidence reach the claim's full stated scope.
-- **Wording check:** n/a (no sampled-evidence-as-proof risk; this is a same-process differential check against a known-clean reference object, not a claim resting on fuzz sampling).
-- **Vacuity check:** Precondition — witnessed satisfiable (the colliding-profile construction is a concrete, real `ControllerProfile`, not a hypothetical). Oracle reachability — confirmed by inspection, as above. **Mutation/reintroduction — actually performed:** `reset()`'s `_previous_value.clear()` call was deliberately removed and confirmed to make the test fail at the first post-switch event in the hypothesis-discovered falsifying example (a specific `(pre_switch, post_switch)` pair reported in the failure output); restored, and the full suite (`test_mapping.py` + `test_mapping_profiles.py`, 146 tests) re-confirmed green.
+- **Behavioral segment:** Static Mapping — Group Switching (`docs/llds/static-mapping.md § Group Switching`)
+- **Claim:** A CC collision between a Group-switch key (`previous_track`/`next_track`) and any other control's CC resolves in favor of Group switching (`MAP-GROUP-005`); a Group-switch discards dedup/position state only for Banks currently in OSC axis (direct) mode, not for Banks in OSC encoder mode (`MAP-GROUP-011`); a Controller Profile switch, not an ordinary Group switch, resets the active Group to 1 (`MAP-GROUP-007`).
+- **Quantifiers in the claim:** for every CC-collision case; for every Bank's fader-mode state at the moment of a Group switch.
+- **Claim dimensions:**
+  - dispatch-order precedence under CC collision
+  - dedup-discard scope (axis-direct-mode Banks only)
+  - Group-index reset scope (profile switch, not Group switch or ordinary MIDI reconnect)
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** State-machine safety; Determinism
+- **Discovery source:** EARS requirement
+- **Authority:** SPECIFIED — Authority basis: `MAP-GROUP-005`, `MAP-GROUP-007`, `MAP-GROUP-011` (`docs/specs/static-mapping.md`)
+- **Claim nature:** Property
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/mapping.py`
+- **Confidence in intent:** high
+- **Consequence if false:** a Group switch could silently fail to fire, or discard/retain the wrong Banks' dedup state, producing an incorrect first nudge after switching
+- **Downstream dependencies:** every Bank in OSC axis (direct) mode
+- **Preconditions:** none
+- **Assumptions:** none
+- **Prioritization rationale:** substantial existing example-test coverage per `docs/specs/static-mapping.md`'s own dense spec set for this area; no gap identified during Phase 1 mapping
+- **Priority:** low
+- **Disposition:** Approved
+- **Evidence coverage:** n/a — Phase 4A concluded "additional evidence: none justified" — see `EVID-009`
+- **Evidence state (set):** Example-tested (existing)
+- **Residual gaps:** none currently identified
+- **Evidence-matrix row:** `EVID-009`
 
-### MAPS-007: `MAP-CONFIG-003` migration-invariant evidence is non-discriminating
+### DM-EA-001: Dragonframe is a trusted local peer for OSC input
 
-- **Behavioral segment:** Controller Profile map synthesis (`mapping.py::build_opinionated_map`, `build_profile`)
-- **Claim:** `build_opinionated_map(STUDIO_CONTROLS, has_scene_button=True)` and `build_opinionated_map(NANOKONTROL2_CONTROLS, has_scene_button=False)` produce the exact map contents the project's pre-Phase-5 hardcoded literal constants produced, before Phase 5 replaced those literals with values derived from `ControlsConfig`.
-- **Quantifiers in the claim:** for both bundled profiles' complete opinionated maps — a fixed, finite comparison, not a generatable space; a known-value/golden test, not property-based testing, is the natural fit (see Evidence selection).
-- **Canonical definition:** n/a.
-- **Valid initial-state domain:** n/a.
-- **Property class:** Refinement/equivalence (migration correspondence)
-- **Origin:** **SPECIFIED.** `MAP-CONFIG-003` (`docs/specs/static-mapping.md`, `[x]`) is an explicit SHALL requirement: "The bundled nanoKONTROL Studio and nanoKONTROL2 config files... shall synthesize opinionated maps identical in content to this LLD's pre-Phase-5 `OPINIONATED_MAP_STUDIO` and `OPINIONATED_MAP_NANOKONTROL2` constants." **Correction from an earlier pass: this property's Origin was previously carried as CODE-OBSERVED, which conflated the claim's origin with a finding about its evidence's quality.** The requirement is, and always was, SPECIFIED — what's CODE-OBSERVED is the separate finding that the existing test doesn't actually establish it, which belongs in Residual gaps, not in Origin. See `SKILL.md § The property state model` rule 23.
-- **Claim nature:** Property.
-- **Source evidence:** `docs/specs/static-mapping.md` `MAP-CONFIG-003`; `test_mapping_config_schema.py:76,81` — `assert build_opinionated_map(STUDIO_CONTROLS, has_scene_button=True) == OPINIONATED_MAP_STUDIO`. `OPINIONATED_MAP_STUDIO` (`mapping.py:321`) is defined as `STUDIO_PROFILE.opinionated_map`, and `STUDIO_PROFILE` is itself built via `build_profile(..., controls=STUDIO_CONTROLS)` → `build_opinionated_map(STUDIO_CONTROLS, has_scene_button=True)` — the identical function called with the identical arguments. The test compares the function under test's output to itself; it is not compared against any independently-frozen historical literal, because that literal no longer exists anywhere in the current codebase. **Shared-bug/independence reasoning (`checklists/differential-independence.md`), applied explicitly:** the "reference" (`OPINIONATED_MAP_STUDIO`) and the "actual" value are not merely correlated — they are provably the same value by construction (same function, same arguments, same call graph), so this is not differential testing with a shared-bug risk to *assess*; it is not differential testing at all. A future golden-test fix must use a literal, hand-authored value with no code path connecting it to `build_opinionated_map`, or the same circularity recurs.
-- **Confidence in intent:** high that the requirement itself is intended and correctly worded (it's an explicit SHALL, not inferred); high also that the underlying claim was true *at the moment of the Phase 5 migration commit*; low that today's test provides any ongoing regression protection for it.
-- **Consequence if false:** a future change to `build_opinionated_map`/`_fader_entries`/`_knob_entries`/etc. could silently drift both bundled profiles' entire opinionated map away from long-validated behavior, and this specific test would not catch it.
-- **Downstream dependencies:** MAPS-002 (assumes the bundled profiles are collision-free and correct), MAPS-006 (assumes profile behavior is well-defined pre-switch).
-- **Preconditions:** none.
-- **Assumptions:** none.
-- **Prioritization rationale:** real audit-trail/regression-protection gap for an explicit SHALL requirement; moderate consequence in practice — `test_mapping.py`'s large example suite exercises `OPINIONATED_MAP_STUDIO`/`NANOKONTROL2` behavior directly, providing some independent behavioral protection against gross regressions even without this specific check.
-- **Priority:** medium
-- **Disposition:** **Approved.** `MAP-CONFIG-003` is already an approved requirement in the current spec — there is no reconciliation question about whether the *property* should be pursued, only about how to produce discriminating evidence for it, which this entry already specifies.
-- **Evidence state (set):** Example-tested, but non-discriminating (circular) — recorded as its own distinct value rather than merged into "No evidence," so the passing-but-non-discriminating test isn't lost from the record, and rather than merged into "Example-tested" unqualified, so it isn't mistaken for real coverage.
-- **Residual gaps (collection):**
-  - Gap: the existing test does not actually establish `MAP-CONFIG-003` — it is circular, comparing the function under test to itself. — Type: Evidence missing — the implementation is believed correct (hand-confirmed at Phase 5 migration time); what's missing is evidence that would actually catch a future regression. — Disposition: Produce evidence (specifically, independent/golden evidence — a hand-authored fixture with no code path back to `build_opinionated_map`) — Freshness: n/a.
-- **Claim type:** refinement/equivalence against a historical reference that itself no longer exists in the codebase to check against.
-- **Reference category:** the existing test's "reference" is not a differential-testing reference at all (see Source evidence above) — n/a for `checklists/differential-independence.md` purposes. The proposed golden-test fixture is classified GOLDEN ORACLE / DATA (hand-authored, independent of the code path).
-- **Primary evidence method:** known-value/golden test — freeze the current, hand-confirmed opinionated map contents as an explicit literal fixture independent of `build_opinionated_map`'s own code path.
-- **Evidence strength tier:** n/a (not a boundedness/resource-safety claim).
-- **Quantifier coverage check:** the fixture covers both bundled profiles' complete opinionated maps, matching the claim's full (finite) scope.
-- **Wording check:** n/a — no universal/sampled-evidence language in this claim.
-- **Vacuity check (for the golden-test fix once implemented):** the proposed fixture avoids the current circularity specifically because it is hand-authored, not derived by calling the function under test — this is the one property in the register whose entire finding *is* a vacuity failure in existing evidence (a non-discriminating equivalence check), so the fix is written to directly repair the specific mechanism that failed, not just add more of the same kind of test. Supporting, non-blocking: a one-time `git show <pre-Phase-5-commit>` diff against the actual historical hardcoded literal would additionally close the *retroactive* historical-match question, which the golden fixture alone (pinning current behavior going forward) does not — offered as optional work, not required for the primary evidence.
+- **Behavioral segment:** OSC I/O
+- **Claim:** DragonMIDI's OSC decode path does not defend against a deliberately adversarial Dragonframe-equivalent sender — it is designed and documented as trusting the local peer, with `DM-001`'s guards framed as robustness/contract enforcement (against accidental malformation), not a security boundary.
+- **Quantifiers in the claim:** n/a — a design-posture statement, not a testable universal
+- **Claim dimensions:** n/a
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** n/a (External assumption, not a Property)
+- **Discovery source:** implementation observation (`osc_io.py` docstring: "Dragonframe is a trusted local peer, not untrusted input")
+- **Authority:** SPECIFIED — Authority basis: explicit docstring statement of accepted threat model
+- **Claim nature:** External assumption
+- **Lifecycle:** Enduring
+- **Source evidence:** `dragonmidi/osc_io.py`
+- **Confidence in intent:** high
+- **Consequence if false:** if a hostile process on the same machine/LAN can send to the OSC Listener's bound port, `DM-001`'s guards reduce but do not eliminate risk (e.g. no resource-exhaustion defense against a flood of valid-but-numerous packets)
+- **Downstream dependencies:** `DM-001`'s scope (guards are contract enforcement, not adversarial hardening)
+- **Preconditions:** n/a
+- **Assumptions:** n/a (this entry is itself the assumption)
+- **Prioritization rationale:** intentional, accepted threat-model boundary — not an evidence-task candidate
+- **Priority:** n/a
+- **Disposition:** Approved
+- **Evidence coverage:** n/a
+- **Evidence state (set):** No evidence — by design; not intended to be defended against
+- **Residual gaps:** none currently identified — this is an accepted, intentional threat-model boundary, not an open question
+- **Evidence-matrix row:** `EVID-010`
 
-## Candidate Disposition
+### DM-EA-002: AXn axis identity matches OSC discovery order
 
-Every candidate/open question `system-assurance-map.md` raises — across its Open Questions, High-consequence failure paths, Important state machines, External assumptions, and Known fragile areas tables — gets exactly one disposition row below. `system-assurance-map.md`'s Trust boundaries, Semantic chokepoints, and Externally visible outputs tables are structural context that fed candidate discovery, not candidates themselves — every concrete risk they surfaced is captured in the tables dispositioned below, so they don't get separate rows.
+- **Behavioral segment:** OSC I/O / Mapping
+- **Claim:** Dragonframe's internal `AXn` axis numbering (used in `select-AXn`/`jog-AXn` WebSocket commands and in the Solo mapping) corresponds to the order DragonMIDI discovers axis names via `getAllPosition`.
+- **Quantifiers in the claim:** for every discovered axis, in every axis ordering Dragonframe might present
+- **Claim dimensions:** n/a
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** n/a (External assumption)
+- **Discovery source:** implementation observation (explicit docstring: "the accepted assumption")
+- **Authority:** SPECIFIED — Authority basis: explicit docstring statement
+- **Claim nature:** External assumption
+- **Lifecycle:** Enduring
+- **Source evidence:** relevant source docstring (mapping/osc_io)
+- **Confidence in intent:** medium — stated as an accepted assumption, not independently confirmed against real Dragonframe behavior across non-trivial axis orderings
+- **Consequence if false:** `select-AXn`/`jog-AXn`/Solo commands could target the wrong physical axis with no error, no crash, silently wrong
+- **Downstream dependencies:** `DM-007` (`select-AXn`/`jog-AXn` correctness assumes this holds)
+- **Preconditions:** n/a
+- **Assumptions:** n/a
+- **Prioritization rationale:** silent-wrong-axis failure mode with no automated way to verify (Dragonframe's own AXn assignment isn't queryable) — a manual verification candidate
+- **Priority:** medium-high
+- **Disposition:** Approved
+- **Evidence coverage:** n/a
+- **Evidence state (set):** No evidence currently — manual verification procedure specified, see `evidence-handoff.md`
+- **Residual gaps:** external verification unavailable or missing — Type: External verification unavailable or missing. Disposition: Manual/operational verification — routed to `evidence-handoff.md`.
+- **Evidence-matrix row:** `EVID-011`
 
-| Source item (`system-assurance-map.md`) | Disposition | Detail |
-|---|---|---|
-| Open Questions: Silent E-Stop loss | Registered | MAPS-001 (both the transport-readiness and peer-identity dimensions are residual gaps within this one property, not separate property IDs). |
-| Open Questions: CC-collision validation gap | Registered | MAPS-002 |
-| Open Questions: AXn ordering assumption | Registered | MAPS-003 |
-| Open Questions: `MAP-CONFIG-003` migration-invariant test coverage | Registered | MAPS-007 |
-| High-consequence failure paths: Silent E-Stop loss | Merged | Same item as the Open Questions row above → MAPS-001 |
-| High-consequence failure paths: Colliding CC numbers | Merged | → MAPS-002 |
-| High-consequence failure paths: `decode_osc_packet` malformed/adversarial bundle | Registered | MAPS-005 |
-| High-consequence failure paths: Knob-nudge clamp arithmetic drift | Registered | MAPS-004 |
-| High-consequence failure paths: `MAP-CONFIG-003` migration-invariant regression | Merged | → MAPS-007 |
-| Important state machines: `MappingEngine` fader mode (axis ⇄ encoder) | Deferred | Already specified (`MAP-AXIS-*`) and unit-tested; no confirmed bug history unlike the knob-nudge path (MAPS-004); no distinct assurance gap identified beyond what MAPS-004/006's tests incidentally exercise. Revisit if a fader-mode-switch bug is ever reported. |
-| Important state machines: Active Group (1–5) | Deferred | Already specified (`MAP-GROUP-*`) and unit-tested including the wrap case; Solo's Group-offset arithmetic is covered as a downstream dependency inside MAPS-003 (`correctness-assurance.md § 3.4`), but the Group state machine itself wasn't judged to need a standalone property. Revisit if Group-switching bugs are reported. |
-| Important state machines: Controller Profile switch | Registered | MAPS-006 |
-| Important state machines: WebSocket server connection (supersede) | Merged | Same trust gap as MAPS-001's peer-identity residual gap — "no operator-visible signal distinguishing the real Dragonframe from an impostor connection" is one and the same concern. → MAPS-001 |
-| External assumptions: AXn numbering matches OSC discovery order | Merged | Same item as the Open Questions row above → MAPS-003 |
-| External assumptions: nanoKONTROL2 factory-default CC map | Deferred | Confirmed once against real hardware — a practical smoke check judged sufficient for now, not escalated to a registered property. Revisit if the physical device's firmware/config is suspected to have changed, or a control is reported behaving unexpectedly on that profile. |
-| External assumptions: Dragonframe-traffic-as-liveness | Rejected | This is an accepted, explicit HLD design decision (`docs/high-level-design.md` Key Design Decisions), not a gap MAPS should try to independently verify — doing so would require building an independent Dragonframe test double, disproportionate to the risk. |
-| External assumptions: `pynput` cross-platform key mapping | Deferred | Real gap, but requires platform-specific CI runners (macOS + Windows) not currently available. Revisit if a keystroke-delivery bug is reported on either platform. |
-| External assumptions: Socket close from another thread interrupting `recvfrom()` | Explicitly out of scope | Already tested, found false, and fixed prior to this MAPS pass (bounded 0.5s `settimeout()` poll workaround) — not a live gap, no further MAPS action needed. |
-| Known fragile areas: Knob-driven axis nudge scaling | Merged | Same item as the High-consequence failure paths row above → MAPS-004 |
-| Known fragile areas: UI layout | Explicitly out of scope | Visual layout is not a correctness property MAPS addresses. |
-| Known fragile areas: CI/lint configuration | Explicitly out of scope | Tooling, not system behavior. |
+### DM-EA-003: nanoKONTROL2 bundled default CC map matches real hardware factory defaults
 
-## Pending user reconciliation
-
-None. (MAPS-007 was previously listed here on the basis of an Origin misclassification — the finding that its existing evidence is non-discriminating was mistaken for a reason to treat the *property* as unconfirmed. `MAP-CONFIG-003` is already an approved SHALL requirement; the reconciliation-worthy question was never "should we pursue this," only "how do we evidence it," which is not a user-intent question. See MAPS-007's entry above.)
+- **Behavioral segment:** MIDI Input / Static Mapping (nanoKONTROL2 profile)
+- **Claim:** The CC numbers and channel bundled in DragonMIDI's default nanoKONTROL2 Controller Profile match the device's actual factory-default CC-mode assignment.
+- **Quantifiers in the claim:** for every control on the nanoKONTROL2 (faders, knobs, mutes, solos, transport)
+- **Claim dimensions:** n/a
+- **Canonical definition:** n/a
+- **Valid initial-state domain:** n/a
+- **Property class:** n/a (External assumption)
+- **Discovery source:** direct user statement (HLD: manually confirmed against real hardware, 2026-07-21)
+- **Authority:** SPECIFIED — Authority basis: HLD Key Design Decisions, citing an in-practice confirmation against real hardware
+- **Claim nature:** External assumption
+- **Lifecycle:** Enduring
+- **Source evidence:** `docs/high-level-design.md` (References / Key Design Decisions)
+- **Confidence in intent:** medium-high — confirmed once, behaviorally (every control produced expected Dragonframe behavior), not via a byte-level MIDI-monitor trace, and not confirmed across multiple hardware/firmware revisions
+- **Consequence if false:** a control silently maps to the wrong physical control on some nanoKONTROL2 units/firmware revisions
+- **Downstream dependencies:** the bundled nanoKONTROL2 profile's default behavior
+- **Preconditions:** n/a
+- **Assumptions:** n/a
+- **Prioritization rationale:** already manually verified in practice; no further evidence action needed absent a divergence report
+- **Priority:** low
+- **Disposition:** Approved
+- **Evidence coverage:** n/a
+- **Evidence state (set):** Manually verified (as of 2026-07-21, in-practice behavioral confirmation — not a byte-level trace)
+- **Residual gaps:** none currently identified against the verified unit; freshness noted below
+- **Freshness:** verified as of 2026-07-21 against one physical unit — stale-renewal trigger: a future report of a nanoKONTROL2 unit/firmware behaving differently
+- **Evidence-matrix row:** `EVID-012`
 
 ## Rejected / withdrawn
 
 | Property ID | Reason rejected/withdrawn | Date |
 |---|---|---|
-| — | none | — |
+| `DM-RETIRED-001` (would-be ID for "synthesized map identical to pre-Phase-5 `OPINIONATED_MAP_STUDIO`/`_NANOKONTROL2` constants") | Migration/transition acceptance criterion, Lifecycle: Migration-only, satisfied — Phase 5 (pluggable Controller Profiles) shipped; no pre-Phase-5 hardcoded implementation remains in production for this to be a bridge toward. Not registered. Its live successor concern, freshly worded against the current Opinionated Table/Bank-Derivation specs rather than historical constants, is `DM-004`. | 2026-08-26 |

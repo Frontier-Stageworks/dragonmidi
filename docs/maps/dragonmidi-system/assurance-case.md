@@ -1,274 +1,680 @@
 # Assurance Case
 
-Structured traceability counterpart to `correctness-assurance.md`. One trace per property in `property-register.md`.
+The structured traceability counterpart to `correctness-assurance.md`. See `docs/correctness-document.md § assurance-case.md`.
 
 ## Traces
 
-### MAPS-001: WebSocket E-Stop transport readiness and peer-identity/end-to-end delivery
+### DM-001: OSC bundle-decode robustness
 
+```text
 Property (property-register.md):
-  The operator has some way to determine whether DragonMIDI's WebSocket
-  server is bound AND has a live peer connection ("transport appears
-  ready"), without physically testing it. Internal state observed:
-  adapter bind/connection state. Observable proxy exposed (once built): a
-  Status UI indicator. End-to-end outcome NOT established by either
-  residual gap: whether E-Stop reaches Dragonframe. This is one property
-  with two independent residual gaps, not two properties.
+  decode_osc_packet never raises an unhandled exception for any byte input, and
+  rejects non-positive/out-of-bounds element_size and over-depth nesting via
+  BundleBoundsError.
         ↓
-Evidence (property-register.md):
-  Primary:    none for either residual gap — no implementation exists
-  Supporting: none
-
+Preconditions / initial-state domain:
+  none — stateless per-call decode
+        ↓
 Assumptions:
-  - Resolving the peer-identity gap would require Dragonframe's own
-    cooperation in a future identifying protocol — outside this project's
-    unilateral control.
+  - Dragonframe is a trusted local peer (DM-EA-001) — these guards are contract
+    enforcement, not adversarial hardening
+        ↓
+Claim dimensions:
+  - negative element_size
+  - zero element_size
+  - element_size exceeding remaining buffer
+  - nesting depth at/beyond MAX_BUNDLE_DEPTH
+  - arbitrary malformed byte input generally (termination)
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  - negative element_size -> EVID-001, test_decode_osc_packet_raises_on_negative_element_size
+  - zero element_size -> EVID-001, test_decode_osc_packet_raises_on_zero_element_size
+  - oversized element_size -> EVID-001, test_decode_osc_packet_raises_when_element_size_exceeds_remaining_buffer
+  - at-cap accepted -> EVID-001, test_decode_osc_packet_accepts_element_size_exactly_matching_remaining_buffer, test_decode_osc_packet_accepts_nesting_exactly_at_the_depth_cap
+  - over-cap rejected -> EVID-001, test_decode_osc_packet_raises_when_nesting_exceeds_the_depth_cap
+  - arbitrary malformed input / termination -> EVID-001, test_decode_osc_packet_never_hangs_on_structured_malformed_bundles (hypothesis fuzz, robustness evidence purpose)
+        ↓
+Enforcement mechanisms:
+  - MAX_BUNDLE_DEPTH=8 recursion cap; element_size bounds check — both dimensions
+        ↓
+Meta-evidence / discrimination:
+  - Mutation/reintroduction: removing depth guard fails the over-cap test; removing
+    element_size validation fails the corresponding boundary tests. Executed
+    2026-08-25; not re-run since.
+        ↓
+Risk/assumption treatment:
+  - Explicit assumption: Dragonframe trusted-peer (DM-EA-001)
+        ↓
+Current support:
+  Established for all five named dimensions.
+        ↓
+Residual gaps:
+  none currently identified.
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: OSC-DISCOVER-010/011/012, confirmed user intent
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Example-tested; Property-tested (fuzz); Structural enforcement
+    + verification; Supported by multiple complementary layers
+  Layering assessment: complementary (structural guard + boundary tests + fuzz;
+    no independence argument made or needed)
+  Freshness: current as of 2026-08-26 code inspection
+  Correctness-assurance.md section: §3.1
+```
 
-Claim nature: Property
-Disposition: Approved
-Evidence state (set): No evidence
-Residual gaps (collection):
-  - Gap: transport-readiness signal does not exist — Type: Operational
-    observability gap — Disposition: Resolve through LID/design — Owner:
-    the user, via a LID pass
-  - Gap: connected-peer identity / end-to-end E-Stop delivery is
-    unestablished — Type: Design missing — Disposition: Accept risk (no
-    unilateral resolution path exists)
-Freshness: n/a
-Correctness-assurance.md section: § 3.6
+### DM-002: Controller Profile switch state isolation
 
-### MAPS-002: Controller Profile CC-collision detection
-
+```text
 Property (property-register.md):
-  (a) A Group-switch-vs-other-control CC collision resolves deterministically
-  in favor of Group switching. (b) Loading a profile with a duplicate CC
-  across two other control roles either rejects at load time or has fully
-  deterministic, documented resolution.
+  After set_profile() returns, no dedup state, Group index, axis-target
+  assignment, or bank-derived tracked position from the previous profile
+  influences any subsequent MIDI event's dispatch.
         ↓
-Evidence (property-register.md):
-  Primary:    (a) Example-tested (MAP-GROUP-005, test_mapping.py)
-  Supporting: (b) none for the general cross-field case
-
+Preconditions / initial-state domain:
+  engine may be in any reachable state at the moment set_profile() is called
+        ↓
 Assumptions:
-  - None beyond the deliberate LLD decision to defer general validation
-    (docs/llds/static-mapping.md, Open Questions #7).
+  - none beyond ordinary single-threaded engine access
+        ↓
+Claim dimensions:
+  n/a — single-instance claim (full post-switch trace)
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  Primary: EVID-002, property test test_set_profile_full_post_switch_trace_matches_a_fresh_engine
+  (correctness evidence purpose)
+        ↓
+Enforcement mechanisms:
+  none
+        ↓
+Meta-evidence / discrimination:
+  Oracle strength confirmed by design: full-trace comparison is strictly
+  stronger than a first-event-only oracle.
+        ↓
+Risk/assumption treatment:
+  none
+        ↓
+Current support:
+  Established.
+        ↓
+Residual gaps:
+  none currently identified.
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: MAP-PROFILE-004
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Property-tested
+  Layering assessment: single method
+  Freshness: current as of 2026-08-26
+  Correctness-assurance.md section: §3.2
+```
 
-Claim nature: Property (both sub-claims)
-Disposition: (a) Approved. (b) Deferred
-Evidence state (set): (a) Example-tested. (b) No evidence
-Residual gaps (collection):
-  - (a): none.
-  - (b) Gap: no cross-field CC-uniqueness validation exists — Type:
-    Design missing — Disposition: Defer — Revisit trigger: contributor
-    base for third-party profiles growing past "a handful of trusted
-    people."
-Freshness: n/a
-Correctness-assurance.md section: § 6.3 (general case not in § 3 — no claim row exists for an intentionally-deferred property)
+### DM-003: Bank-derived knob clamp-to-range
 
-### MAPS-003: Dragonframe WebSocket AXn-ordering assumption
-
+```text
 Property (property-register.md):
-  For every axis DragonMIDI discovers, Dragonframe's WebSocket AXn index
-  for it equals DragonMIDI's OSC-discovery-order index.
+  For any Bank with a real axis assigned, every derived stepPosition send keeps
+  the tracked axis position within [min, max], including recovery from an
+  out-of-range starting position.
         ↓
-Evidence (property-register.md):
-  Primary:    none — structurally untestable by automation (Dragonframe is
-              closed and unscriptable)
-  Supporting: a documented one-time manual verification procedure
-              (specified in property-register.md, not yet performed)
-
+Preconditions / initial-state domain:
+  Bank's fader has a real axis name assigned in the active Group; tracked
+  position may start anywhere in ℝ (MAP-BANK-010)
+        ↓
 Assumptions:
-  - This claim *is* the assumption; nothing further underlies it.
+  - Dragonframe's reported live position, when available, is itself accurate
+    (not separately tracked)
+        ↓
+Claim dimensions:
+  - in-range starting position, ordinary clamp
+  - out-of-range starting position, first corrective nudge
+  - out-of-range starting position, full multi-step sequence
+  - interior (non-boundary) landing, order-independence of the clamp formula
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  - in-range clamp -> EVID-003, test_knob_nudge_reduced_to_reach_the_{lower,upper}_bound_exactly,
+    test_knob_nudge_already_at_lower_bound_sends_nothing
+  - out-of-range first nudge -> EVID-003, test_knob_nudge_from_{above,below}_range_live_position_moves_toward_bound
+  - out-of-range full sequence -> EVID-003, test_knob_nudge_sequence_never_leaves_range_at_any_step,
+    test_knob_nudge_from_out_of_range_start_never_sends_a_position_outside_range
+  - interior-landing order-independence -> EVID-003, test_knob_clamp_bounds_order_independence_does_not_clamp_an_interior_position
+        ↓
+Enforcement mechanisms:
+  - the clamp formula in _process_bank_derived, all four dimensions — the formula
+    itself is the enforcement mechanism (structurally makes an out-of-range send
+    impossible when correctly implemented), verified by the tests above
+        ↓
+Meta-evidence / discrimination:
+  Mutation/reintroduction: removing the clamp formula fails 4 tests; removing
+  sorted() from the effective-bounds computation fails specifically the
+  interior-point test and no other — confirming that test, not the pre-existing
+  boundary test, is what discriminates this class of bug. Executed 2026-08-25;
+  not re-run since.
+        ↓
+Risk/assumption treatment:
+  none
+        ↓
+Current support:
+  Established for all four named dimensions.
+        ↓
+Residual gaps:
+  none currently identified.
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: MAP-BANK-008/009/010
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Example-tested; Property-tested; Structural enforcement +
+    verification; Supported by multiple complementary layers
+  Layering assessment: complementary (property test + targeted example tests
+    against the same spec/implementation; no independence argument made)
+  Freshness: current as of 2026-08-26 code inspection; mutation result last
+    executed 2026-08-25
+  Correctness-assurance.md section: §3.3
+```
 
-Claim nature: External assumption (permanent — this is the claim's type,
-never an Evidence state or Disposition value)
-Disposition: Approved (as an assumption to actively track toward
-verification)
-Evidence state (set): No evidence
-Residual gaps (collection):
-  - Gap: no verification has occurred against real Dragonframe — Type:
-    External verification unavailable or missing — Disposition:
-    Manual/operational verification
-Freshness: n/a (would become "current" once first verified, "stale —
-renewal needed" once Dragonframe's version moves on)
-Correctness-assurance.md section: § 3.5
+### DM-004: Opinionated map synthesis correctness
 
-### MAPS-004: Knob-nudge clamp bound invariant
-
+```text
 Property (property-register.md):
-  (a) In-bounds start: tracked axis position after any nudge sequence
-  always stays within the configured [min, max] range; sent delta never
-  overshoots the bound. (b) Out-of-range start: given the position starts
-  outside [min, max], the resulting position, if a message is sent, is
-  always within range. (a) and (b) partition the full domain explicitly.
+  build_opinionated_map's output, for any profile's declared controls, matches
+  the Opinionated Table / Bank Derivation specs (MAP-TABLE-*, MAP-CONFIG-004..008).
         ↓
-Evidence (property-register.md):
-  Primary:    Structural enforcement (clamped_position = max(low,
-              min(high, ...))) for both sub-claims, paired with:
-              (a) 2 example tests (81d1397, f63a84a) + 2 property tests
-              (single-nudge, full sequence).
-              (b) 1 property test (out-of-range-start generator group).
-  Supporting: none beyond the above.
-
+Preconditions / initial-state domain:
+  a syntactically valid controls: declaration
+        ↓
 Assumptions:
-  - Python float (IEEE-754 double) arithmetic behaves per IEEE-754
-    semantics (correctness-assurance.md § 5.3, trusted base).
+  - none beyond the config schema itself being correctly documented
+        ↓
+Claim dimensions:
+  - fader entries
+  - knob entries
+  - mute entries
+  - shared button entries (incl. Scene-button override)
+  - absent-key handling (MAP-CONFIG-004)
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  - all five dimensions -> residual gap (see below); EVID-004 records the plan:
+    hand-authored golden table derived from spec text + declared CC list, not
+    from build_opinionated_map, OPINIONATED_MAP_STUDIO/_NANOKONTROL2, or git
+    history (correctness evidence purpose, once built)
+        ↓
+Enforcement mechanisms:
+  none
+        ↓
+Meta-evidence / discrimination:
+  Required, not yet run: deliberately alter one entry in each shared helper,
+  confirm the golden test fails; revert, confirm it passes. Specified in
+  evidence-handoff.md, not executed.
+        ↓
+Risk/assumption treatment:
+  none — this is an active evidence gap, not an accepted risk
+        ↓
+Current support:
+  NOT established. The existing test (test_mapping_config_schema.py:76,81)
+  compares the function's output to constants derived from the same function —
+  regression/change-detection evidence only.
+        ↓
+Residual gaps:
+  - Description: no evidence establishes the synthesized map is correct against
+    the current spec, only that it is self-consistent over time
+    Gap type: evidence missing
+    Gap disposition: produce evidence
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: MAP-TABLE-001/002/003/005, MAP-CONFIG-004/005/006/007/008
+    (the current spec text — not the retired historical-constants framing, see
+    property-register.md Rejected/withdrawn)
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: No evidence (correctness); existing test is regression-only
+  Layering assessment: n/a — no evidence realized yet
+  Freshness: n/a until evidence lands
+  Correctness-assurance.md section: §3.4
+```
 
-Claim nature: Property
-Disposition: Approved
-Evidence state (set): Example-tested; Property-tested; Supported by
-multiple complementary layers (not "independent" — the guard and every
-test share the same spec and the same production code path; see
-correctness-assurance.md § 1)
-Residual gaps (collection): none currently identified
-Freshness: n/a
-Evidence strength tier: Structural enforcement + verification (the
-strongest tier — the clamp formula is the guard, the property/example
-tests are the boundary verification, not sampled exploration alone)
-Vacuity/mutation record: actually performed, not merely required —
-removing the max/min clamp made 4 tests fail; dropping sorted() on
-reversed min/max made the new interior-point test fail specifically
-(while the pre-existing boundary-only test kept passing); both restored
-and re-confirmed green.
-Correctness-assurance.md section: § 3.1
+### DM-005: Controller Profile config parsing robustness
 
-### MAPS-005: decode_osc_packet malformed-bundle robustness
-
+```text
 Property (property-register.md):
-  decode_osc_packet raises BundleBoundsError for a #bundle with a
-  non-positive/overlong element_size or nesting beyond MAX_BUNDLE_DEPTH
-  (8), rather than relying on Python's slicing semantics or its own
-  interpreter recursion limit for safety. A robustness/contract claim, not
-  a claim that a hang is being prevented — direct testing found the
-  pre-guard code already safe against these specific inputs.
+  A malformed Controller Profile config file is skipped with a logged warning;
+  the remaining valid files still load; the app does not crash.
         ↓
-Evidence (property-register.md):
-  Primary:    Structural enforcement (BundleBoundsError, MAX_BUNDLE_DEPTH
-              = 8) inside decode_osc_packet itself, paired with 6
-              deterministic boundary regression tests (including the two
-              boundary-valid-not-rejected cases).
-  Supporting: 1 hypothesis structured-fuzz test with a per-example
-              deadline; 2 caplog-based logging tests; pre-existing
-              except-Exception guard in handle_datagram.
-
+Preconditions / initial-state domain:
+  none
+        ↓
 Assumptions:
-  - Sender is non-adversarial in the security sense; this is a robustness
-    claim, not a security claim (correctness-assurance.md § 3.3).
+  none
+        ↓
+Claim dimensions:
+  - missing required top-level field
+  - wrong type for a required field
+  - malformed controls: block
+  - malformed YAML syntax
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  all four dimensions -> EVID-005, example tests in tests/test_controller_profile_loader.py,
+  one targeted fixture per dimension (correctness evidence purpose)
+        ↓
+Enforcement mechanisms:
+  per-file try/except isolation in _load_directory
+        ↓
+Meta-evidence / discrimination:
+  none — each fixture is a minimal, single-violation shape, discriminating by
+  construction
+        ↓
+Risk/assumption treatment:
+  none
+        ↓
+Current support:
+  Established for all four named dimensions.
+        ↓
+Residual gaps:
+  none currently identified.
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: PROFILE-LOAD-002/008/009/010
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Example-tested
+  Layering assessment: single method (example testing) plus a structural
+    isolation mechanism
+  Freshness: current as of 2026-08-26
+  Correctness-assurance.md section: §3.5
+```
 
-Claim nature: Property
-Disposition: Approved and implemented
-Evidence state (set): Example-tested; Fuzz-supported; Supported by
-multiple complementary layers (not "independent" — see
-correctness-assurance.md § 1)
-Residual gaps (collection): none currently identified for the stated
-claim (one recorded scope note on the fuzz harness, not a gap in what's
-claimed)
-Freshness: n/a
+### DM-006: Preset Store Bank/Group index bounds validation
 
-**Origin note:** this property's Origin is SPECIFIED — `OSC-DISCOVER-010/
-011/012` are explicit, implemented EARS requirements. An earlier pass
-carried this as CODE-OBSERVED/INFERRED, which was correct only before
-those spec IDs existed; once the user approved the hardening and a LID
-pass landed the spec IDs, Origin became SPECIFIED on that independent,
-mechanical basis (SKILL.md § The property state model, rule 23).
-
-Evidence strength tier: Structural enforcement + verification
-Vacuity/mutation record: actually performed — both guards removed,
-confirmed to make 5 of 7 new tests fail while the two accept-cases
-correctly kept passing; restored and the full suite re-confirmed green.
-Correctness-assurance.md section: § 3.3
-
-### MAPS-006: Controller Profile switch state-clear completeness
-
+```text
 Property (property-register.md):
-  After set_profile(), no state from the previous profile influences any
-  subsequent process()/process_websocket()/process_keystroke() call under
-  the new profile — not merely the first call — even under CC-number reuse
-  across profiles.
+  An out-of-range Bank/Group index or malformed entry in a persisted file is
+  skipped with a logged warning, not allowed to reach positional resolution.
         ↓
-Evidence (property-register.md):
-  Primary:    process()/process_websocket() — example-tested (first-call
-              case) + property-tested: a second randomized event sequence
-              is driven post-switch, and the entire output trace,
-              call-for-call, is compared against a freshly constructed
-              MappingEngine(profile_B) fed the same sequence, using a
-              synthetic profile with a CC number deliberately reused
-              across a different control role than Studio's.
-              process_keystroke() — discharged by structural argument:
-              mapping.py documents it as allocating and consulting no
-              per-control state, so no leak into it is possible by
-              construction.
-  Supporting: MAP-PROFILE-004's explicit spec of set_profile's clearing
-              behavior.
-
+Preconditions / initial-state domain:
+  none
+        ↓
 Assumptions:
-  - reset()'s completeness, called from within set_profile — same
-    invariant one level down, not separately registered.
+  none
+        ↓
+Claim dimensions:
+  - Bank index below/above range
+  - Group index below/above range
+  - malformed entry shape
+  - unreadable/non-JSON file (treated as empty table)
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  all dimensions -> EVID-006, example tests in tests/test_preset_store.py
+  (correctness evidence purpose)
+        ↓
+Enforcement mechanisms:
+  _parse_index bounds check (Bank [1,8], Group [1,5]); _validate_entry shape check
+        ↓
+Meta-evidence / discrimination:
+  not independently mutation-tested — guard is a simple range comparison,
+  judged low marginal value to mutation-test given Priority: low-medium
+        ↓
+Risk/assumption treatment:
+  none
+        ↓
+Current support:
+  Established for the named dimensions; exact-boundary-value coverage (0, 9, -1,
+  6 specifically) not independently confirmed.
+        ↓
+Residual gaps:
+  none tracked as blocking — a light, non-blocking confirmation noted in
+  evidence-matrix.md EVID-006.
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: MAP-STORE-001/002/003
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Example-tested
+  Layering assessment: single method plus a structural bounds-check mechanism
+  Freshness: current as of 2026-08-26
+  Correctness-assurance.md section: §3.6
+```
 
-Claim nature: Property
-Disposition: Approved
-Evidence state (set): Example-tested; Property-tested; Discharged by
-structural argument (process_keystroke() specifically)
-Residual gaps (collection): none currently identified — the claim's full
-three-output-path scope is now covered, process()/process_websocket() by
-property test and process_keystroke() by structural argument
-Freshness: n/a
-Vacuity/mutation record: actually performed (on the process()/
-process_websocket() portion) — reset()'s _previous_value.clear() removed,
-confirmed to make the test fail at the first post-switch event in the
-hypothesis-discovered falsifying example; restored, full 146-test suite
-re-confirmed green.
-Correctness-assurance.md section: § 3.2
+### DM-007: WebSocket command encode + dispatch
 
-### MAPS-007: MAP-CONFIG-003 migration-invariant evidence is non-discriminating
-
+```text
 Property (property-register.md):
-  build_opinionated_map() applied to the bundled profiles' ControlsConfig
-  reproduces the pre-Phase-5 hardcoded map literals exactly (MAP-CONFIG-003,
-  an explicit, implemented SHALL requirement).
+  A press-transition on a WebSocket-mapped control produces exactly one
+  correctly-shaped send when connected, and no send when not connected.
         ↓
-Evidence (property-register.md):
-  Primary:    test_mapping_config_schema.py:76,81 — but circular: the
-              "reference" (OPINIONATED_MAP_STUDIO/_NANOKONTROL2) is
-              provably the same code path as the value under test (same
-              function, same arguments), not an independent implementation
-              or hand-authored value. Not differential testing at all,
-              despite structural resemblance — there is no independence
-              to assess.
-  Supporting: none independent of the above.
-
+Preconditions / initial-state domain:
+  a WebSocket connection is currently active (for the send-succeeds half of the
+  claim; the no-connection half is its own dimension)
+        ↓
 Assumptions:
-  - None.
+  - at most one Dragonframe client connects at a time (structurally enforced,
+    never independently confirmed against Dragonframe's own behavior)
+        ↓
+Claim dimensions:
+  - E-Stop (bare trigger) encode
+  - ranged command encode (select-AXn/jog-AXn)
+  - delivery when connected
+  - no-connection drop
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  all four dimensions -> EVID-007, example tests in tests/test_websocket_output.py
+  (correctness evidence purpose; content confirmed by inspection — see residual
+  gap below regarding re-execution)
+        ↓
+Enforcement mechanisms:
+  single _connection slot (supersedes on reconnect)
+        ↓
+Meta-evidence / discrimination:
+  not independently mutation-tested; encode tests assert exact JSON shape,
+  discriminating by construction
+        ↓
+Risk/assumption treatment:
+  Accept risk: delivery-failure visibility (correctness-assurance.md §6.1) —
+  explicit HLD decision, not part of this claim
+        ↓
+Current support:
+  Established for all four named dimensions by direct file inspection.
+        ↓
+Residual gaps:
+  - Description: test suite currently fails to import in this dev environment
+    (websockets module not installed); evidence content confirmed by inspection,
+    not by a fresh run
+    Gap type: environment-platform validation gap
+    Gap disposition: resolve through LID/design
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: WS-SEND-001..008, MAP-WS-001..009
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Example-tested (content confirmed by inspection; not yet
+    executed in this development environment — see Freshness)
+  Layering assessment: single method plus a structural connection-slot mechanism
+  Freshness: stale — renewal needed (for re-execution only; content current as
+    of 2026-08-26 inspection)
+  Correctness-assurance.md section: §3.7
+```
 
-**Origin/Disposition correction from an earlier pass:** MAP-CONFIG-003 is,
-and always was, SPECIFIED (docs/specs/static-mapping.md, an explicit `[x]`
-SHALL requirement) — this property's Origin was previously carried as
-CODE-OBSERVED, which conflated the claim's origin with the separate
-finding that its existing evidence is non-discriminating. The finding
-about evidence quality belongs in Residual gaps, not in Origin (SKILL.md
-§ The property state model, rule 23). There is accordingly no open
-reconciliation question about whether this property should be pursued.
+### DM-008: Keystroke stuck-modifier release guarantee
 
-Claim nature: Property
-Disposition: **Approved**
-Evidence state (set): Example-tested, but non-discriminating (circular) —
-recorded as its own value, distinct from both "No evidence" and an
-unqualified "Example-tested"
-Residual gaps (collection):
-  - Gap: the existing test does not actually establish MAP-CONFIG-003; it
-    is circular — Type: Evidence missing — Disposition: Produce evidence
-    (specifically, independent/golden evidence)
-Freshness: n/a
-Correctness-assurance.md section: § 3.7
+```text
+Property (property-register.md):
+  Every modifier already pressed for a send() call is released, in reverse
+  order, even if a later press/release call raises.
+        ↓
+Preconditions / initial-state domain:
+  none
+        ↓
+Assumptions:
+  - the backend's release() call itself doesn't also fail in a way that leaves
+    OS-level key state stuck
+        ↓
+Claim dimensions:
+  n/a — single-instance claim (the finally-block guarantee)
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  Primary: EVID-008, example tests in tests/test_keystroke_output.py
+  (test_send_still_releases_modifiers_when_key_press_raises,
+  test_send_still_releases_remaining_modifiers_when_one_modifier_press_raises,
+  test_send_swallows_total_backend_failure_without_raising,
+  test_send_swallows_unrecognized_key_lookup_failure) — correctness evidence purpose
+        ↓
+Enforcement mechanisms:
+  finally block releasing pressed modifiers in reverse order
+        ↓
+Meta-evidence / discrimination:
+  none; fake-backend instrumentation directly asserts ordering, discriminating
+  by construction
+        ↓
+Risk/assumption treatment:
+  none
+        ↓
+Current support:
+  Established for the three directly-tested failure points.
+        ↓
+Residual gaps:
+  - Description: a doubly-failing release() sequence's ordering is not
+    explicitly asserted
+    Gap type: evidence missing
+    Gap disposition: judged low-value given Priority: medium; not routed to an
+    active handoff
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: KEY-SEND-001..006
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Example-tested
+  Layering assessment: single method plus a structural finally-block mechanism
+  Freshness: current as of 2026-08-26
+  Correctness-assurance.md section: §3.8
+```
+
+### DM-009: Group-switch dispatch precedence and dedup-state discard
+
+```text
+Property (property-register.md):
+  Group-switch key wins any CC collision; a Group switch discards dedup state
+  only for axis-direct-mode Banks; only a Controller Profile switch resets the
+  active Group to 1.
+        ↓
+Preconditions / initial-state domain:
+  none
+        ↓
+Assumptions:
+  none
+        ↓
+Claim dimensions:
+  - dispatch-order precedence under CC collision
+  - dedup-discard scope
+  - Group-index reset scope
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  all dimensions -> existing example tests in tests/test_mapping.py, confirmed
+  present by inspection (EVID-009; correctness evidence purpose)
+        ↓
+Enforcement mechanisms:
+  none beyond the dispatch code itself
+        ↓
+Meta-evidence / discrimination:
+  none — EVID-009 concluded "additional evidence: none justified"
+        ↓
+Risk/assumption treatment:
+  none
+        ↓
+Current support:
+  Established via existing coverage; confirmed present by source inspection,
+  not independently re-verified in depth.
+        ↓
+Residual gaps:
+  none currently identified.
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: MAP-GROUP-005/007/011
+  Claim nature: Property
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Example-tested (existing)
+  Layering assessment: single method
+  Freshness: current as of 2026-08-26
+  Correctness-assurance.md section: §3.9
+```
+
+### DM-EA-001: Dragonframe trusted-local-peer assumption
+
+```text
+Property (property-register.md):
+  DragonMIDI's OSC decode path does not defend against a deliberately
+  adversarial peer; DM-001's guards are contract enforcement, not a security
+  boundary.
+        ↓
+Preconditions / initial-state domain:
+  n/a
+        ↓
+Assumptions:
+  n/a — this entry is itself the assumption
+        ↓
+Claim dimensions:
+  n/a
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  Primary: none — EVID-010 concluded "additional evidence: none justified"
+  (an intentional design posture, not an open uncertainty)
+        ↓
+Enforcement mechanisms:
+  none (deliberately)
+        ↓
+Meta-evidence / discrimination:
+  none
+        ↓
+Risk/assumption treatment:
+  Explicit assumption, accepted by design
+        ↓
+Current support:
+  n/a — stated posture, not a testable claim
+        ↓
+Residual gaps:
+  none currently identified — accepted, intentional boundary
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: explicit docstring ("Dragonframe is a trusted local peer")
+  Claim nature: External assumption
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: No evidence — by design
+  Layering assessment: n/a
+  Freshness: n/a
+  Correctness-assurance.md section: §5.1
+```
+
+### DM-EA-002: AXn axis-identity assumption
+
+```text
+Property (property-register.md):
+  Dragonframe's internal AXn axis numbering corresponds to DragonMIDI's
+  OSC-discovery order.
+        ↓
+Preconditions / initial-state domain:
+  n/a
+        ↓
+Assumptions:
+  n/a — this entry is itself the assumption
+        ↓
+Claim dimensions:
+  n/a
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  Primary: none realized yet; EVID-011 specifies a manual verification
+  procedure (operational validation evidence purpose) — see evidence-handoff.md
+        ↓
+Enforcement mechanisms:
+  none — cannot be enforced, only observed
+        ↓
+Meta-evidence / discrimination:
+  Required: the procedure must use a non-alphabetical, non-creation-order axis
+  arrangement to rule out coincidental agreement.
+        ↓
+Risk/assumption treatment:
+  Explicit assumption, currently unverified
+        ↓
+Current support:
+  NOT established. No evidence exists yet.
+        ↓
+Residual gaps:
+  - Description: no automated or manual verification has been performed
+    Gap type: external verification unavailable or missing
+    Gap disposition: manual/operational verification
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: explicit docstring ("the accepted assumption")
+  Claim nature: External assumption
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: No evidence
+  Layering assessment: n/a
+  Freshness: n/a until run
+  Correctness-assurance.md section: §5.2
+```
+
+### DM-EA-003: nanoKONTROL2 default CC map assumption
+
+```text
+Property (property-register.md):
+  The bundled nanoKONTROL2 Controller Profile's CC numbers/channel match the
+  device's actual factory-default CC-mode assignment.
+        ↓
+Preconditions / initial-state domain:
+  n/a
+        ↓
+Assumptions:
+  n/a — this entry is itself the assumption
+        ↓
+Claim dimensions:
+  n/a
+        ↓
+Evidence mapped to claim dimensions (evidence-matrix.md):
+  Primary: manual verification, 2026-07-21, one physical unit (operational
+  validation evidence purpose)
+        ↓
+Enforcement mechanisms:
+  none
+        ↓
+Meta-evidence / discrimination:
+  none — a behavioral confirmation (every control produced expected behavior),
+  not a byte-level MIDI-monitor trace
+        ↓
+Risk/assumption treatment:
+  Explicit assumption, partially verified
+        ↓
+Current support:
+  Manually verified as of 2026-07-21, against one physical unit, behaviorally.
+        ↓
+Residual gaps:
+  none currently identified against the verified unit.
+        ↓
+Disposition / next action:
+  Authority: SPECIFIED
+  Authority basis: docs/high-level-design.md, confirmed against real hardware
+  Claim nature: External assumption
+  Lifecycle: Enduring
+  Disposition: Approved
+  Evidence summary: Manually verified (as of 2026-07-21)
+  Layering assessment: n/a
+  Freshness: verified as of 2026-07-21 — stale-renewal trigger: a divergence
+  report on a different unit/firmware
+  Correctness-assurance.md section: §5.3
+```
 
 ## Coverage check
 
 | Property ID | Has assurance-case trace? | Has correctness-assurance.md claim row? | Discrepancy? |
 |---|---|---|---|
-| MAPS-001 | Yes | Yes (§ 3.6, two-residual-gap split within one property) | None |
-| MAPS-002 | Yes | Partial — sub-claim (b) discussed only in § 6.3, not a § 3 claim row (deliberate: a Deferred property has no active claim to make a row for) | None (expected asymmetry, explained above) |
-| MAPS-003 | Yes | Yes (§ 3.5) | None |
-| MAPS-004 | Yes | Yes (§ 3.1, two-row split) | None |
-| MAPS-005 | Yes | Yes (§ 3.3, four-row split) | None |
-| MAPS-006 | Yes | Yes (§ 3.2, two-row split: tested paths + structurally-discharged path) | None |
-| MAPS-007 | Yes | Yes (§ 3.7) | None — approved, evidence-missing gap only, no reconciliation blocker |
+| `DM-001` | Yes | Yes (§3.1) | None |
+| `DM-002` | Yes | Yes (§3.2) | None |
+| `DM-003` | Yes | Yes (§3.3) | None |
+| `DM-004` | Yes | Yes (§3.4) | None |
+| `DM-005` | Yes | Yes (§3.5) | None |
+| `DM-006` | Yes | Yes (§3.6) | None |
+| `DM-007` | Yes | Yes (§3.7) | None |
+| `DM-008` | Yes | Yes (§3.8) | None |
+| `DM-009` | Yes | Yes (§3.9) | None |
+| `DM-EA-001` | Yes | Yes (§5.1) | None |
+| `DM-EA-002` | Yes | Yes (§5.2) | None |
+| `DM-EA-003` | Yes | Yes (§5.3) | None |

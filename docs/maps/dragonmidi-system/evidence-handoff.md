@@ -1,90 +1,124 @@
 # Evidence Handoff
 
-Phase 7 artifact for every evidence method other than formal proof — no property in this register calls for formal proof, so there is no LAPS handoff. Records the concrete next action per **approved** property whose evidence still needs to be produced. MAPS does not implement any entry itself — no test file, no fuzz harness, no code fix, no mutation/reintroduction check — that work belongs to LID (`docs/integrations/lid.md § MAPS → LID handoff`) for this LID-governed project.
+Phase 7 artifact. The downstream implementer is LID (`CLAUDE.md` declares `## LID Mode: Full`) — MAPS specifies; it does not implement.
 
-**Not every property needs an entry here.** MAPS-004, MAPS-005, and MAPS-006 have realized, mutation-verified evidence already — see `property-register.md` and `correctness-assurance.md §§ 3.1–3.3` for the record; there is nothing left to hand off, and listing them here would misrepresent completed work as pending.
+**Not every approved property appears here.** `DM-001`, `DM-002`, `DM-003`, `DM-005`, `DM-006`, `DM-EA-003` have realized evidence with no open residual gap requiring action — see `property-register.md`/`evidence-matrix.md`. `DM-009` and `DM-EA-001` concluded "additional evidence: none justified" (`evidence-matrix.md` `EVID-009`, `EVID-010`) — that conclusion lives there, not here.
 
-**MAPS-001 is one property with two independent residual gaps** — each gets its own block below (a design-decision handoff for the achievable transport-readiness gap, and a no-action-scheduled entry for the permanently-accepted peer-identity gap), per `SKILL.md § The property state model`'s rule that a property's Residual gaps is a collection, not a reason to fork the property into two IDs.
-
-**MAPS-007 is Approved, not a Candidate** — `MAP-CONFIG-003` is an existing SHALL requirement (`docs/specs/static-mapping.md`), and this property's earlier CODE-OBSERVED classification was a misclassification (a finding about evidence quality mistakenly applied to Origin, corrected in `property-register.md`). It gets a real golden-test specification below, same as any other approved Evidence-missing gap.
-
-## Gap disposition routing (fill in before choosing a block below)
+## Gap disposition routing
 
 | Property / gap | Gap disposition | Block used below |
 |---|---|---|
-| MAPS-001, transport-readiness gap | Resolve through LID/design | Design-decision handoff |
-| MAPS-001, peer-identity gap | Accept risk | No action scheduled |
-| MAPS-002 (sub-claim b, general CC-collision) | Defer | No action scheduled |
-| MAPS-003 | Manual/operational verification | Manual verification procedure |
-| MAPS-007 | Produce evidence | Known-value/golden test specification |
+| `DM-004` | Produce evidence | Generic evidence-work specification (known-value/golden testing) |
+| `DM-007`, environment-platform validation gap | Resolve through LID/design | Design-decision handoff (light — dependency install, not a design choice) |
+| `DM-008`, doubly-failing-`release()` gap | Defer | No action scheduled |
+| `DM-EA-002` | Manual/operational verification | Manual verification procedure |
 
-## Known-value / golden-test specification
+## Generic evidence-work specification
 
-### MAPS-007 — Golden-test specification: Controller Profile migration invariant
+### DM-004 — Known-value/golden testing specification: Opinionated map synthesis
 
-**Target:** `mapping.py::build_opinionated_map`, called with `STUDIO_CONTROLS`/`NANOKONTROL2_CONTROLS`.
+```text
+Evidence purpose: correctness
+Evidence ID: EVID-004
+Claim / uncertainty addressed: does build_opinionated_map's output, for a
+  profile's declared controls, actually match what MAP-TABLE-001/002/003/005
+  and MAP-CONFIG-004/005/006/007/008 require — independent of what the
+  function itself currently produces?
+Oracle: a hand-authored golden table, one per bundled profile (Studio,
+  nanoKONTROL2), derived directly from the spec text above and each profile's
+  own declared CC/channel numbers.
+Oracle authority: high — computed by a human from the current specification,
+  never from build_opinionated_map, OPINIONATED_MAP_STUDIO/_NANOKONTROL2 (both
+  produced by the function under test), or git history (repository history is
+  opt-in only per SKILL.md § Repository history, and this claim does not
+  depend on any historical fact — the current spec text is the authority).
+Important blind spot: any Opinionated Table requirement not represented in
+  the hand-derived table stays uncovered even after this evidence lands —
+  the claim-dimension list below must be complete, not merely plausible.
+Expected assurance gain: this becomes the first evidence for this claim that
+  could actually fail if the implementation were wrong; the existing test
+  (test_mapping_config_schema.py:76,81) cannot, by construction.
+```
 
-**Gap type:** Evidence missing — the implementation is believed correct (hand-confirmed at the Phase 5 migration commit); the existing test doesn't actually check it, since its "reference" is the same code path as the value under test.
+**Direct-evidence method:** Known-value/golden testing.
 
-**Approach:** known-value/golden test, not property-based or fuzz — the claim (`MAP-CONFIG-003`) is "matches one specific frozen value," which is exactly what a golden test is for. **Independence requirement, not optional:** the fixture must be a literal, hand-authored Python dict written directly into the test file — not derived by calling `build_opinionated_map`, and not referencing `OPINIONATED_MAP_STUDIO`/`_NANOKONTROL2` (both of which are themselves produced by the function under test). Reintroducing either of those would recreate the exact circularity this handoff exists to fix.
+**Target and environment:** `mapping.py::build_opinionated_map`, called with `STUDIO_CONTROLS`/`has_scene_button=True` and `NANOKONTROL2_CONTROLS`/`has_scene_button=False`.
 
-**Concrete steps:**
-1. Capture the current, hand-confirmed output of `build_opinionated_map(STUDIO_CONTROLS, has_scene_button=True)` and `build_opinionated_map(NANOKONTROL2_CONTROLS, has_scene_button=False)` as literal Python dict fixtures.
-2. Assert `build_opinionated_map(STUDIO_CONTROLS, has_scene_button=True) == <frozen fixture>` and the nanoKONTROL2 equivalent.
-3. Optional, non-blocking supporting step: `git show <pre-Phase-5-commit>:dragonmidi/mapping.py` (or equivalent) to diff the actual historical hardcoded literal against today's frozen fixture, closing the retroactive historical-match question rather than only the going-forward one.
+**Procedure:**
+1. From `docs/specs/static-mapping.md`'s Opinionated Table and Bank Derivation sections plus each profile's declared `controls:` CC/channel values, hand-derive the complete expected mapping table for both bundled profiles: all 8 fader entries, all 8 knob entries, all 8 mute entries, and every shared-button/transport entry (including the Studio's Scene-button override). Write these as literal Python dicts directly in the test file — never by calling `build_opinionated_map`, and never by importing `OPINIONATED_MAP_STUDIO`/`_NANOKONTROL2`.
+2. Add a dedicated case for `MAP-CONFIG-004` (absent-key handling): a synthetic minimal `controls:` declaration omitting one optional key (e.g. `next_track`), asserting no row is produced for it.
+3. Assert `build_opinionated_map(...)` equals the corresponding hand-derived table, for each bundled profile.
 
-**Mutation/reintroduction requirement:** once built, deliberately change one entry in `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_transport_entries()` (e.g. shift one CC's target address) and confirm the golden test fails; revert and confirm it passes again. This is required specifically because the property this test replaces was found non-discriminating — the whole point of this handoff is a test that actually catches a regression, and that claim itself needs verifying, not assuming.
+**Decision criterion:** exact dict equality between `build_opinionated_map`'s output and the hand-derived table, for both profiles and the absent-key case.
 
-**LID entry point:** Phase 5 (tests-first) — `MAP-CONFIG-003` already exists as an EARS requirement; no LLD/EARS change needed first.
+**Artifact/result to record:** the new golden-table test file/function names, plus a note in `property-register.md`'s `DM-004` entry once evidence lands.
+
+**Freshness/revalidation trigger:** re-derive the golden table whenever `MAP-TABLE-*`, `MAP-CONFIG-004..008`, or either bundled profile's declared `controls:` values change.
+
+**Discrimination / anti-vacuity challenge (required — high-value claim):** deliberately alter one entry in each of `_fader_entries()`, `_knob_entries()`, `_mute_entries()`, `_shared_button_entries()` (e.g. shift a target CC/address by one) and confirm the golden test fails; revert and confirm it passes again. This establishes the golden test discriminates a broken implementation from a correct one — it does not, by itself, establish the golden values were correct in the first place; that rests on the hand-derivation in step 1, not on this challenge.
+
+**LID entry point:** Phase 5 (tests-first) — `MAP-CONFIG-004`, `MAP-TABLE-001/002/003/005` already exist as EARS requirements; no LLD/EARS change needed first.
 
 ## Design-decision handoff
 
-### MAPS-001 (transport-readiness gap) — Design-decision handoff
+### DM-007 — Design-decision handoff (dependency, not a design choice)
 
-**Owner:** the user, typically via a LID pass on `docs/high-level-design.md`.
+**Owner:** whoever maintains the dev environment / CI configuration for this repository.
 
-**Gap type:** Operational observability gap.
+**Gap type:** Environment-platform validation gap.
 
-**Question to resolve:** does DragonMIDI add a third Status UI indicator ("Command channel" or similar) reflecting the WebSocket adapter's bind+connection state, or fold this signal into the existing "Dragonframe signal" indicator (risk: conflates two different channels' health)? This extends the existing `WS-LIFECYCLE-002` bind-observability pattern to also expose ongoing connection state, without claiming anything about the separate peer-identity residual gap.
+**Question to resolve:** `tests/test_websocket_output.py` fails to import in this development environment because the `websockets` package is not installed. Install/pin `websockets` as a declared dev dependency (or confirm it already is one and the environment is out of sync) so the test suite backing `DM-007` can actually be executed, not merely inspected.
 
-**Once a design exists:** the evidence method is a lifecycle/integration test over the small enumerable state space (unbound / bound-no-connection / bound-with-connection), matching the existing `WS-LIFECYCLE-*` test style. No property-based testing or formal proof needed — LID Phase 5 directly, framed as new intent (Phase 2/3 first) since the indicator itself is new behavior.
+**Once resolved:** re-run `tests/test_websocket_output.py` to confirm it's still green; update `DM-007`'s Freshness in `property-register.md`/`evidence-matrix.md` from "stale — renewal needed" to "current," and remove this residual gap.
 
-**Not MAPS's call to make:** which design option is right is a product decision, not an assurance-evidence decision.
+**Not MAPS's call to make:** this is dev-environment/dependency-management housekeeping, not an assurance-argument decision — recorded here only because it currently blocks re-executing `DM-007`'s evidence.
 
 ## No action scheduled
 
-### MAPS-001 (peer-identity gap) — No action scheduled
+### DM-008 — No action scheduled (doubly-failing-`release()` ordering)
 
-**Gap type:** Design missing — no peer-authentication mechanism exists, and none is unilaterally buildable by this project.
-**Gap disposition:** Accept risk.
-**Owner / sign-off:** the user, tracked as a known, permanent limitation.
-**Revisit trigger:** none currently identified — this is not expected to become actionable without Dragonframe-side protocol cooperation, which is outside this project's control to schedule.
-
-Closing MAPS-001's other residual gap (the transport-readiness indicator above), even fully built, must never be read as having made progress on this one — the two gaps are independent, with different causes (`correctness-assurance.md § 3.6`).
-
-### MAPS-002 (sub-claim b) — No action scheduled
-
-**Gap type:** Design missing — the cross-field CC-uniqueness check has no design or implementation.
+**Gap type:** Evidence missing.
 **Gap disposition:** Defer.
-**Revisit trigger:** contributor base for third-party Controller Profiles growing past "a handful of trusted people."
+**Owner / sign-off (Accept risk only):** n/a — this is Defer, not Accept risk.
+**Revisit trigger:** a real-world report of a stuck-modifier incident, or `KeystrokeOutputAdapter.send()`'s `finally`-block logic being touched for an unrelated reason (at which point re-verifying this ordering is cheap to add to the same change).
 
-Deliberately deferred per `docs/llds/static-mapping.md`'s existing decision. No evidence work is scheduled. If the deferral is revisited, the evidence method is already specified in `property-register.md` MAPS-002 (property-based CC-collision generator, `detect_cc_collisions()` against a set-cardinality oracle) and can be handed off at that time without redoing the analysis.
+**Disposition:** Defer.
+**Basis:** `DM-008`'s primary claim (release on a *single* failing call) is already established; this gap concerns only a doubly-failing sequence (the release itself also raising), judged low-value given the property's overall Priority: medium and the backend-failure path already being rare.
+**Owner / revisit trigger:** see above.
+**Future direct-evidence plan:** if revisited, extend `FakeKeystrokeBackend` (`tests/test_keystroke_output.py`) to fail on both press and release for the same key, and assert the remaining modifiers still release in order.
 
 ## Manual / non-automatable verification procedure
 
-### MAPS-003 — Manual verification procedure (not automatable)
+### DM-EA-002 — Manual verification procedure (not automatable)
 
-**Owner:** the user (or whoever has hands-on access to a running Dragonframe instance) — MAPS cannot execute this.
+```text
+Evidence purpose: operational
+Evidence ID: EVID-011
+Claim / uncertainty addressed: does Dragonframe's internal AXn axis numbering
+  correspond to DragonMIDI's OSC-discovery order, for a real project with a
+  non-trivial axis ordering?
+Oracle: Dragonframe's own debug log, reporting which axis was actually
+  affected by a triggered Solo/Cycle control.
+Oracle authority: fully independent — produced by Dragonframe itself, no code
+  path shared with DragonMIDI.
+Important blind spot: a passing result confirms correspondence for the one
+  project/axis-ordering tested, not for every possible ordering going forward
+  — see "Does not self-renew" below.
+Expected assurance gain: this would be the first evidence of any kind for
+  this claim; currently no evidence exists.
+```
+
+**Owner:** the user, or whoever has hands-on access to a running Dragonframe instance — MAPS cannot execute this.
 
 **Procedure:**
 1. Load a real Dragonframe project with at least 3 axes configured, in an order that is **not** alphabetical and **not** the order the axes were originally created (to rule out coincidental agreement).
 2. Launch DragonMIDI, let axis discovery complete (`getAllPosition` round-trip).
 3. In the Mapping View, note the discovered axis order.
-4. For each discovered axis in turn, trigger the corresponding Solo control (or Cycle, stepping through) and confirm via Dragonframe's debug log (the same `HARD STOP`-style confirmation precedent used for E-Stop, per `docs/high-level-design.md` Success Metrics) which axis actually highlighted.
+4. For each discovered axis in turn, trigger the corresponding Solo control (or Cycle, stepping through) and confirm via Dragonframe's debug log which axis actually highlighted.
 5. Record the result (pass/fail per axis) in `docs/testing-strategy.md` or equivalent, dated, with the Dragonframe version used.
 
 **Recording:** the dated, version-scoped record above becomes this property's Freshness anchor — Evidence state moves to "Manually verified (as of `<version>`, `<date>`)" and Freshness to "current" once logged.
 
-**Does not self-renew:** a future Dragonframe version change moves Freshness to "stale — renewal needed," not silently "current" — the check must be re-run against the new version, not assumed to still hold.
+**Does not self-renew:** a future Dragonframe version change moves Freshness to "stale — renewal needed," not silently "current" — the check must be re-run against the new version.
 
 **If it fails:** this becomes a live bug (AXn numbering diverges from OSC discovery order for some axis ordering), not just a documentation update — route back through LID for a fix design (e.g. an explicit remapping table) rather than treating it as a MAPS artifact update.
