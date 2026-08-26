@@ -8,22 +8,26 @@ Phase 7 artifact. The downstream implementer is LID (`CLAUDE.md` declares `## LI
 
 | Property / gap | Gap disposition | Block used below |
 |---|---|---|
-| `DM-004` | Produce evidence | Generic evidence-work specification (known-value/golden testing) |
+| `DM-004`, bundled-profile evidence | Produce evidence | Generic evidence-work specification (known-value/golden testing) |
+| `DM-004`, third-party-profile generalization gap | Defer | No action scheduled |
 | `DM-007`, environment-platform validation gap | Resolve through LID/design | Design-decision handoff (light — dependency install, not a design choice) |
 | `DM-008`, doubly-failing-`release()` gap | Defer | No action scheduled |
-| `DM-EA-002` | Manual/operational verification | Manual verification procedure |
+| `DM-EA-002`, initial verification | Manual/operational verification | Manual verification procedure |
+| `DM-EA-002`, generalization-beyond-tested-configuration gap | Accept risk | No action scheduled |
 
 ## Generic evidence-work specification
 
-### DM-004 — Known-value/golden testing specification: Opinionated map synthesis
+### DM-004 — Known-value/golden testing specification: Opinionated map synthesis (Studio + nanoKONTROL2 only)
 
 ```text
 Evidence purpose: correctness
 Evidence ID: EVID-004
-Claim / uncertainty addressed: does build_opinionated_map's output, for a
-  profile's declared controls, actually match what MAP-TABLE-001/002/003/005
-  and MAP-CONFIG-004/005/006/007/008 require — independent of what the
-  function itself currently produces?
+Claim / uncertainty addressed: does build_opinionated_map's output, for the
+  Studio's and nanoKONTROL2's declared controls specifically, actually match
+  what MAP-TABLE-001/002/003/005 and MAP-CONFIG-004/005/006/007/008 require —
+  independent of what the function itself currently produces? This evidence
+  does not address arbitrary third-party controls: declarations — see the
+  DM-004 No-action-scheduled entry below for that separately-tracked gap.
 Oracle: a hand-authored golden table, one per bundled profile (Studio,
   nanoKONTROL2), derived directly from the spec text above and each profile's
   own declared CC/channel numbers.
@@ -74,6 +78,30 @@ Expected assurance gain: this becomes the first evidence for this claim that
 **Not MAPS's call to make:** this is dev-environment/dependency-management housekeeping, not an assurance-argument decision — recorded here only because it currently blocks re-executing `DM-007`'s evidence.
 
 ## No action scheduled
+
+### DM-004 — No action scheduled (generalization to third-party Controller Profiles)
+
+**Gap type:** Evidence missing.
+**Gap disposition:** Defer.
+**Owner / sign-off (Accept risk only):** n/a — this is Defer, not Accept risk.
+**Revisit trigger:** third-party Controller Profile adoption growing materially, or a bug report implicating a third-party profile's synthesized map.
+
+**Disposition:** Defer.
+**Basis:** `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()` are the same shared code path for any Controller Profile, but the golden-table evidence above covers only the two bundled profiles' concrete declared values — it says nothing about correctness for an arbitrary third-party `controls:` declaration. Building an evidence method that genuinely covers the universal domain (e.g., an independent reference re-implementation of the whole synthesis logic, exercised via property-based testing over generated `controls:` declarations) is a substantially larger undertaking than the bundled-profile golden table and isn't justified without evidence that third-party profiles are seeing real use.
+**Owner / revisit trigger:** see above.
+**Future direct-evidence plan:** if revisited, the most direct option is a hand-written independent reference implementation of `_fader_entries()`/etc.'s rules, differential-tested against `build_opinionated_map` over property-based-generated `controls:` declarations — classified as a SPECIFICATION REFERENCE (`docs/evidence-selection.md § Reference classification`), with its own shared-bug-risk analysis since both would derive from the same spec text.
+
+### DM-EA-002 — No action scheduled (generalization beyond the tested configuration)
+
+**Gap type:** External verification unavailable or missing.
+**Gap disposition:** Accept risk.
+**Owner / sign-off (Accept risk only):** the user, tracked as a known, permanent limitation of the evidence method.
+**Revisit trigger:** none — Dragonframe does not expose its AXn assignment programmatically, so no evidence method exists that could close this beyond the manual procedure's inherent per-configuration scope.
+
+**Disposition:** Accept risk.
+**Basis:** a manual verification, however carefully run, only ever confirms correspondence for the specific Dragonframe version/project/axis-ordering exercised. The property's claim quantifies over every project/ordering/version; no available evidence method — automated or manual — can close that gap. This is accepted as a structural limitation of what's observable, not a deferred task.
+**Owner / revisit trigger:** the user; revisit only if Dragonframe ever exposes AXn assignment programmatically (outside this project's control to schedule).
+**Future direct-evidence plan:** none available under current Dragonframe capabilities.
 
 ### DM-008 — No action scheduled (doubly-failing-`release()` ordering)
 

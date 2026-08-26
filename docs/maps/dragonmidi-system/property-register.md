@@ -2,51 +2,19 @@
 
 Phase 2/3 artifact. The authoritative list of admitted assurance concerns and properties. See `docs/property-discovery.md` and `docs/prioritization.md`.
 
-This register supersedes the prior DragonMIDI MAPS package's `MAPS-001`..`MAPS-007` IDs entirely; none are reused (`docs/maps/dragonmidi-system/` git history retains the superseded package).
-
-## Concern Classification
-
-Every concern `system-assurance-map.md` raised, with its role and resulting disposition.
-
-| Phase 1 item | Concern role | Disposition |
-|---|---|---|
-| `decode_osc_packet` malformed-bundle robustness (chokepoint + failure path) | Current assurance property | Registered — `DM-001` |
-| `MappingEngine.process()`/`.process_websocket()`/`.process_keystroke()` general dispatch correctness | Current assurance property | Merged — the materially risky sub-concern (Group-switch dispatch precedence) is `DM-009`; general per-control-type routing has no identified gap beyond the existing example-test suite and is not separately tracked |
-| `MappingEngine.set_profile()` full state isolation (chokepoint + failure path) | Current assurance property | Registered — `DM-002` |
-| Bank-derived knob clamp-to-range formula, incl. out-of-range recovery (chokepoint + failure path) | Current assurance property | Registered — `DM-003` |
-| `build_opinionated_map` / shared-helper synthesis correctness (chokepoint + failure path + known-fragile area) | Current assurance property | Registered — `DM-004` (freshly worded against the current Opinionated Table/Bank-Derivation specs, not against historical constants) |
-| `MAP-CONFIG-003` as literally worded ("identical in content to... pre-Phase-5 `OPINIONATED_MAP_STUDIO`/`_NANOKONTROL2` constants") | Migration/transition acceptance criterion | Retired/completed — Phase 5 shipped; no pre-Phase-5 hardcoded implementation remains in production (the named constants are now themselves derived from the function this criterion was bridging away from). See `Rejected / withdrawn` below. Its live successor concern is `DM-004`. |
-| `controller_profile_loader.py` config parsing/validation robustness | Current assurance property | Registered — `DM-005` |
-| `preset_store.py` Bank/Group index bounds validation (chokepoint + failure path) | Current assurance property | Registered — `DM-006` |
-| `E-Stop`/WebSocket command correct encode+dispatch on press-edge | Current assurance property | Registered — `DM-007` |
-| `E-Stop`/WebSocket command delivery has no operator-visible failure signal | Accepted or deferred risk | Tracked outside the register — already an explicit HLD decision ("fails silently, not as a new status indicator... deferred, not ruled out"); recorded directly in `correctness-assurance.md § 6`, not a property |
-| Keystroke output stuck-modifier release ordering on failure | Current assurance property | Registered — `DM-008` |
-| Group-switch dispatch precedence and dedup-discard rules (`MAP-GROUP-005/007/011`) | Current assurance property | Registered — `DM-009` (lower priority; existing coverage, evidence design likely concludes little/no additional work — see Prioritization) |
-| Dragonframe trusted-local-peer assumption | External assumption | Registered — `DM-EA-001` |
-| AXn axis-identity/discovery-order assumption | External assumption | Registered — `DM-EA-002` |
-| nanoKONTROL2 default CC map matches real hardware | External assumption | Registered — `DM-EA-003` |
-| No frontmost-window detection before keystroke delivery | Accepted or deferred risk | Tracked outside the register — explicit HLD Non-Goal; recorded directly in `correctness-assurance.md § 6` |
-| Single-Dragonframe-connection-at-a-time WebSocket assumption | External assumption (minor) | Merged — folded into `DM-007`'s Assumptions field rather than separately registered; no independent evidence path exists to verify Dragonframe's own connection behavior beyond what DragonMIDI's own code structurally enforces |
-| `build_opinionated_map` circularity (existing test compares the function's output to constants derived from itself) | N/A — a finding about evidence quality, not a concern of its own | Folded into `DM-004`'s evidence design (Phase 4A); does not affect `DM-004`'s Authority (`docs/property-discovery.md § Authority is never downgraded by a finding about evidence quality`) |
-| `decode_osc_packet`'s original "prevents a hang" justification, found overclaimed by direct testing | N/A — a finding about claim wording, not a concern of its own | Folded into `DM-001`'s claim wording (registered narrower, as a bounded-input-handling/well-typed-rejection claim, not a hang-prevention claim) |
-| `test_listener_resends_discovery_query_on_rebind` flakiness | N/A — test-infrastructure defect, not an assurance concern | Out of scope for this MAPS pass — confirmed pre-existing and unrelated via `git stash`; a LID/test-maintenance matter, not tracked as a residual gap of any property here |
-| Higher-level goal: bridge should not corrupt/misdirect Dragonframe motion-control state under malformed/adversarial input | Higher-level assurance goal | Tracked in `system-assurance-map.md`; decomposes into `DM-001`, `DM-003`, `DM-004`, `DM-006` |
-| Higher-level goal: safety-relevant WebSocket commands should reliably reach Dragonframe, or failure should be visible | Higher-level assurance goal | Tracked in `system-assurance-map.md`; decomposes into `DM-007` (correctness half) plus the accepted-risk note above (visibility half) |
-| Higher-level goal: every profile's synthesized opinionated map should match intended behavior | Higher-level assurance goal | Tracked in `system-assurance-map.md`; decomposes into `DM-004` |
-
 ## Register
 
 ### DM-001: OSC bundle-decode robustness
 
 - **Behavioral segment:** OSC I/O (`docs/llds/osc-io.md`)
-- **Claim:** `decode_osc_packet` never raises an unhandled exception for any byte input, and specifically rejects non-positive or out-of-bounds declared `element_size` and nesting beyond `MAX_BUNDLE_DEPTH` (8) by raising the well-typed `BundleBoundsError`, which `AxisDiscovery.handle_datagram` catches and logs rather than propagating.
-- **Quantifiers in the claim:** for every byte-string input (arbitrary malformed content); for every nesting depth; for every declared `element_size` value.
+- **Claim:** At five named boundary conditions, `decode_osc_packet` deterministically raises the well-typed `BundleBoundsError` (not an unhandled exception), which `AxisDiscovery.handle_datagram` catches and logs rather than propagating. More broadly, no unhandled exception has been observed across the malformed-byte-input space explored by a bounded fuzz campaign — this broader claim is supported by sampled exploration, not established for arbitrary byte input.
+- **Quantifiers in the claim:** the five named boundary conditions are universal and deterministically established. The broader "no unhandled exception for any byte input" framing is sampled by fuzz testing (hypothesis strategy, 500ms per-test deadline), not exhaustively covered — no proof of universality over arbitrary byte input.
 - **Claim dimensions:**
-  - negative `element_size`
-  - zero `element_size`
-  - `element_size` exceeding remaining buffer
-  - nesting depth at/beyond `MAX_BUNDLE_DEPTH`
-  - arbitrary malformed byte input generally (termination / no crash)
+  - negative `element_size` (deterministic — established)
+  - zero `element_size` (deterministic — established)
+  - `element_size` exceeding remaining buffer (deterministic — established)
+  - nesting depth at/beyond `MAX_BUNDLE_DEPTH` (deterministic — established)
+  - arbitrary malformed byte input generally, termination/no crash (sampled — supported, not established)
 - **Canonical definition:** n/a
 - **Valid initial-state domain:** n/a — stateless per-call decode, no persistent invariant to bound
 - **Property class:** Boundedness; Error/failure semantics
@@ -63,9 +31,9 @@ Every concern `system-assurance-map.md` raised, with its role and resulting disp
 - **Prioritization rationale:** chokepoint for all OSC traffic; high likelihood ordinary tests miss malformed-framing edge cases; consequence bounded by `DM-EA-001`, so not maximal
 - **Priority:** medium
 - **Disposition:** Approved
-- **Evidence coverage:** all claim dimensions covered — see `EVID-001`
+- **Evidence coverage:** the four named boundary dimensions are deterministically covered (structural enforcement + verification); the "arbitrary malformed byte input" dimension is supported, not established, by the realized fuzz campaign — see `EVID-001`
 - **Evidence state (set):** Example-tested; Property-tested (fuzz); Structural enforcement + verification; Supported by multiple complementary layers
-- **Residual gaps:** none currently identified
+- **Residual gaps:** none currently identified as an open task — the gap between "sampled" and "proven for arbitrary input" is an inherent limit of the evidence method chosen, not a closable task; reflected in claim wording, not tracked as an actionable gap
 - **Evidence-matrix row:** `EVID-001`
 
 ### DM-002: Controller Profile switch fully isolates per-control engine state
@@ -126,36 +94,38 @@ Every concern `system-assurance-map.md` raised, with its role and resulting disp
 - **Residual gaps:** none currently identified
 - **Evidence-matrix row:** `EVID-003`
 
-### DM-004: Synthesized opinionated map matches the specified per-control behavior
+### DM-004: Synthesized opinionated map matches the specified per-control behavior, for DragonMIDI's bundled Controller Profiles
 
 - **Behavioral segment:** Static Mapping — Controller Profile Config Schema / Opinionated Table (`docs/llds/static-mapping.md`)
-- **Claim:** For any Controller Profile (bundled or third-party), `build_opinionated_map` (via `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()`) synthesizes a MIDI-event-to-OSC/keystroke/WebSocket-target table that matches what the Opinionated Table and Bank Derivation specs (`MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008`) require for that profile's declared `controls:` block.
-- **Quantifiers in the claim:** for every entry the shared helpers can produce, for any valid `controls:` declaration (not merely the two bundled profiles' specific CC values).
+- **Claim:** For DragonMIDI's two bundled Controller Profiles (Studio, nanoKONTROL2), `build_opinionated_map` (via `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()`) synthesizes a MIDI-event-to-OSC/keystroke/WebSocket-target table that matches what the Opinionated Table and Bank Derivation specs (`MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008`) require for each profile's declared `controls:` block.
+- **Quantifiers in the claim:** for each of the two bundled profiles' declared control sets. This is **not** a universal claim over arbitrary third-party `controls:` declarations — see Residual gaps for that separately-tracked, currently-unestablished domain.
 - **Claim dimensions:**
-  - fader entries (`_fader_entries()`)
-  - knob entries (`_knob_entries()`)
-  - mute entries (`_mute_entries()`)
-  - shared button entries (`_shared_button_entries()`, incl. transport, Scene button override behavior)
+  - fader entries (`_fader_entries()`), per bundled profile
+  - knob entries (`_knob_entries()`), per bundled profile
+  - mute entries (`_mute_entries()`), per bundled profile
+  - shared button entries (`_shared_button_entries()`, incl. transport, Scene button override behavior), per bundled profile
   - absent-key handling (`MAP-CONFIG-004` — an omitted `transport` key produces no row, not a disabled one)
 - **Canonical definition:** n/a
 - **Valid initial-state domain:** n/a — pure synthesis function, no persistent state
 - **Property class:** Functional correctness; Refinement/equivalence (config declaration → derived table)
 - **Discovery source:** EARS requirement + implementation observation
-- **Authority:** SPECIFIED — Authority basis: `MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008` (`docs/specs/static-mapping.md`). This claim is worded against the *current* Opinionated Table/Bank-Derivation spec text, not against the retired pre-Phase-5 historical constants (see `Rejected / withdrawn` below) — the two are related but not the same claim.
+- **Authority:** SPECIFIED — Authority basis: `MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008` (`docs/specs/static-mapping.md`).
 - **Claim nature:** Property
 - **Lifecycle:** Enduring
 - **Source evidence:** `dragonmidi/mapping.py::build_opinionated_map` and shared helpers; `docs/specs/static-mapping.md`
 - **Confidence in intent:** high
-- **Consequence if false:** every control on every Controller Profile using the shared helpers (both bundled profiles, and any third-party config) is silently mis-mapped — the single highest blast-radius chokepoint in the mapping layer
-- **Downstream dependencies:** every profile's runtime behavior; `controller_profile_loader.py`'s output correctness depends on this transitively
-- **Preconditions:** a syntactically valid `controls:` declaration (malformed declarations are `DM-005`'s concern, not this one)
+- **Consequence if false:** every control on the Studio or nanoKONTROL2 bundled profile is silently mis-mapped — the highest-blast-radius chokepoint in the mapping layer for these two profiles
+- **Downstream dependencies:** both bundled profiles' runtime behavior
+- **Preconditions:** the Studio or nanoKONTROL2 bundled profile's declared `controls:` block (malformed third-party declarations are `DM-005`'s concern, not this one)
 - **Assumptions:** none beyond the config schema itself being correctly documented
-- **Prioritization rationale:** highest-blast-radius chokepoint in the mapping layer; existing test (`test_mapping_config_schema.py:76,81`) is circular (compares the function's output to constants derived from the same function) — this is a genuine, currently-uncovered correctness gap, not merely a stale record
+- **Prioritization rationale:** highest-blast-radius chokepoint in the mapping layer; the existing test (`test_mapping_config_schema.py:76,81`) is circular (compares the function's output to constants derived from the same function) — a genuine, currently-uncovered correctness gap, not merely a stale record
 - **Priority:** highest
 - **Disposition:** Approved
-- **Evidence coverage:** planned — see `EVID-004` for the per-dimension plan (fader/knob/mute/shared-button/absent-key)
-- **Evidence state (set):** No evidence (correctness); existing test provides regression/change-detection value only (`docs/evidence-selection.md § Self-derived snapshots are not correctness evidence`) — not correctness evidence, and must not be described as such in `correctness-assurance.md`. Evidence planned.
-- **Residual gaps:** evidence missing — no evidence currently establishes this claim is *correct*, only that it's self-consistent over time. Type: Evidence missing. Disposition: Produce evidence — routed to `evidence-handoff.md`.
+- **Evidence coverage:** planned for the two bundled profiles' 5 claim dimensions — see `EVID-004`
+- **Evidence state (set):** No evidence (correctness); the existing test provides regression/change-detection value only, not correctness evidence
+- **Residual gaps:**
+  - Evidence missing for the claim as stated: no evidence currently establishes the two bundled profiles' synthesized maps are correct, only that they are self-consistent over time. Type: Evidence missing. Disposition: Produce evidence — routed to `evidence-handoff.md`.
+  - Generalization beyond the two bundled profiles: `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()` are the same shared code path for any Controller Profile, including third-party ones, but no evidence — planned or realized — covers arbitrary/third-party `controls:` declarations. Type: Evidence missing. Disposition: Defer — revisit if third-party Controller Profile adoption grows materially, or a bug report implicates a third-party profile's synthesized map.
 - **Evidence-matrix row:** `EVID-004`
 
 ### DM-005: Controller Profile config parsing degrades gracefully on malformed input
@@ -242,22 +212,26 @@ Every concern `system-assurance-map.md` raised, with its role and resulting disp
 - **Confidence in intent:** high
 - **Consequence if false:** `E-Stop` specifically is a motion-control emergency-stop function — a wrong or duplicated send is a safety-relevant correctness defect, not merely a UX bug
 - **Downstream dependencies:** none beyond Dragonframe's own handling of the command
-- **Preconditions:** a WebSocket connection is currently active (delivery when no connection exists is explicitly out of scope for *this* claim — see the Accepted-risk note in `system-assurance-map.md` for the separate, deliberately-unaddressed visibility gap)
-- **Assumptions:** at most one Dragonframe client connects at a time (structurally enforced by `WebSocketOutputAdapter`'s single `_connection` slot; never independently confirmed against Dragonframe's own connection behavior — a minor, unregistered external assumption, not expected to be revisited without evidence of Dragonframe opening multiple connections)
+- **Preconditions:** a WebSocket connection is currently active (delivery when no connection exists is explicitly out of scope for *this* claim — see the accepted-risk note in `correctness-assurance.md § 6` for the separate, deliberately-unaddressed visibility gap)
+- **Assumptions:** at most one Dragonframe client connects at a time (structurally enforced by `WebSocketOutputAdapter`'s single `_connection` slot; never independently confirmed against Dragonframe's own connection behavior)
 - **Prioritization rationale:** `E-Stop` is an explicit safety-relevant function (motion-control emergency stop); narrower exposure than the mapping-wide chokepoints, but consequence-if-false is not merely cosmetic
 - **Priority:** high
 - **Disposition:** Approved
-- **Evidence coverage:** all claim dimensions covered — see `EVID-007`
-- **Evidence state (set):** Example-tested
-- **Residual gaps:** environment-platform validation gap (test suite currently fails to import in this dev environment — `websockets` not installed; not a code defect) — Type: Environment-platform validation gap. Disposition: Resolve through LID/design — routed to `evidence-handoff.md`.
+- **Evidence coverage:** a test targeting all four claim dimensions exists in source (`tests/test_websocket_output.py`); none of it is confirmed by a passing execution in this environment — see Evidence state and Residual gaps
+- **Evidence state (set):** Test artifact exists, all four claim dimensions targeted (confirmed correct by source inspection). Execution status: unverified — the suite currently fails to import in this environment (`websockets` package not installed), and there is no prior known-good run this assessment relies on. Not "Example-tested" in the sense of a confirmed passing run.
+- **Residual gaps:** environment-platform validation gap — `tests/test_websocket_output.py` fails to import in this development environment. Until resolved, this property's evidence status is "artifact exists, execution unverified," not "established." Type: Environment-platform validation gap. Disposition: Resolve through LID/design — routed to `evidence-handoff.md`.
 - **Evidence-matrix row:** `EVID-007`
 
-### DM-008: Keystroke synthesis never leaves a modifier key stuck after a failed press
+### DM-008: Keystroke synthesis releases pressed modifiers when a press or lookup call fails
 
 - **Behavioral segment:** Keystroke Output (`docs/llds/keystroke-output.md`)
-- **Claim:** If pressing a modifier or the main key raises during `KeystrokeOutputAdapter.send()`, every modifier already pressed for that call is still released (in reverse order), even though the failure is otherwise swallowed and logged rather than propagated.
-- **Quantifiers in the claim:** for every combination of which press/release call raises (modifier press, main key press, main key release), for any number of modifiers.
-- **Claim dimensions:** n/a — single-instance claim (the finally-block release guarantee is one claim)
+- **Claim:** For a `KeystrokeOutputAdapter.send()` call in which a modifier press, the main key press, or an unrecognized key lookup raises, every modifier already pressed for that call is still released, in reverse order, even though the failure is otherwise swallowed and logged rather than propagated. This claim explicitly does **not** cover the case where a backend `release()` call itself raises — see Claim dimensions.
+- **Quantifiers in the claim:** for every combination of which press call or key lookup raises (modifier press, main key press, unrecognized key), for any number of modifiers. Excludes any sequence where `release()` itself raises.
+- **Claim dimensions:**
+  - modifier press failure — covered
+  - main-key press failure — covered
+  - unrecognized key lookup failure — covered
+  - backend `release()` call itself failing — explicitly excluded from this claim; not covered by any current evidence (see Residual gaps)
 - **Canonical definition:** n/a
 - **Valid initial-state domain:** n/a
 - **Property class:** Error/failure semantics; Safety
@@ -269,14 +243,14 @@ Every concern `system-assurance-map.md` raised, with its role and resulting disp
 - **Confidence in intent:** high
 - **Consequence if false:** a stuck modifier key at the OS level corrupts every subsequent real keystroke system-wide until manually cleared — explicitly called out in the code's own reasoning as "a far worse failure than one missed send"
 - **Downstream dependencies:** every keystroke-mapped control, and every other application receiving keyboard input afterward
-- **Preconditions:** none
-- **Assumptions:** the backend's `release()` call itself doesn't also fail in a way that leaves the OS-level key state stuck
+- **Preconditions:** the failure, if any, occurs during a press call or key lookup — not during a `release()` call (see Claim dimensions for the excluded case)
+- **Assumptions:** none beyond the stated preconditions
 - **Prioritization rationale:** high consequence-if-false (a stuck modifier corrupts all subsequent keyboard input system-wide) but only reachable via an already-rare backend-failure path
 - **Priority:** medium
 - **Disposition:** Approved
-- **Evidence coverage:** n/a — single-instance claim, covered — see `EVID-008`
-- **Evidence state (set):** Example-tested
-- **Residual gaps:** evidence missing — a doubly-failing `release()` sequence's ordering isn't explicitly asserted. Type: Evidence missing. Disposition: Defer — judged low-value given Priority: medium; tracked in `evidence-handoff.md` (No action scheduled).
+- **Evidence coverage:** the three covered dimensions are established by example tests; the excluded `release()`-failure dimension is a residual gap, not covered — see `EVID-008`
+- **Evidence state (set):** Example-tested (for the three covered dimensions only)
+- **Residual gaps:** a doubly-failing `release()` sequence (the release call itself raising) is not tested and not covered by this claim's current wording. Type: Evidence missing. Disposition: Defer — judged low-value given Priority: medium; tracked in `evidence-handoff.md` (No action scheduled).
 - **Evidence-matrix row:** `EVID-008`
 
 ### DM-009: Group-switch dispatch precedence and dedup-state discard
@@ -340,7 +314,7 @@ Every concern `system-assurance-map.md` raised, with its role and resulting disp
 
 - **Behavioral segment:** OSC I/O / Mapping
 - **Claim:** Dragonframe's internal `AXn` axis numbering (used in `select-AXn`/`jog-AXn` WebSocket commands and in the Solo mapping) corresponds to the order DragonMIDI discovers axis names via `getAllPosition`.
-- **Quantifiers in the claim:** for every discovered axis, in every axis ordering Dragonframe might present
+- **Quantifiers in the claim:** for every discovered axis, in every axis ordering, on every project, on every Dragonframe version. **No available evidence method can fully establish this quantifier** — the only available evidence (manual verification) necessarily samples one project/ordering/version at a time; see Evidence coverage and Residual gaps.
 - **Claim dimensions:** n/a
 - **Canonical definition:** n/a
 - **Valid initial-state domain:** n/a
@@ -358,16 +332,18 @@ Every concern `system-assurance-map.md` raised, with its role and resulting disp
 - **Prioritization rationale:** silent-wrong-axis failure mode with no automated way to verify (Dragonframe's own AXn assignment isn't queryable) — a manual verification candidate
 - **Priority:** medium-high
 - **Disposition:** Approved
-- **Evidence coverage:** n/a
-- **Evidence state (set):** No evidence currently — manual verification procedure specified, see `evidence-handoff.md`
-- **Residual gaps:** external verification unavailable or missing — Type: External verification unavailable or missing. Disposition: Manual/operational verification — routed to `evidence-handoff.md`.
+- **Evidence coverage:** a manual verification procedure is specified (`evidence-handoff.md`) but not yet run. Once run, it establishes correspondence **only for the specific Dragonframe version, project, and axis ordering tested** — it does not, and cannot by itself, establish the general claim across arbitrary orderings/projects/versions.
+- **Evidence state (set):** No evidence currently
+- **Residual gaps:**
+  - No verification has been performed yet. Type: External verification unavailable or missing. Disposition: Manual/operational verification — routed to `evidence-handoff.md`.
+  - Even after the manual procedure passes, generalization beyond the specific tested version/project/ordering remains unestablished and is not closable by a single manual check — the general correspondence stays an assumption. Type: External verification unavailable or missing. Disposition: Accept risk (no practical way to test "every possible ordering" short of Dragonframe exposing this mapping programmatically, which is outside this project's control).
 - **Evidence-matrix row:** `EVID-011`
 
 ### DM-EA-003: nanoKONTROL2 bundled default CC map matches real hardware factory defaults
 
 - **Behavioral segment:** MIDI Input / Static Mapping (nanoKONTROL2 profile)
 - **Claim:** The CC numbers and channel bundled in DragonMIDI's default nanoKONTROL2 Controller Profile match the device's actual factory-default CC-mode assignment.
-- **Quantifiers in the claim:** for every control on the nanoKONTROL2 (faders, knobs, mutes, solos, transport)
+- **Quantifiers in the claim:** for every control on the nanoKONTROL2 (faders, knobs, mutes, solos, transport), on the specific unit/firmware tested. Generalization to other units/firmware revisions is assumed, not verified — see Freshness.
 - **Claim dimensions:** n/a
 - **Canonical definition:** n/a
 - **Valid initial-state domain:** n/a
@@ -382,17 +358,11 @@ Every concern `system-assurance-map.md` raised, with its role and resulting disp
 - **Downstream dependencies:** the bundled nanoKONTROL2 profile's default behavior
 - **Preconditions:** n/a
 - **Assumptions:** n/a
-- **Prioritization rationale:** already manually verified in practice; no further evidence action needed absent a divergence report
+- **Prioritization rationale:** already manually verified in practice for one unit; no further evidence action needed absent a divergence report
 - **Priority:** low
 - **Disposition:** Approved
 - **Evidence coverage:** n/a
-- **Evidence state (set):** Manually verified (as of 2026-07-21, in-practice behavioral confirmation — not a byte-level trace)
-- **Residual gaps:** none currently identified against the verified unit; freshness noted below
-- **Freshness:** verified as of 2026-07-21 against one physical unit — stale-renewal trigger: a future report of a nanoKONTROL2 unit/firmware behaving differently
+- **Evidence state (set):** Manually verified (as of 2026-07-21, in-practice behavioral confirmation, one physical unit — not a byte-level trace, not confirmed across other units/firmware)
+- **Residual gaps:** none currently identified against the verified unit; generalization to other units/firmware is an unverified assumption, tracked via Freshness rather than as an open task
+- **Freshness:** verified as of 2026-07-21, against one specific physical unit — stale-renewal trigger: a future report of a nanoKONTROL2 unit or firmware behaving differently
 - **Evidence-matrix row:** `EVID-012`
-
-## Rejected / withdrawn
-
-| Property ID | Reason rejected/withdrawn | Date |
-|---|---|---|
-| `DM-RETIRED-001` (would-be ID for "synthesized map identical to pre-Phase-5 `OPINIONATED_MAP_STUDIO`/`_NANOKONTROL2` constants") | Migration/transition acceptance criterion, Lifecycle: Migration-only, satisfied — Phase 5 (pluggable Controller Profiles) shipped; no pre-Phase-5 hardcoded implementation remains in production for this to be a bridge toward. Not registered. Its live successor concern, freshly worded against the current Opinionated Table/Bank-Derivation specs rather than historical constants, is `DM-004`. | 2026-08-26 |

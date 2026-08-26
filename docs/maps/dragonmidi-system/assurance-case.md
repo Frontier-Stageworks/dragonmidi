@@ -8,9 +8,11 @@ The structured traceability counterpart to `correctness-assurance.md`. See `docs
 
 ```text
 Property (property-register.md):
-  decode_osc_packet never raises an unhandled exception for any byte input, and
-  rejects non-positive/out-of-bounds element_size and over-depth nesting via
-  BundleBoundsError.
+  At four named boundaries, decode_osc_packet deterministically raises
+  BundleBoundsError rather than an unhandled exception. More broadly, no
+  unhandled exception has been observed across a bounded fuzz campaign's
+  explored space — this broader "any byte input" framing is supported by
+  sampling, not established.
         ↓
 Preconditions / initial-state domain:
   none — stateless per-call decode
@@ -32,7 +34,9 @@ Evidence mapped to claim dimensions (evidence-matrix.md):
   - oversized element_size -> EVID-001, test_decode_osc_packet_raises_when_element_size_exceeds_remaining_buffer
   - at-cap accepted -> EVID-001, test_decode_osc_packet_accepts_element_size_exactly_matching_remaining_buffer, test_decode_osc_packet_accepts_nesting_exactly_at_the_depth_cap
   - over-cap rejected -> EVID-001, test_decode_osc_packet_raises_when_nesting_exceeds_the_depth_cap
-  - arbitrary malformed input / termination -> EVID-001, test_decode_osc_packet_never_hangs_on_structured_malformed_bundles (hypothesis fuzz, robustness evidence purpose)
+  - arbitrary malformed input / termination -> EVID-001, test_decode_osc_packet_never_hangs_on_structured_malformed_bundles
+    (hypothesis fuzz, robustness evidence purpose — sampled support, not
+    deterministic coverage; do not describe as "established" downstream)
         ↓
 Enforcement mechanisms:
   - MAX_BUNDLE_DEPTH=8 recursion cap; element_size bounds check — both dimensions
@@ -46,10 +50,13 @@ Risk/assumption treatment:
   - Explicit assumption: Dragonframe trusted-peer (DM-EA-001)
         ↓
 Current support:
-  Established for all five named dimensions.
+  Established, deterministically, for the four named boundary dimensions. The
+  fifth dimension (arbitrary malformed byte input generally) is supported by
+  sampled fuzz exploration, not established as a universal claim.
         ↓
 Residual gaps:
-  none currently identified.
+  none currently identified as an open task — the deterministic/sampled split
+  above is an inherent limit of the evidence method, not a closable gap.
         ↓
 Disposition / next action:
   Authority: SPECIFIED
@@ -180,31 +187,33 @@ Disposition / next action:
   Correctness-assurance.md section: §3.3
 ```
 
-### DM-004: Opinionated map synthesis correctness
+### DM-004: Opinionated map synthesis correctness, for the two bundled Controller Profiles
 
 ```text
 Property (property-register.md):
-  build_opinionated_map's output, for any profile's declared controls, matches
-  the Opinionated Table / Bank Derivation specs (MAP-TABLE-*, MAP-CONFIG-004..008).
+  build_opinionated_map's output, for the Studio's and nanoKONTROL2's declared
+  controls specifically, matches the Opinionated Table / Bank Derivation specs
+  (MAP-TABLE-*, MAP-CONFIG-004..008). Not a claim about arbitrary third-party
+  controls: declarations — see Residual gaps.
         ↓
 Preconditions / initial-state domain:
-  a syntactically valid controls: declaration
+  the Studio's or nanoKONTROL2's declared controls: block
         ↓
 Assumptions:
   - none beyond the config schema itself being correctly documented
         ↓
 Claim dimensions:
-  - fader entries
-  - knob entries
-  - mute entries
-  - shared button entries (incl. Scene-button override)
+  - fader entries (per bundled profile)
+  - knob entries (per bundled profile)
+  - mute entries (per bundled profile)
+  - shared button entries (per bundled profile, incl. Scene-button override)
   - absent-key handling (MAP-CONFIG-004)
         ↓
 Evidence mapped to claim dimensions (evidence-matrix.md):
   - all five dimensions -> residual gap (see below); EVID-004 records the plan:
-    hand-authored golden table derived from spec text + declared CC list, not
-    from build_opinionated_map, OPINIONATED_MAP_STUDIO/_NANOKONTROL2, or git
-    history (correctness evidence purpose, once built)
+    hand-authored golden table derived from spec text + each bundled profile's
+    declared CC list, not from build_opinionated_map, OPINIONATED_MAP_STUDIO/
+    _NANOKONTROL2, or git history (correctness evidence purpose, once built)
         ↓
 Enforcement mechanisms:
   none
@@ -215,24 +224,30 @@ Meta-evidence / discrimination:
   evidence-handoff.md, not executed.
         ↓
 Risk/assumption treatment:
-  none — this is an active evidence gap, not an accepted risk
+  none for the bundled-profile claim — an active evidence gap, not an accepted
+  risk. Generalization to third-party profiles: Defer (see Residual gaps).
         ↓
 Current support:
-  NOT established. The existing test (test_mapping_config_schema.py:76,81)
-  compares the function's output to constants derived from the same function —
-  regression/change-detection evidence only.
+  NOT established, for either bundled profile. The existing test
+  (test_mapping_config_schema.py:76,81) compares the function's output to
+  constants derived from the same function — regression/change-detection
+  evidence only.
         ↓
 Residual gaps:
-  - Description: no evidence establishes the synthesized map is correct against
-    the current spec, only that it is self-consistent over time
+  - Description: no evidence establishes either bundled profile's synthesized
+    map is correct against the current spec, only that it is self-consistent
+    over time
     Gap type: evidence missing
     Gap disposition: produce evidence
+  - Description: the shared synthesis helpers are the same code path for any
+    Controller Profile, but no evidence, planned or realized, covers arbitrary
+    third-party controls: declarations
+    Gap type: evidence missing
+    Gap disposition: defer
         ↓
 Disposition / next action:
   Authority: SPECIFIED
   Authority basis: MAP-TABLE-001/002/003/005, MAP-CONFIG-004/005/006/007/008
-    (the current spec text — not the retired historical-constants framing, see
-    property-register.md Rejected/withdrawn)
   Claim nature: Property
   Lifecycle: Enduring
   Disposition: Approved
@@ -369,28 +384,33 @@ Claim dimensions:
   - no-connection drop
         ↓
 Evidence mapped to claim dimensions (evidence-matrix.md):
-  all four dimensions -> EVID-007, example tests in tests/test_websocket_output.py
-  (correctness evidence purpose; content confirmed by inspection — see residual
-  gap below regarding re-execution)
+  all four dimensions -> EVID-007, example tests written in
+  tests/test_websocket_output.py (correctness evidence purpose). Content
+  confirmed correct by source inspection; NOT confirmed by a passing
+  execution — see Current support and residual gap below.
         ↓
 Enforcement mechanisms:
   single _connection slot (supersedes on reconnect)
         ↓
 Meta-evidence / discrimination:
   not independently mutation-tested; encode tests assert exact JSON shape,
-  discriminating by construction
+  discriminating by construction, if and when the suite runs
         ↓
 Risk/assumption treatment:
   Accept risk: delivery-failure visibility (correctness-assurance.md §6.1) —
   explicit HLD decision, not part of this claim
         ↓
 Current support:
-  Established for all four named dimensions by direct file inspection.
+  NOT established by a passing test run. A test artifact covering all four
+  named dimensions exists in source and is confirmed correct by inspection,
+  but has never executed successfully in this environment, and no prior
+  known-good run is relied on. Status: evidence artifact exists, execution
+  unverified.
         ↓
 Residual gaps:
-  - Description: test suite currently fails to import in this dev environment
-    (websockets module not installed); evidence content confirmed by inspection,
-    not by a fresh run
+  - Description: test suite fails to import in this dev environment
+    (websockets module not installed) — this is the reason the claim cannot
+    currently be called established, not a minor footnote
     Gap type: environment-platform validation gap
     Gap disposition: resolve through LID/design
         ↓
@@ -400,11 +420,11 @@ Disposition / next action:
   Claim nature: Property
   Lifecycle: Enduring
   Disposition: Approved
-  Evidence summary: Example-tested (content confirmed by inspection; not yet
-    executed in this development environment — see Freshness)
-  Layering assessment: single method plus a structural connection-slot mechanism
-  Freshness: stale — renewal needed (for re-execution only; content current as
-    of 2026-08-26 inspection)
+  Evidence summary: Test artifact exists, confirmed correct by inspection;
+    execution unverified — not "Example-tested" in the passing-run sense
+  Layering assessment: single method plus a structural connection-slot
+    mechanism, once execution is confirmed
+  Freshness: stale — renewal needed; no execution has occurred
   Correctness-assurance.md section: §3.7
 ```
 
@@ -412,25 +432,30 @@ Disposition / next action:
 
 ```text
 Property (property-register.md):
-  Every modifier already pressed for a send() call is released, in reverse
-  order, even if a later press/release call raises.
+  For a send() call where a modifier press, the main key press, or an
+  unrecognized key lookup raises — but not where release() itself raises —
+  every modifier already pressed is released, in reverse order.
         ↓
 Preconditions / initial-state domain:
-  none
+  the failure, if any, occurs during a press call or key lookup, not during a
+  release() call (explicitly excluded from this claim)
         ↓
 Assumptions:
-  - the backend's release() call itself doesn't also fail in a way that leaves
-    OS-level key state stuck
+  none beyond the stated precondition
         ↓
 Claim dimensions:
-  n/a — single-instance claim (the finally-block guarantee)
+  - modifier press failure — covered
+  - main-key press failure — covered
+  - unrecognized key lookup failure — covered
+  - backend release() call itself failing — excluded from this claim, residual gap
         ↓
 Evidence mapped to claim dimensions (evidence-matrix.md):
   Primary: EVID-008, example tests in tests/test_keystroke_output.py
   (test_send_still_releases_modifiers_when_key_press_raises,
   test_send_still_releases_remaining_modifiers_when_one_modifier_press_raises,
   test_send_swallows_total_backend_failure_without_raising,
-  test_send_swallows_unrecognized_key_lookup_failure) — correctness evidence purpose
+  test_send_swallows_unrecognized_key_lookup_failure) — correctness evidence
+  purpose, for the three covered dimensions
         ↓
 Enforcement mechanisms:
   finally block releasing pressed modifiers in reverse order
@@ -443,14 +468,16 @@ Risk/assumption treatment:
   none
         ↓
 Current support:
-  Established for the three directly-tested failure points.
+  Established for the three covered dimensions. The release()-failure
+  dimension is not covered and not claimed — it is excluded by this property's
+  own wording, not a silent gap in an unqualified claim.
         ↓
 Residual gaps:
-  - Description: a doubly-failing release() sequence's ordering is not
-    explicitly asserted
+  - Description: a doubly-failing release() sequence is excluded from this
+    claim's wording and has no evidence
     Gap type: evidence missing
-    Gap disposition: judged low-value given Priority: medium; not routed to an
-    active handoff
+    Gap disposition: defer — judged low-value given Priority: medium; tracked
+    in evidence-handoff.md (No action scheduled)
         ↓
 Disposition / next action:
   Authority: SPECIFIED
@@ -568,7 +595,8 @@ Disposition / next action:
 ```text
 Property (property-register.md):
   Dragonframe's internal AXn axis numbering corresponds to DragonMIDI's
-  OSC-discovery order.
+  OSC-discovery order, for every project/ordering/version. No available
+  evidence method can fully establish this quantifier — only sample it.
         ↓
 Preconditions / initial-state domain:
   n/a
@@ -581,7 +609,9 @@ Claim dimensions:
         ↓
 Evidence mapped to claim dimensions (evidence-matrix.md):
   Primary: none realized yet; EVID-011 specifies a manual verification
-  procedure (operational validation evidence purpose) — see evidence-handoff.md
+  procedure (operational validation evidence purpose) — see evidence-handoff.md.
+  Scope note: once run, establishes correspondence only for the specific
+  version/project/ordering tested, never the general claim.
         ↓
 Enforcement mechanisms:
   none — cannot be enforced, only observed
@@ -591,15 +621,22 @@ Meta-evidence / discrimination:
   arrangement to rule out coincidental agreement.
         ↓
 Risk/assumption treatment:
-  Explicit assumption, currently unverified
+  Explicit assumption, currently unverified; generalization beyond any single
+  tested configuration is accepted as permanently unverifiable by this method
         ↓
 Current support:
-  NOT established. No evidence exists yet.
+  NOT established. No evidence exists yet. Even once the manual procedure
+  passes, the general claim (every project/ordering/version) remains assumed,
+  not established — only the tested configuration would be confirmed.
         ↓
 Residual gaps:
   - Description: no automated or manual verification has been performed
     Gap type: external verification unavailable or missing
     Gap disposition: manual/operational verification
+  - Description: generalization beyond the tested version/project/ordering
+    cannot be closed by a single manual check
+    Gap type: external verification unavailable or missing
+    Gap disposition: accept risk
         ↓
 Disposition / next action:
   Authority: SPECIFIED
@@ -609,7 +646,8 @@ Disposition / next action:
   Disposition: Approved
   Evidence summary: No evidence
   Layering assessment: n/a
-  Freshness: n/a until run
+  Freshness: n/a until run; once run, scoped to the specific version/project/
+    ordering tested only — does not generalize
   Correctness-assurance.md section: §5.2
 ```
 

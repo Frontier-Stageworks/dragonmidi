@@ -1,6 +1,6 @@
 # DragonMIDI Correctness / Assurance Document
 
-**Version:** current `main` (fresh MAPS pass, 2026-08-26)
+**Version:** current `main`, as of 2026-08-26
 **Scope:** Whole system — OSC I/O, MIDI input, mapping engine, Controller Profile loading, Preset Store, keystroke output, WebSocket output. App UI layout/rendering excluded except where it affects an assurance claim.
 **Repository:** `/Users/markstalzer/github/dragonmidi`
 **Companion documents:** `property-register.md`, `evidence-matrix.md`, `assurance-case.md`
@@ -27,7 +27,7 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 
 | Claim | Property Type | Evidence IDs | Current support |
 |---|---|---|---|
-| `decode_osc_packet` raises `BundleBoundsError` (not an unhandled exception, not silent corruption) for non-positive/oversized `element_size` or over-depth nesting, and decodes correctly at exactly the stated boundary | Boundedness; Error/failure semantics | `EVID-001` | Established for the named boundary conditions and for the general malformed-input space explored by the realized fuzz campaign; not a claim of exhaustive proof over all byte inputs. |
+| `decode_osc_packet` raises `BundleBoundsError` (not an unhandled exception, not silent corruption) for non-positive/oversized `element_size` or over-depth nesting, and decodes correctly at exactly the stated boundary | Boundedness; Error/failure semantics | `EVID-001` | **Established, deterministically, for the four named boundary conditions.** For the broader "no unhandled exception for arbitrary byte input" framing: **supported, not established**, by a deadline-bounded fuzz campaign's sampled exploration — this is evidence of absence-of-observed-failure within the fuzzed distribution, not proof over all byte inputs. |
 
 **Property being asserted:** `decode_osc_packet` never raises an unhandled exception, for any byte input.
 **Evidence produced:** deterministic verification at the named boundaries (structural enforcement + verification), plus broad but deadline-bounded, sampled exploration of the general malformed-byte space (fuzz) — strong supporting evidence, not exhaustive proof over all byte inputs.
@@ -71,25 +71,26 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 - Accepted: a tracked position starting outside `[min, max]` is corrected toward the nearer bound on the first nudge, and every subsequent nudge behaves as the ordinary in-range case.
 - Rejected: a tracked position landing exactly on the far bound on a large single nudge is not itself evidence of a defect — `MAP-BANK-008`'s reduced-delta rule permits this.
 
-### 3.4 Opinionated Map Synthesis
+### 3.4 Opinionated Map Synthesis (bundled profiles only)
 
-**Precondition(s):** a syntactically valid `controls:` declaration for the profile.
+**Precondition(s):** the Studio's or nanoKONTROL2's declared `controls:` block — the two bundled profiles specifically, not an arbitrary third-party declaration.
 **Canonical definition(s):** "matches the spec" = every synthesized entry's target OSC address/action, channel-match condition, and continuous-vs-one-shot framing matches what `MAP-TABLE-001/002/003/005` and `MAP-CONFIG-004/005/006/007/008` require for the profile's declared CC/channel values.
 **Valid initial-state domain:** n/a — pure synthesis function.
 
 | Dimension | Discharge |
 |---|---|
-| fader entries | residual gap — evidence planned |
-| knob entries | residual gap — evidence planned |
-| mute entries | residual gap — evidence planned |
-| shared button entries (incl. Scene-button override) | residual gap — evidence planned |
+| fader entries (Studio, nanoKONTROL2) | residual gap — evidence planned |
+| knob entries (Studio, nanoKONTROL2) | residual gap — evidence planned |
+| mute entries (Studio, nanoKONTROL2) | residual gap — evidence planned |
+| shared button entries (Studio, nanoKONTROL2, incl. Scene-button override) | residual gap — evidence planned |
 | absent-key handling (`MAP-CONFIG-004`) | residual gap — evidence planned |
+| generalization to arbitrary third-party `controls:` declarations | residual gap — not planned; separately tracked (see below) |
 
 | Claim | Property Type | Evidence IDs | Current support |
 |---|---|---|---|
-| `build_opinionated_map`'s output matches the Opinionated Table/Config specs for any profile's declared controls | Functional correctness; Refinement/equivalence | `EVID-004` | **Not currently established.** The existing test (`test_mapping_config_schema.py:76,81`) compares the function's output to constants that are themselves produced by the same function call — regression/change-detection evidence only, not correctness evidence (`docs/evidence-selection.md § Self-derived snapshots are not correctness evidence`). This is the system's highest-blast-radius chokepoint with the weakest current evidence. |
+| `build_opinionated_map`'s output matches the Opinionated Table/Config specs, for the Studio's and nanoKONTROL2's declared controls specifically | Functional correctness; Refinement/equivalence | `EVID-004` | **Not currently established.** The existing test (`test_mapping_config_schema.py:76,81`) compares the function's output to constants that are themselves produced by the same function call — regression/change-detection evidence only, not correctness evidence (`docs/evidence-selection.md § Self-derived snapshots are not correctness evidence`). This is the system's highest-blast-radius chokepoint with the weakest current evidence. |
 
-**Coverage notes:** a hand-authored, spec-derived golden table is specified in `evidence-handoff.md` as the evidence plan. Until built, no dimension above is covered by evidence; this section must not be read as claiming correctness.
+**Coverage notes:** a hand-authored, spec-derived golden table is specified in `evidence-handoff.md` as the evidence plan, scoped to the two bundled profiles. Until built, no dimension above is covered by evidence; this section must not be read as claiming correctness. This claim does not extend to third-party Controller Profiles — `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()` are the same shared code path for any profile, but no evidence, planned or realized, covers arbitrary third-party `controls:` declarations; that generalization is a separate, currently-accepted-as-unaddressed gap (`property-register.md` `DM-004`).
 
 ### 3.5 Controller Profile Config Parsing
 
@@ -123,28 +124,35 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 
 | Dimension | Discharge |
 |---|---|
-| `E-Stop` (bare trigger) encode | property test |
-| ranged command encode (`select-AXn`/`jog-AXn`) | property test |
-| delivery when connected | property test |
-| no-connection drop | property test |
+| `E-Stop` (bare trigger) encode | example test (written; execution unverified — see Current support) |
+| ranged command encode (`select-AXn`/`jog-AXn`) | example test (written; execution unverified) |
+| delivery when connected | example test (written; execution unverified) |
+| no-connection drop | example test (written; execution unverified) |
 
 | Claim | Property Type | Evidence IDs | Current support |
 |---|---|---|---|
-| A press-transition on a WebSocket-mapped control sends exactly one correctly-shaped command when connected, and no send when not connected | Functional correctness; Determinism | `EVID-007` | Established for all four named dimensions, by direct inspection of `tests/test_websocket_output.py`'s content and assertions. **The test suite currently cannot be executed in this development environment** (`websockets` module not installed) — content confirmed correct by inspection, not by a passing run. |
+| A press-transition on a WebSocket-mapped control sends exactly one correctly-shaped command when connected, and no send when not connected | Functional correctness; Determinism | `EVID-007` | **Not established by a passing test run.** An example-test artifact covering all four named dimensions exists in `tests/test_websocket_output.py` and is confirmed correct by direct source inspection, but the suite currently fails to import in this development environment (`websockets` package not installed) and has not been executed successfully. No prior known-good run is being relied on. Status: evidence artifact exists, execution currently unverified. |
 
-**Coverage notes:** `E-Stop` specifically is the motion-control emergency-stop function named in the HLD's Success Metrics — this claim is what makes that function's *dispatch* trustworthy; it does not cover delivery-failure *visibility* (§6.1, a separate, deliberately-unaddressed concern).
+**Coverage notes:** `E-Stop` specifically is the motion-control emergency-stop function named in the HLD's Success Metrics — this claim is what makes that function's *dispatch* trustworthy; it does not cover delivery-failure *visibility* (§6.1, a separate, deliberately-unaddressed concern). Inspection of test code is not equivalent to a passing test result — this row should be read as "specified and plausible," not "verified," until `tests/test_websocket_output.py` actually executes in a working environment.
 
-### 3.8 Keystroke Output Stuck-Modifier Safety
+### 3.8 Keystroke Output Stuck-Modifier Safety (press/lookup failures only)
 
-**Precondition(s):** `KeystrokeOutputAdapter.send()` is called with a `KeyCombo`.
+**Precondition(s):** `KeystrokeOutputAdapter.send()` is called with a `KeyCombo`, and the failure (if any) occurs during a modifier press, the main key press, or an unrecognized key lookup — **not** during a `release()` call itself, which this claim explicitly excludes.
 **Canonical definition(s):** n/a
 **Valid initial-state domain:** n/a
 
+| Dimension | Discharge |
+|---|---|
+| modifier press failure | covered |
+| main-key press failure | covered |
+| unrecognized key lookup failure | covered |
+| backend `release()` call itself failing | residual gap — explicitly excluded from this claim, not merely untested |
+
 | Claim | Property Type | Evidence IDs | Current support |
 |---|---|---|---|
-| Every modifier already pressed for a given `send()` call is released, in reverse order, even if a later press/release call in the same sequence raises | Error/failure semantics; Safety | `EVID-008` | Established for the failure points directly tested (a modifier press failing, the main key press failing, an unrecognized key lookup failing). A doubly-failing sequence (the release itself also raising) is not separately asserted — recorded as a low-priority residual gap, not blocking this claim's overall support. |
+| For a `send()` call where a modifier press, the main key press, or an unrecognized key lookup raises (but not where `release()` itself raises), every modifier already pressed is released, in reverse order | Error/failure semantics; Safety | `EVID-008` | Established for the three covered failure points. The doubly-failing-`release()` case is not part of this claim's wording and is not evidenced — it is a stated residual gap, not a silent gap in an unqualified "every failure" claim. |
 
-**Coverage notes:** the code's own reasoning names the consequence directly — a stuck modifier "would corrupt every subsequent real keystroke until manually cleared," worse than one missed send — this claim exists specifically to hold that guarantee to evidence.
+**Coverage notes:** the code's own reasoning names the consequence directly — a stuck modifier "would corrupt every subsequent real keystroke until manually cleared," worse than one missed send — this claim exists specifically to hold that guarantee to evidence, for the failure modes it actually covers.
 
 ### 3.9 Group-Switch Dispatch Precedence
 
@@ -160,7 +168,8 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 
 | Role | Item | Catches / enforces / treats | Does NOT establish |
 |---|---|---|---|
-| Direct evidence | Example tests (all properties) | Specific named scenarios and boundary conditions | Behavior outside the tested cases |
+| Direct evidence | Example tests, executed (`DM-002`, `DM-005`, `DM-006`, `DM-008`, `DM-009`) | Specific named scenarios and boundary conditions | Behavior outside the tested cases |
+| Direct evidence | Example test artifact, written but unexecuted in this environment (`DM-007`) | Nothing yet — content is plausible by inspection only | A passing result; do not treat as equivalent to the executed rows above |
 | Direct evidence | Property-based tests (`DM-001`–`003`) | Broad sampled coverage of generated input/sequence spaces | Universality — sampled evidence, not proof |
 | Direct evidence | Hypothesis fuzz campaign (`DM-001`) | Unstructured/adversarially-shaped malformed input, deadline-bounded | Guaranteed termination proof; bounded by the deadline and generator strategy |
 | Direct evidence | Manual verification, once run (`DM-EA-002`, `DM-EA-003`) | Real-hardware/real-Dragonframe behavior no code-level test can reach | Behavior across untested hardware/firmware/Dragonframe versions |
@@ -180,7 +189,7 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 
 ### 5.2 External System Behavior
 
-- Dragonframe's internal `AXn` axis numbering corresponds to DragonMIDI's OSC-discovery order. **Assumption, not currently verified** — Evidence state: No evidence; a manual verification procedure is specified but not yet run (`DM-EA-002`).
+- Dragonframe's internal `AXn` axis numbering corresponds to DragonMIDI's OSC-discovery order, for every project and axis ordering. **Assumption, not currently verified** — Evidence state: No evidence; a manual verification procedure is specified but not yet run (`DM-EA-002`). Note for when it does run: a manual check can only confirm correspondence for the specific Dragonframe version/project/ordering exercised — it cannot establish the general claim, which remains assumed even after a passing check.
 - The bundled nanoKONTROL2 default CC map matches real hardware factory defaults. **Assumption, partially verified** — Evidence state: Manually verified as of 2026-07-21 against one physical unit, behaviorally (not a byte-level MIDI trace) (`DM-EA-003`).
 - At most one Dragonframe client connects to the WebSocket server at a time. **Enforced within DragonMIDI's own code** (a new connection supersedes any existing `_connection`), but Dragonframe's own connection behavior is never independently confirmed to actually honor this — a minor, unregistered assumption folded into `DM-007`.
 
@@ -202,17 +211,17 @@ A keystroke-mapped control (the jog wheel's Arc Motion Control stepping) can aff
 
 `DM-004` (§3.4) is this document's most significant open gap — the highest-blast-radius chokepoint in the mapping layer has no correctness evidence yet, only a self-referential regression check. Evidence is planned (`evidence-handoff.md`); until it lands, this document does not claim the synthesized map is correct for any profile, bundled or third-party.
 
-### 6.4 AXn axis-identity assumption is unverified
+### 6.4 AXn axis-identity assumption is unverified, and cannot be fully verified by the only available method
 
-`DM-EA-002` (§5.2) has no evidence at all yet — a wrong assumption here would silently target the wrong physical axis via `select-AXn`/`jog-AXn`/Solo, with no error. A manual verification procedure is specified (`evidence-handoff.md`) but requires hands-on access to a running Dragonframe instance and has not been executed.
+`DM-EA-002` (§5.2) has no evidence at all yet — a wrong assumption here would silently target the wrong physical axis via `select-AXn`/`jog-AXn`/Solo, with no error. A manual verification procedure is specified (`evidence-handoff.md`) but requires hands-on access to a running Dragonframe instance and has not been executed. Even once executed, it establishes correspondence only for the specific version/project/ordering tested — the general claim (every project, every ordering, every version) has no available evidence path and remains permanently assumed.
 
-### 6.5 WebSocket test evidence cannot currently be re-executed in this environment
+### 6.5 WebSocket evidence artifact exists but has never been executed successfully
 
-`tests/test_websocket_output.py` (backing `DM-007`, §3.7) fails to import in this development environment because the `websockets` package is not installed. Its content is confirmed correct by direct inspection, but it cannot currently be re-run to confirm it's still green after any future change to `websocket_output.py`. Not a code defect; an environment gap.
+`tests/test_websocket_output.py` (backing `DM-007`, §3.7) fails to import in this development environment because the `websockets` package is not installed. Its content is confirmed correct by direct source inspection, but it has never been run to a passing result in this environment, and no prior known-good run is on record. `DM-007` is therefore not currently an established claim — it is a specified, plausible claim backed by an unexecuted test artifact. Not a code defect; an environment gap, but one with a real effect on this claim's current status, not just a footnote.
 
-### 6.6 Pre-existing test flake, unrelated to any claim in this document
+### 6.6 A known-flaky test, unrelated to any claim in this document
 
-`test_listener_resends_discovery_query_on_rebind` was observed flaky and confirmed (via `git stash`) to fail identically on the unmodified codebase — out of scope for this MAPS pass, but noted so a future reader doesn't mistake it for evidence against any claim above.
+`test_listener_resends_discovery_query_on_rebind` is intermittently flaky, independent of any code covered by the claims above — noted so a future reader doesn't mistake its failures for evidence against any claim in this document.
 
 ## 7. Trusted Base
 
@@ -223,15 +232,15 @@ A keystroke-mapped control (the jog wheel's Arc Motion Control stepping) can aff
 
 ## 8. Summary of Guarantees
 
-- OSC bundle decoding rejects malformed framing (non-positive/oversized `element_size`, over-depth nesting) via a well-typed error, verified at and around the stated boundaries, with supporting fuzz exploration (§3.1).
+- OSC bundle decoding deterministically rejects malformed framing at four named boundaries (non-positive/oversized `element_size`, over-depth nesting) via a well-typed error; the broader "arbitrary byte input" framing is supported, not proven, by sampled fuzz exploration (§3.1).
 - A Controller Profile switch fully isolates subsequent dispatch from the previous profile's state, verified across a full post-switch trace, not just the first event (§3.2).
 - Bank-derived knob nudges keep the tracked axis position within its configured range, including recovery from an out-of-range starting position, verified by property tests and mutation-confirmed to actually discriminate a broken clamp formula (§3.3).
-- **Opinionated map synthesis correctness is not currently established** — this document does not claim `build_opinionated_map`'s output is correct against the spec for any profile (§3.4, §6.3).
+- **Opinionated map synthesis correctness is not currently established, for either bundled profile** — this document does not claim `build_opinionated_map`'s output is correct against the spec, and does not address third-party profiles at all (§3.4, §6.3).
 - Malformed Controller Profile config files and malformed Preset Store entries are rejected without affecting other valid data (§3.5, §3.6).
-- WebSocket-targeted commands (including `E-Stop`) encode and dispatch correctly when connected, and are dropped (not queued or errored) when not — but a delivery failure produces no operator-visible signal (§3.7, §6.1).
-- Keystroke synthesis releases every pressed modifier even on a mid-sequence failure, for the failure points directly tested (§3.8).
+- **WebSocket-targeted command dispatch (including `E-Stop`) is specified and backed by a written test artifact, but is not currently established by a passing execution** — the test suite cannot run in this development environment (§3.7, §6.5). A delivery failure, even when the code is correct, also produces no operator-visible signal (§6.1).
+- Keystroke synthesis releases every pressed modifier when a press or lookup call fails; a failing `release()` call itself is explicitly outside this claim, not covered (§3.8).
 - Group-switch dispatch precedence and dedup-discard rules hold per existing coverage (§3.9).
-- Dragonframe is trusted as a local peer, not defended against as adversarial (§5.1); AXn axis identity is assumed but unverified (§5.2, §6.4); the nanoKONTROL2 default CC map is verified once, behaviorally, against one physical unit (§5.2).
+- Dragonframe is trusted as a local peer, not defended against as adversarial (§5.1); AXn axis identity is assumed and currently unverified, and even a future manual check would only ever confirm the tested configuration, not the general claim (§5.2, §6.4); the nanoKONTROL2 default CC map is verified once, behaviorally, against one physical unit, with generalization to other units/firmware unverified (§5.2).
 
 ## 9. Correctness Claim Taxonomy
 
