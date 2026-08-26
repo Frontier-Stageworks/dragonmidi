@@ -187,14 +187,17 @@ Disposition / next action:
   Correctness-assurance.md section: §3.3
 ```
 
-### DM-004: Opinionated map synthesis correctness, for the two bundled Controller Profiles
+### DM-004: `build_opinionated_map`'s static table content correctness, for the two bundled Controller Profiles
 
 ```text
 Property (property-register.md):
-  build_opinionated_map's output, for the Studio's and nanoKONTROL2's declared
-  controls specifically, matches the Opinionated Table / Bank Derivation specs
-  (MAP-TABLE-*, MAP-CONFIG-004..008). Not a claim about arbitrary third-party
-  controls: declarations — see Residual gaps.
+  build_opinionated_map's returned dict has correct key membership and, per
+  present key, correct kind/address/args, for the Studio's and nanoKONTROL2's
+  declared controls specifically. Explicitly not a claim about runtime
+  dispatch behavior (channel-match, send cadence, one-shot enforcement,
+  unmapped-event handling — MappingEngine.process()'s concern, not this
+  dict's) and not a claim about arbitrary third-party controls: declarations
+  — see Residual gaps for both.
         ↓
 Preconditions / initial-state domain:
   the Studio's or nanoKONTROL2's declared controls: block
@@ -203,57 +206,74 @@ Assumptions:
   - none beyond the config schema itself being correctly documented
         ↓
 Claim dimensions:
-  - fader entries (per bundled profile)
-  - knob entries (per bundled profile)
-  - mute entries (per bundled profile)
-  - shared button entries (per bundled profile, incl. Scene-button override)
-  - absent-key handling (MAP-CONFIG-004)
+  - fader entries (_fader_entries()) — key membership + kind/address, per profile
+  - knob entries (_knob_entries()) — key membership + kind/address, per profile
+  - mute entries (_mute_entries()) — key membership + kind/address, per profile
+  - transport entries (_transport_entries()) — key membership + kind/address/
+    args, per profile, incl. omitted-key absence (MAP-CONFIG-004)
+  - Scene-button insertion (build_opinionated_map()'s own has_scene_button
+    block, not a helper function) — present/correct for Studio, absent for
+    nanoKONTROL2
         ↓
 Evidence mapped to claim dimensions (evidence-matrix.md):
-  - all five dimensions -> residual gap (see below); EVID-004 records the plan:
-    hand-authored golden table derived from spec text + each bundled profile's
-    declared CC list, not from build_opinionated_map, OPINIONATED_MAP_STUDIO/
-    _NANOKONTROL2, or git history (correctness evidence purpose, once built)
+  - all five dimensions -> EVID-004, test_studio_opinionated_map_matches_hand_derived_golden_table,
+    test_nanokontrol2_opinionated_map_matches_hand_derived_golden_table,
+    test_studio_opinionated_map_omits_a_hand_derived_entry_when_that_transport_key_is_absent
+    (tests/test_mapping_config_schema.py) — hand-authored golden values derived
+    from docs/llds/static-mapping.md's Opinionated Default Map tables +
+    MAP-CONFIG-004 + each bundled profile's declared CC list, not from
+    build_opinionated_map, OPINIONATED_MAP_STUDIO/_NANOKONTROL2, or git history
+    (correctness evidence purpose). All five: A — covered.
         ↓
 Enforcement mechanisms:
   none
         ↓
 Meta-evidence / discrimination:
-  Required, not yet run: deliberately alter one entry in each shared helper,
-  confirm the golden test fails; revert, confirm it passes. Specified in
-  evidence-handoff.md, not executed.
+  Executed 2026-08-26: deliberately altered _fader_entries()'s, _knob_entries()'s,
+  and _mute_entries()'s address formulas, _transport_entries()'s record args, and
+  the Scene-button insertion's address, one at a time, in a working copy;
+  confirmed each mutation fails the golden tests (the Scene mutation correctly
+  failed only the Studio test, not nanoKONTROL2); reverted each and confirmed
+  the full suite passes (374 tests; only the pre-existing, unrelated
+  test_listener_resends_discovery_query_on_rebind flake fails).
         ↓
 Risk/assumption treatment:
-  none for the bundled-profile claim — an active evidence gap, not an accepted
-  risk. Generalization to third-party profiles: Defer (see Residual gaps).
+  none for the bundled-profile static-content claim — established. Generalization
+  to third-party profiles: Defer. Runtime dispatch behavior
+  (MAP-TABLE-001/002/003/005): out of scope for this claim entirely, not tracked
+  by any property in this pass.
         ↓
 Current support:
-  NOT established, for either bundled profile. The existing test
-  (test_mapping_config_schema.py:76,81) compares the function's output to
-  constants derived from the same function — regression/change-detection
-  evidence only.
+  Established, for both bundled profiles, by hand-derived golden-value tests
+  independent of build_opinionated_map's own code path, mutation-verified. The
+  pre-existing test_mapping_config_schema.py:76,81 remains present, still
+  regression/change-detection only.
         ↓
 Residual gaps:
-  - Description: no evidence establishes either bundled profile's synthesized
-    map is correct against the current spec, only that it is self-consistent
-    over time
-    Gap type: evidence missing
-    Gap disposition: produce evidence
   - Description: the shared synthesis helpers are the same code path for any
-    Controller Profile, but no evidence, planned or realized, covers arbitrary
-    third-party controls: declarations
+    Controller Profile, but no evidence covers arbitrary third-party
+    controls: declarations
     Gap type: evidence missing
     Gap disposition: defer
         ↓
+  (Note: MAP-TABLE-001/002/003/005's runtime dispatch behavior is explicitly
+  outside this claim, not a residual gap of it — DM-004 was never about
+  whether MappingEngine.process() correctly acts on this table. That concern
+  is untracked by any property; see correctness-assurance.md § 6.)
+        ↓
 Disposition / next action:
   Authority: SPECIFIED
-  Authority basis: MAP-TABLE-001/002/003/005, MAP-CONFIG-004/005/006/007/008
+  Authority basis: MAP-CONFIG-004, plus docs/llds/static-mapping.md's
+    Opinionated Default Map tables for per-control content
   Claim nature: Property
   Lifecycle: Enduring
   Disposition: Approved
-  Evidence summary: No evidence (correctness); existing test is regression-only
-  Layering assessment: n/a — no evidence realized yet
-  Freshness: n/a until evidence lands
+  Evidence summary: Example-tested (correctness); existing circular test remains,
+    regression-only
+  Layering assessment: single method (golden-value testing); no independent
+    second layer, and none needed — the golden values' independence comes from
+    their derivation, not from a second evidence method
+  Freshness: current as of 2026-08-26
   Correctness-assurance.md section: §3.4
 ```
 

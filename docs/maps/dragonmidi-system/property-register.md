@@ -94,39 +94,40 @@ Phase 2/3 artifact. The authoritative list of admitted assurance concerns and pr
 - **Residual gaps:** none currently identified
 - **Evidence-matrix row:** `EVID-003`
 
-### DM-004: Synthesized opinionated map matches the specified per-control behavior, for DragonMIDI's bundled Controller Profiles
+### DM-004: `build_opinionated_map`'s static table content is correct, for DragonMIDI's bundled Controller Profiles
 
 - **Behavioral segment:** Static Mapping — Controller Profile Config Schema / Opinionated Table (`docs/llds/static-mapping.md`)
-- **Claim:** For DragonMIDI's two bundled Controller Profiles (Studio, nanoKONTROL2), `build_opinionated_map` (via `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()`) synthesizes a MIDI-event-to-OSC/keystroke/WebSocket-target table that matches what the Opinionated Table and Bank Derivation specs (`MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008`) require for each profile's declared `controls:` block.
-- **Quantifiers in the claim:** for each of the two bundled profiles' declared control sets. This is **not** a universal claim over arbitrary third-party `controls:` declarations — see Residual gaps for that separately-tracked, currently-unestablished domain.
+- **Claim:** For DragonMIDI's two bundled Controller Profiles (Studio, nanoKONTROL2), `build_opinionated_map`'s returned dict has the correct key membership and, for each present key, the correct `_MapEntry` (`kind`, `address`, `args`) — including that an omitted `transport` key produces no corresponding entry (`MAP-CONFIG-004`), and that the Studio's Scene-button entry is present only when `has_scene_button=True`. This is a claim about the **static table's content**, produced by `_fader_entries()`, `_knob_entries()`, `_mute_entries()`, `_transport_entries()`, and the `has_scene_button` insertion inside `build_opinionated_map()` itself. It is explicitly **not** a claim about runtime dispatch behavior (channel-match gating, no-debounce/continuous-send framing, one-shot-per-transition enforcement, or silent-drop-for-unmapped-events) — that behavior lives in `MappingEngine.process()`, is a separate concern, and is not established by comparing this dict to a golden value. Exact dict equality is an appropriate oracle here specifically because the table's static content is itself the semantic object being asserted (key membership and per-entry fields), and dict key ordering carries no meaning.
+- **Quantifiers in the claim:** for each of the two bundled profiles' declared control sets, over every key `build_opinionated_map` can produce (or omit) for that profile. This is **not** a universal claim over arbitrary third-party `controls:` declarations — see Residual gaps.
 - **Claim dimensions:**
-  - fader entries (`_fader_entries()`), per bundled profile
-  - knob entries (`_knob_entries()`), per bundled profile
-  - mute entries (`_mute_entries()`), per bundled profile
-  - shared button entries (`_shared_button_entries()`, incl. transport, Scene button override behavior), per bundled profile
-  - absent-key handling (`MAP-CONFIG-004` — an omitted `transport` key produces no row, not a disabled one)
+  - fader entries (`_fader_entries()`) — key membership + `kind`/`address`, per bundled profile
+  - knob entries (`_knob_entries()`) — key membership + `kind`/`address`, per bundled profile
+  - mute entries (`_mute_entries()`) — key membership + `kind`/`address`, per bundled profile
+  - transport entries (`_transport_entries()`) — key membership + `kind`/`address`/`args`, per bundled profile, including the omitted-key absence case (`MAP-CONFIG-004`)
+  - Scene-button insertion (the `if has_scene_button:` block inside `build_opinionated_map()` itself, not a helper function) — present with correct `kind`/`address` for the Studio; absent for the nanoKONTROL2
 - **Canonical definition:** n/a
 - **Valid initial-state domain:** n/a — pure synthesis function, no persistent state
-- **Property class:** Functional correctness; Refinement/equivalence (config declaration → derived table)
+- **Property class:** Functional correctness; Refinement/equivalence (config declaration → derived static table)
 - **Discovery source:** EARS requirement + implementation observation
-- **Authority:** SPECIFIED — Authority basis: `MAP-TABLE-001/002/003/005`, `MAP-CONFIG-004/005/006/007/008` (`docs/specs/static-mapping.md`).
+- **Authority:** SPECIFIED — Authority basis: `MAP-CONFIG-004` (`docs/specs/static-mapping.md`, for the omitted-transport-key rule specifically) and the LLD's own "Opinionated Default Map" data tables (`docs/llds/static-mapping.md §§ The Opinionated Default Map (nanoKONTROL Studio)`, `The nanoKONTROL2 Default Map`) for the correct per-control CC-to-`kind`/`address` content. `MAP-TABLE-001/002/003/005` (channel-match, send-cadence, one-shot, and unmapped-event rules) and `MAP-CONFIG-002/005/006/007/008` (input-schema shape, WebSocket-key sourcing via `build_websocket_keys()`, config-count/jog-wheel validation via `validate_controls_config()`, and Bank membership via `build_bank_membership()`) are **not** cited here — each governs a different function or runtime behavior than the dict `build_opinionated_map` returns, and none is discharged by dict equality on that dict. Citing them here would claim more than this evidence could establish.
 - **Claim nature:** Property
 - **Lifecycle:** Enduring
-- **Source evidence:** `dragonmidi/mapping.py::build_opinionated_map` and shared helpers; `docs/specs/static-mapping.md`
+- **Source evidence:** `dragonmidi/mapping.py::build_opinionated_map`, `_fader_entries`, `_knob_entries`, `_mute_entries`, `_transport_entries`; `docs/llds/static-mapping.md`; `docs/specs/static-mapping.md` `MAP-CONFIG-004`
 - **Confidence in intent:** high
-- **Consequence if false:** every control on the Studio or nanoKONTROL2 bundled profile is silently mis-mapped — the highest-blast-radius chokepoint in the mapping layer for these two profiles
-- **Downstream dependencies:** both bundled profiles' runtime behavior
+- **Consequence if false:** every control on the Studio or nanoKONTROL2 bundled profile is silently mis-mapped at its source — the highest-blast-radius static-content chokepoint in the mapping layer for these two profiles
+- **Downstream dependencies:** every runtime dispatch claim that assumes the table's content is correct (e.g. `MAP-TABLE-*`'s behavior is only meaningful if the table it dispatches from is right)
 - **Preconditions:** the Studio or nanoKONTROL2 bundled profile's declared `controls:` block (malformed third-party declarations are `DM-005`'s concern, not this one)
 - **Assumptions:** none beyond the config schema itself being correctly documented
-- **Prioritization rationale:** highest-blast-radius chokepoint in the mapping layer; the existing test (`test_mapping_config_schema.py:76,81`) is circular (compares the function's output to constants derived from the same function) — a genuine, currently-uncovered correctness gap, not merely a stale record
+- **Prioritization rationale:** highest-blast-radius static-content chokepoint in the mapping layer; the pre-existing test (`test_mapping_config_schema.py:76,81`) was circular — closed by independent hand-derived golden-value tests
 - **Priority:** highest
 - **Disposition:** Approved
-- **Evidence coverage:** planned for the two bundled profiles' 5 claim dimensions — see `EVID-004`
-- **Evidence state (set):** No evidence (correctness); the existing test provides regression/change-detection value only, not correctness evidence
+- **Evidence coverage:** all 5 claim dimensions covered by a hand-derived golden table, for both bundled profiles — see `EVID-004`
+- **Evidence state (set):** Example-tested (correctness — hand-derived golden values, independent of `build_opinionated_map`'s own code path); the pre-existing circular test remains present and still provides regression/change-detection value only
 - **Residual gaps:**
-  - Evidence missing for the claim as stated: no evidence currently establishes the two bundled profiles' synthesized maps are correct, only that they are self-consistent over time. Type: Evidence missing. Disposition: Produce evidence — routed to `evidence-handoff.md`.
-  - Generalization beyond the two bundled profiles: `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()` are the same shared code path for any Controller Profile, including third-party ones, but no evidence — planned or realized — covers arbitrary/third-party `controls:` declarations. Type: Evidence missing. Disposition: Defer — revisit if third-party Controller Profile adoption grows materially, or a bug report implicates a third-party profile's synthesized map.
+  - Generalization beyond the two bundled profiles: `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_transport_entries()` are the same shared code path for any Controller Profile, including third-party ones, but no evidence — planned or realized — covers arbitrary/third-party `controls:` declarations. Type: Evidence missing. Disposition: Defer — revisit if third-party Controller Profile adoption grows materially, or a bug report implicates a third-party profile's synthesized map.
 - **Evidence-matrix row:** `EVID-004`
+
+Note: `MAP-TABLE-001/002/003/005`'s runtime dispatch behavior (does `MappingEngine.process()` correctly act on this table?) is explicitly outside this claim — it is not a residual gap of `DM-004`, since `DM-004` was never about it. It is currently untracked by any property in this register; see `correctness-assurance.md § 6` for this document's own accounting of that unclaimed concern.
 
 ### DM-005: Controller Profile config parsing degrades gracefully on malformed input
 

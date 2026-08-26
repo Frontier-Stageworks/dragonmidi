@@ -11,7 +11,7 @@ This document states what can currently be claimed about DragonMIDI's correctnes
 
 Existing test coverage is substantial (a large example-test suite across every module) but requirement-to-test traceability has not been measured — this document says "substantial existing test coverage" where that's what was actually checked, not a coverage-fraction claim.
 
-This document does not claim DragonMIDI is hardened against a deliberately adversarial Dragonframe peer (§5.1), does not claim `E-Stop`/WebSocket command delivery is observable when it fails (§6.1), and does not claim the synthesized opinionated map is correct against the current spec (§3.4 is evidence-pending, not established).
+This document does not claim DragonMIDI is hardened against a deliberately adversarial Dragonframe peer (§5.1), does not claim `E-Stop`/WebSocket command delivery is observable when it fails (§6.1), and does not claim anything about `MappingEngine.process()`'s runtime dispatch behavior — only that the opinionated map's static table *content* is correct for the two bundled profiles (§3.4, an established claim as of 2026-08-26; third-party profiles remain unaddressed).
 
 ## 2. System Model
 
@@ -71,26 +71,27 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 - Accepted: a tracked position starting outside `[min, max]` is corrected toward the nearer bound on the first nudge, and every subsequent nudge behaves as the ordinary in-range case.
 - Rejected: a tracked position landing exactly on the far bound on a large single nudge is not itself evidence of a defect — `MAP-BANK-008`'s reduced-delta rule permits this.
 
-### 3.4 Opinionated Map Synthesis (bundled profiles only)
+### 3.4 Opinionated Map Static Table Content (bundled profiles only — not runtime dispatch)
 
 **Precondition(s):** the Studio's or nanoKONTROL2's declared `controls:` block — the two bundled profiles specifically, not an arbitrary third-party declaration.
-**Canonical definition(s):** "matches the spec" = every synthesized entry's target OSC address/action, channel-match condition, and continuous-vs-one-shot framing matches what `MAP-TABLE-001/002/003/005` and `MAP-CONFIG-004/005/006/007/008` require for the profile's declared CC/channel values.
+**Canonical definition(s):** "correct" = `build_opinionated_map`'s returned dict has the key membership and per-key `_MapEntry` (`kind`, `address`, `args`) that `docs/llds/static-mapping.md`'s Opinionated Default Map tables and `MAP-CONFIG-004` specify. This claim is scoped to the **static dict's content only** — it does not cover runtime dispatch behavior (`MAP-TABLE-001/002/003/005`: channel-match gating, send cadence, one-shot enforcement, unmapped-event handling), which is enacted by `MappingEngine.process()` and is not observable from this dict, nor `MAP-CONFIG-002/005/006/007/008` (input-schema validation, WebSocket-key sourcing, Bank membership — different functions entirely). Exact dict equality is the correct oracle here precisely because the table's content is itself the object being asserted; it would not be an appropriate oracle for the runtime-behavior specs this claim excludes.
 **Valid initial-state domain:** n/a — pure synthesis function.
 
 | Dimension | Discharge |
 |---|---|
-| fader entries (Studio, nanoKONTROL2) | residual gap — evidence planned |
-| knob entries (Studio, nanoKONTROL2) | residual gap — evidence planned |
-| mute entries (Studio, nanoKONTROL2) | residual gap — evidence planned |
-| shared button entries (Studio, nanoKONTROL2, incl. Scene-button override) | residual gap — evidence planned |
-| absent-key handling (`MAP-CONFIG-004`) | residual gap — evidence planned |
-| generalization to arbitrary third-party `controls:` declarations | residual gap — not planned; separately tracked (see below) |
+| fader entries (`_fader_entries()`, Studio, nanoKONTROL2) | covered |
+| knob entries (`_knob_entries()`, Studio, nanoKONTROL2) | covered |
+| mute entries (`_mute_entries()`, Studio, nanoKONTROL2) | covered |
+| transport entries (`_transport_entries()`, Studio, nanoKONTROL2, incl. omitted-key absence) | covered |
+| Scene-button insertion (`build_opinionated_map()`'s own `has_scene_button` block) | covered |
+| generalization to arbitrary third-party `controls:` declarations | residual gap — deferred, not planned (see below) |
+| runtime dispatch behavior (`MAP-TABLE-001/002/003/005`) | not part of this claim — no property currently admits this concern (see below) |
 
 | Claim | Property Type | Evidence IDs | Current support |
 |---|---|---|---|
-| `build_opinionated_map`'s output matches the Opinionated Table/Config specs, for the Studio's and nanoKONTROL2's declared controls specifically | Functional correctness; Refinement/equivalence | `EVID-004` | **Not currently established.** The existing test (`test_mapping_config_schema.py:76,81`) compares the function's output to constants that are themselves produced by the same function call — regression/change-detection evidence only, not correctness evidence (`docs/evidence-selection.md § Self-derived snapshots are not correctness evidence`). This is the system's highest-blast-radius chokepoint with the weakest current evidence. |
+| `build_opinionated_map`'s returned dict has correct key membership and per-key `kind`/`address`/`args`, for the Studio's and nanoKONTROL2's declared controls specifically | Functional correctness; Refinement/equivalence | `EVID-004` | **Established** for all five named dimensions, by hand-derived golden-value tests (`test_studio_opinionated_map_matches_hand_derived_golden_table`, `test_nanokontrol2_opinionated_map_matches_hand_derived_golden_table`, `test_studio_opinionated_map_omits_a_hand_derived_entry_when_that_transport_key_is_absent`), independent of `build_opinionated_map`'s own code path. Mutation/reintroduction-verified against `_fader_entries()`, `_knob_entries()`, `_mute_entries()`, `_transport_entries()`, and the Scene-button insertion (2026-08-26). The pre-existing `test_mapping_config_schema.py:76,81` remains present and still provides regression/change-detection value only. |
 
-**Coverage notes:** a hand-authored, spec-derived golden table is specified in `evidence-handoff.md` as the evidence plan, scoped to the two bundled profiles. Until built, no dimension above is covered by evidence; this section must not be read as claiming correctness. This claim does not extend to third-party Controller Profiles — `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()` are the same shared code path for any profile, but no evidence, planned or realized, covers arbitrary third-party `controls:` declarations; that generalization is a separate, currently-accepted-as-unaddressed gap (`property-register.md` `DM-004`).
+**Coverage notes:** a hand-authored golden table, derived from the LLD's Opinionated Default Map data and `MAP-CONFIG-004`, now exists in `tests/test_mapping_config_schema.py`, scoped to the two bundled profiles. This claim does not extend to third-party Controller Profiles — `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_transport_entries()` are the same shared code path for any profile, but no evidence covers arbitrary third-party `controls:` declarations; that generalization is a separate, currently-deferred gap (`property-register.md` `DM-004`). Separately: runtime dispatch behavior (`MAP-TABLE-001/002/003/005` — whether `MappingEngine.process()` correctly acts on this now-established table) is a related but distinct concern with no registered property in this pass; this section says nothing about dispatch correctness.
 
 ### 3.5 Controller Profile Config Parsing
 
@@ -169,6 +170,7 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 | Role | Item | Catches / enforces / treats | Does NOT establish |
 |---|---|---|---|
 | Direct evidence | Example tests, executed (`DM-002`, `DM-005`, `DM-006`, `DM-008`, `DM-009`) | Specific named scenarios and boundary conditions | Behavior outside the tested cases |
+| Direct evidence | Hand-derived golden-value tests, executed and mutation-verified (`DM-004`) | Static table content (key membership, per-entry `kind`/`address`/`args`), independent of the implementation's own code path | Runtime dispatch behavior; third-party Controller Profiles |
 | Direct evidence | Example test artifact, written but unexecuted in this environment (`DM-007`) | Nothing yet — content is plausible by inspection only | A passing result; do not treat as equivalent to the executed rows above |
 | Direct evidence | Property-based tests (`DM-001`–`003`) | Broad sampled coverage of generated input/sequence spaces | Universality — sampled evidence, not proof |
 | Direct evidence | Hypothesis fuzz campaign (`DM-001`) | Unstructured/adversarially-shaped malformed input, deadline-bounded | Guaranteed termination proof; bounded by the deadline and generator strategy |
@@ -179,7 +181,7 @@ See `docs/high-level-design.md` and `docs/llds/*.md` for the full architecture; 
 | Risk/assumption treatment | Explicit assumption (`DM-EA-001`, `DM-EA-002`, `DM-EA-003`) | Names what's assumed and on what basis | Nothing beyond the stated assumption — not a substitute for evidence |
 | Risk/assumption treatment | Accept risk (E-Stop delivery-failure visibility, no frontmost-window check — §6.1, §6.2) | Names a known, already-decided limitation | Nothing — deliberately unaddressed by design |
 
-**Evidence independence note:** no claim in this document currently relies on differential testing against a second implementation, so no shared-bug-risk analysis is required by `docs/evidence-selection.md § Shared-bug-risk analysis`. `DM-004`'s planned golden-table evidence is a known-value comparison against a hand-derived spec value, not a second implementation — its independence rests on the golden table never being derived from `build_opinionated_map`'s own code path (stated explicitly in `evidence-matrix.md`'s `EVID-004`), not on a differential-independence argument.
+**Evidence independence note:** no claim in this document currently relies on differential testing against a second implementation, so no shared-bug-risk analysis is required by `docs/evidence-selection.md § Shared-bug-risk analysis`. `DM-004`'s realized golden-table evidence is a known-value comparison against a hand-derived spec value, not a second implementation — its independence rests on the golden table never being derived from `build_opinionated_map`'s own code path (stated explicitly in `evidence-matrix.md`'s `EVID-004`), not on a differential-independence argument.
 
 ## 5. Assumptions
 
@@ -207,9 +209,9 @@ If the WebSocket Output Adapter fails to bind, has no active connection, or a se
 
 A keystroke-mapped control (the jog wheel's Arc Motion Control stepping) can affect an unrelated foreground application if Dragonframe isn't OS-focused. Explicit HLD Non-Goal; accepted risk, mirrors how a physical keypress behaves.
 
-### 6.3 Opinionated map synthesis correctness is currently unestablished
+### 6.3 Opinionated map runtime dispatch behavior is an unaddressed, untracked concern
 
-`DM-004` (§3.4) is this document's most significant open gap — the highest-blast-radius chokepoint in the mapping layer has no correctness evidence yet, only a self-referential regression check. Evidence is planned (`evidence-handoff.md`); until it lands, this document does not claim the synthesized map is correct for any profile, bundled or third-party.
+`DM-004` (§3.4)'s static table-content claim is now established for the two bundled profiles (2026-08-26), closing this document's previously most significant open gap. What remains unaddressed, and is not currently tracked by any registered property: whether `MappingEngine.process()` correctly *acts* on this now-correct table at runtime (`MAP-TABLE-001/002/003/005`'s channel-match, send-cadence, one-shot, and unmapped-event rules). `DM-004`'s evidence says nothing about this, and nothing else in this document establishes it either. Third-party Controller Profiles' table content also remains unaddressed (`DM-004`'s residual gap).
 
 ### 6.4 AXn axis-identity assumption is unverified, and cannot be fully verified by the only available method
 
@@ -235,7 +237,7 @@ A keystroke-mapped control (the jog wheel's Arc Motion Control stepping) can aff
 - OSC bundle decoding deterministically rejects malformed framing at four named boundaries (non-positive/oversized `element_size`, over-depth nesting) via a well-typed error; the broader "arbitrary byte input" framing is supported, not proven, by sampled fuzz exploration (§3.1).
 - A Controller Profile switch fully isolates subsequent dispatch from the previous profile's state, verified across a full post-switch trace, not just the first event (§3.2).
 - Bank-derived knob nudges keep the tracked axis position within its configured range, including recovery from an out-of-range starting position, verified by property tests and mutation-confirmed to actually discriminate a broken clamp formula (§3.3).
-- **Opinionated map synthesis correctness is not currently established, for either bundled profile** — this document does not claim `build_opinionated_map`'s output is correct against the spec, and does not address third-party profiles at all (§3.4, §6.3).
+- **Opinionated map static table content is correct for both bundled profiles** — established by hand-derived, mutation-verified golden-value tests, independent of `build_opinionated_map`'s own code path. Third-party profiles remain unaddressed, and this says nothing about whether `MappingEngine.process()` correctly dispatches from this table at runtime — that is a separate, currently untracked concern (§3.4, §6.3).
 - Malformed Controller Profile config files and malformed Preset Store entries are rejected without affecting other valid data (§3.5, §3.6).
 - **WebSocket-targeted command dispatch (including `E-Stop`) is specified and backed by a written test artifact, but is not currently established by a passing execution** — the test suite cannot run in this development environment (§3.7, §6.5). A delivery failure, even when the code is correct, also produces no operator-visible signal (§6.1).
 - Keystroke synthesis releases every pressed modifier when a press or lookup call fails; a failing `release()` call itself is explicitly outside this claim, not covered (§3.8).

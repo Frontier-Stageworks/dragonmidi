@@ -15,6 +15,7 @@ from dragonmidi.mapping import (
     OPINIONATED_MAP_STUDIO,
     ControlsConfig,
     ControlsConfigError,
+    _MapEntry,
     build_bank_membership,
     build_opinionated_map,
     build_websocket_keys,
@@ -79,6 +80,82 @@ def test_studio_controls_synthesize_a_map_identical_to_the_legacy_constant() -> 
 # @spec MAP-CONFIG-003, MAP-CONFIG-001
 def test_nanokontrol2_controls_synthesize_a_map_identical_to_the_legacy_constant() -> None:
     assert build_opinionated_map(NANOKONTROL2_CONTROLS, has_scene_button=False) == OPINIONATED_MAP_NANOKONTROL2
+
+
+# --- Golden-value test: static opinionated-table content is correct, independent of
+# --- build_opinionated_map's own output (docs/maps/dragonmidi-system/evidence-handoff.md
+# --- § DM-004). The tests above compare the function's output to OPINIONATED_MAP_STUDIO/
+# --- _NANOKONTROL2, which are themselves produced by calling this same function with these
+# --- same arguments - regression/change-detection evidence only. The fixtures below are
+# --- hand-derived directly from docs/llds/static-mapping.md's Opinionated Default Map
+# --- tables and MAP-CONFIG-004, never from build_opinionated_map or the legacy constants,
+# --- and are therefore independent correctness evidence for the two bundled profiles'
+# --- static table content (key membership + kind/address/args) - not for any runtime
+# --- dispatch behavior, which is MappingEngine.process()'s concern, not this dict's.
+
+# Faders 1-8 (CC 0-7): continuous absolute, /dragonframe/encoder/1-8
+# (docs/llds/static-mapping.md § The Opinionated Default Map (nanoKONTROL Studio))
+_EXPECTED_FADER_ENTRIES = {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{i + 1}") for i, cc in enumerate(range(8))}
+
+# Knobs 1-8 (CC 16-23): continuous absolute, /dragonframe/encoder/9-16
+_EXPECTED_KNOB_ENTRIES = {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{9 + i}") for i, cc in enumerate(range(16, 24))}
+
+# Mute 1-8 (CC 48-55): press edge, /dragonframe/encoderReset/1-8
+_EXPECTED_MUTE_ENTRIES = {("cc", cc): _MapEntry("press", f"/dragonframe/encoderReset/{i + 1}") for i, cc in enumerate(range(48, 56))}
+
+# Transport Record/Play/Rewind/Fast Forward are the only OSC-targeted transport roles;
+# Stop/Cycle/Previous Marker/Next Marker are WebSocket-targeted (MAP-CONFIG-005) and
+# Previous/Next Track are Group-targeted (MAP-GROUP-003) - neither produces a row here.
+_EXPECTED_TRANSPORT_ENTRIES = {
+    ("cc", 45): _MapEntry("press", "/dragonframe/shoot", args=(1,)),  # record
+    ("cc", 41): _MapEntry("press", "/dragonframe/play"),  # play
+    ("cc", 43): _MapEntry("press", "/dragonframe/stepBackward"),  # rewind
+    ("cc", 44): _MapEntry("press", "/dragonframe/stepForward"),  # fast_forward
+}
+
+_EXPECTED_SHARED_ENTRIES = {
+    **_EXPECTED_FADER_ENTRIES,
+    **_EXPECTED_KNOB_ENTRIES,
+    **_EXPECTED_MUTE_ENTRIES,
+    **_EXPECTED_TRANSPORT_ENTRIES,
+}
+
+# Scene button (Studio only, has_scene_button=True): press edge, /dragonframe/black
+_EXPECTED_STUDIO_MAP = {
+    **_EXPECTED_SHARED_ENTRIES,
+    ("korg_scene", None): _MapEntry("press", "/dragonframe/black"),
+}
+
+_EXPECTED_NANOKONTROL2_MAP = dict(_EXPECTED_SHARED_ENTRIES)
+
+
+# @spec MAP-CONFIG-001, MAP-CONFIG-002, MAP-CONFIG-004
+def test_studio_opinionated_map_matches_hand_derived_golden_table() -> None:
+    assert build_opinionated_map(STUDIO_CONTROLS, has_scene_button=True) == _EXPECTED_STUDIO_MAP
+
+
+# @spec MAP-CONFIG-001, MAP-CONFIG-002, MAP-CONFIG-004
+def test_nanokontrol2_opinionated_map_matches_hand_derived_golden_table() -> None:
+    assert build_opinionated_map(NANOKONTROL2_CONTROLS, has_scene_button=False) == _EXPECTED_NANOKONTROL2_MAP
+
+
+# @spec MAP-CONFIG-004
+def test_studio_opinionated_map_omits_a_hand_derived_entry_when_that_transport_key_is_absent() -> None:
+    # A synthetic minimal declaration missing next_track: the golden table for this case
+    # is simply _EXPECTED_SHARED_ENTRIES minus nothing, since next_track was never one of
+    # _EXPECTED_TRANSPORT_ENTRIES's OSC-targeted rows in the first place - the assertion
+    # that matters is that no unexpected row appears, not that one disappears from OSC
+    # entries. Use a field genuinely present in _EXPECTED_TRANSPORT_ENTRIES instead: rewind.
+    controls = ControlsConfig(
+        faders=tuple(range(8)),
+        knobs=tuple(range(16, 24)),
+        mutes=tuple(range(48, 56)),
+        solos=tuple(range(32, 40)),
+        transport={k: v for k, v in _SHARED_TRANSPORT.items() if k != "rewind"},
+        jog_wheel=None,
+    )
+    expected = {k: v for k, v in _EXPECTED_SHARED_ENTRIES.items() if k != ("cc", 43)}
+    assert build_opinionated_map(controls, has_scene_button=False) == expected
 
 
 # --- MAP-CONFIG-001/002: the map is genuinely parameterized, not hardcoded ---

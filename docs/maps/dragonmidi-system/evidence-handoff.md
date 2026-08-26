@@ -2,66 +2,17 @@
 
 Phase 7 artifact. The downstream implementer is LID (`CLAUDE.md` declares `## LID Mode: Full`) — MAPS specifies; it does not implement.
 
-**Not every approved property appears here.** `DM-001`, `DM-002`, `DM-003`, `DM-005`, `DM-006`, `DM-EA-003` have realized evidence with no open residual gap requiring action — see `property-register.md`/`evidence-matrix.md`. `DM-009` and `DM-EA-001` concluded "additional evidence: none justified" (`evidence-matrix.md` `EVID-009`, `EVID-010`) — that conclusion lives there, not here.
+**Not every approved property appears here.** `DM-001`, `DM-002`, `DM-003`, `DM-004`, `DM-005`, `DM-006`, `DM-EA-003` have realized evidence for their primary claim with no open residual gap requiring action — see `property-register.md`/`evidence-matrix.md`. `DM-009` and `DM-EA-001` concluded "additional evidence: none justified" (`evidence-matrix.md` `EVID-009`, `EVID-010`) — that conclusion lives there, not here. (`DM-004`'s golden-value test was specified here and has since been realized — `tests/test_mapping_config_schema.py`, mutation-verified 2026-08-26; only its secondary, deferred third-party-generalization gap remains listed below.)
 
 ## Gap disposition routing
 
 | Property / gap | Gap disposition | Block used below |
 |---|---|---|
-| `DM-004`, bundled-profile evidence | Produce evidence | Generic evidence-work specification (known-value/golden testing) |
 | `DM-004`, third-party-profile generalization gap | Defer | No action scheduled |
 | `DM-007`, environment-platform validation gap | Resolve through LID/design | Design-decision handoff (light — dependency install, not a design choice) |
 | `DM-008`, doubly-failing-`release()` gap | Defer | No action scheduled |
 | `DM-EA-002`, initial verification | Manual/operational verification | Manual verification procedure |
 | `DM-EA-002`, generalization-beyond-tested-configuration gap | Accept risk | No action scheduled |
-
-## Generic evidence-work specification
-
-### DM-004 — Known-value/golden testing specification: Opinionated map synthesis (Studio + nanoKONTROL2 only)
-
-```text
-Evidence purpose: correctness
-Evidence ID: EVID-004
-Claim / uncertainty addressed: does build_opinionated_map's output, for the
-  Studio's and nanoKONTROL2's declared controls specifically, actually match
-  what MAP-TABLE-001/002/003/005 and MAP-CONFIG-004/005/006/007/008 require —
-  independent of what the function itself currently produces? This evidence
-  does not address arbitrary third-party controls: declarations — see the
-  DM-004 No-action-scheduled entry below for that separately-tracked gap.
-Oracle: a hand-authored golden table, one per bundled profile (Studio,
-  nanoKONTROL2), derived directly from the spec text above and each profile's
-  own declared CC/channel numbers.
-Oracle authority: high — computed by a human from the current specification,
-  never from build_opinionated_map, OPINIONATED_MAP_STUDIO/_NANOKONTROL2 (both
-  produced by the function under test), or git history (repository history is
-  opt-in only per SKILL.md § Repository history, and this claim does not
-  depend on any historical fact — the current spec text is the authority).
-Important blind spot: any Opinionated Table requirement not represented in
-  the hand-derived table stays uncovered even after this evidence lands —
-  the claim-dimension list below must be complete, not merely plausible.
-Expected assurance gain: this becomes the first evidence for this claim that
-  could actually fail if the implementation were wrong; the existing test
-  (test_mapping_config_schema.py:76,81) cannot, by construction.
-```
-
-**Direct-evidence method:** Known-value/golden testing.
-
-**Target and environment:** `mapping.py::build_opinionated_map`, called with `STUDIO_CONTROLS`/`has_scene_button=True` and `NANOKONTROL2_CONTROLS`/`has_scene_button=False`.
-
-**Procedure:**
-1. From `docs/specs/static-mapping.md`'s Opinionated Table and Bank Derivation sections plus each profile's declared `controls:` CC/channel values, hand-derive the complete expected mapping table for both bundled profiles: all 8 fader entries, all 8 knob entries, all 8 mute entries, and every shared-button/transport entry (including the Studio's Scene-button override). Write these as literal Python dicts directly in the test file — never by calling `build_opinionated_map`, and never by importing `OPINIONATED_MAP_STUDIO`/`_NANOKONTROL2`.
-2. Add a dedicated case for `MAP-CONFIG-004` (absent-key handling): a synthetic minimal `controls:` declaration omitting one optional key (e.g. `next_track`), asserting no row is produced for it.
-3. Assert `build_opinionated_map(...)` equals the corresponding hand-derived table, for each bundled profile.
-
-**Decision criterion:** exact dict equality between `build_opinionated_map`'s output and the hand-derived table, for both profiles and the absent-key case.
-
-**Artifact/result to record:** the new golden-table test file/function names, plus a note in `property-register.md`'s `DM-004` entry once evidence lands.
-
-**Freshness/revalidation trigger:** re-derive the golden table whenever `MAP-TABLE-*`, `MAP-CONFIG-004..008`, or either bundled profile's declared `controls:` values change.
-
-**Discrimination / anti-vacuity challenge (required — high-value claim):** deliberately alter one entry in each of `_fader_entries()`, `_knob_entries()`, `_mute_entries()`, `_shared_button_entries()` (e.g. shift a target CC/address by one) and confirm the golden test fails; revert and confirm it passes again. This establishes the golden test discriminates a broken implementation from a correct one — it does not, by itself, establish the golden values were correct in the first place; that rests on the hand-derivation in step 1, not on this challenge.
-
-**LID entry point:** Phase 5 (tests-first) — `MAP-CONFIG-004`, `MAP-TABLE-001/002/003/005` already exist as EARS requirements; no LLD/EARS change needed first.
 
 ## Design-decision handoff
 
@@ -87,7 +38,7 @@ Expected assurance gain: this becomes the first evidence for this claim that
 **Revisit trigger:** third-party Controller Profile adoption growing materially, or a bug report implicating a third-party profile's synthesized map.
 
 **Disposition:** Defer.
-**Basis:** `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_shared_button_entries()` are the same shared code path for any Controller Profile, but the golden-table evidence above covers only the two bundled profiles' concrete declared values — it says nothing about correctness for an arbitrary third-party `controls:` declaration. Building an evidence method that genuinely covers the universal domain (e.g., an independent reference re-implementation of the whole synthesis logic, exercised via property-based testing over generated `controls:` declarations) is a substantially larger undertaking than the bundled-profile golden table and isn't justified without evidence that third-party profiles are seeing real use.
+**Basis:** `_fader_entries()`/`_knob_entries()`/`_mute_entries()`/`_transport_entries()` (plus the Scene-button insertion in `build_opinionated_map()` itself) are the same shared code path for any Controller Profile, but `DM-004`'s realized golden-table evidence (`tests/test_mapping_config_schema.py`) covers only the two bundled profiles' concrete declared values — it says nothing about correctness for an arbitrary third-party `controls:` declaration. Building an evidence method that genuinely covers the universal domain (e.g., an independent reference re-implementation of the whole synthesis logic, exercised via property-based testing over generated `controls:` declarations) is a substantially larger undertaking than the bundled-profile golden table and isn't justified without evidence that third-party profiles are seeing real use.
 **Owner / revisit trigger:** see above.
 **Future direct-evidence plan:** if revisited, the most direct option is a hand-written independent reference implementation of `_fader_entries()`/etc.'s rules, differential-tested against `build_opinionated_map` over property-based-generated `controls:` declarations — classified as a SPECIFICATION REFERENCE (`docs/evidence-selection.md § Reference classification`), with its own shared-bug-risk analysis since both would derive from the same spec text.
 
