@@ -3,12 +3,19 @@ name: Build Windows Executable
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: windows-latest
+    # Azure federated credentials match the OIDC subject exactly (no
+    # wildcards); running in an environment pins the subject to
+    # repo:Frontier-Stageworks/dragonmidi:environment:code-signing.
+    environment: code-signing
+    permissions:
+      # id-token: OIDC federation for azure/login (Artifact Signing) — no
+      # long-lived Azure secret stored in the repo.
+      # contents: write — the release step attaches the .exe to the tag.
+      id-token: write
+      contents: write
 
     steps:
       - name: Checkout
@@ -26,6 +33,36 @@ jobs:
 
       - name: Build with PyInstaller
         run: pyinstaller packaging/DragonMIDI-win.spec --clean --noconfirm
+
+      # Account/profile/endpoint are repo variables (not secret); the Azure
+      # IDs are secrets. Unconfigured = hard failure, never a silently
+      # unsigned release.
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign with Azure Artifact Signing
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\DragonMIDI.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: DragonMIDI
+
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature dist\DragonMIDI.exe
+          $sig | Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+          if ($sig.Status -ne 'Valid') { throw "DragonMIDI.exe signature status: $($sig.Status)" }
+          if (-not $sig.TimeStamperCertificate) { throw "DragonMIDI.exe signature is not timestamped" }
 
       - name: Upload warnings
         uses: actions/upload-artifact@v4

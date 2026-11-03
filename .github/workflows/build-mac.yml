@@ -9,6 +9,9 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    # Developer ID cert + notary API key live as secrets on this environment
+    # (shared with the Windows build's Azure signing credentials).
+    environment: code-signing
 
     steps:
       - name: Checkout
@@ -39,13 +42,85 @@ jobs:
           sips -z 1024 1024 assets/dragonmidi.png --out dragonmidi.iconset/icon_512x512@2x.png
           iconutil -c icns dragonmidi.iconset -o assets/dragonmidi.icns
 
-      - name: Build with PyInstaller
-        run: pyinstaller packaging/DragonMIDI-mac.spec --clean --noconfirm
+      # Temporary keychain holding only the Developer ID identity; deleted in
+      # the always() cleanup step at the end of the job.
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/devid.p12"
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN"
+          security import "$RUNNER_TEMP/devid.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          # Prepend to the search list, keeping the existing keychains.
+          EXISTING=()
+          while IFS= read -r kc; do
+            EXISTING+=("$(echo "$kc" | sed -e 's/^[[:space:]]*"//' -e 's/"$//')")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN" "${EXISTING[@]}"
+          rm "$RUNNER_TEMP/devid.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      # PyInstaller signs every collected binary and the bundle itself when
+      # given an identity (see DragonMIDI-mac.spec). STRICT makes a signing
+      # failure fail the build instead of a warning; VERIFY runs
+      # `codesign --verify --deep --strict` on the finished bundle.
+      - name: Build and sign with PyInstaller
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          PYINSTALLER_STRICT_BUNDLE_CODESIGN_ERROR: '1'
+          PYINSTALLER_VERIFY_BUNDLE_SIGNATURE: '1'
+        run: |
+          test -n "$MACOS_SIGNING_IDENTITY" || { echo "::error::MACOS_SIGNING_IDENTITY not set"; exit 1; }
+          pyinstaller packaging/DragonMIDI-mac.spec --clean --noconfirm
+          codesign -dv --verbose=2 dist/DragonMIDI.app 2>&1 | grep -E 'Authority|TeamIdentifier|flags|Timestamp'
+
+      # ditto, not zip -r: zip mangles the symlinks inside the Qt .framework
+      # bundles, which invalidates their signatures.
+      - name: Notarize and staple
+        working-directory: dist
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
+        run: |
+          KEY="$RUNNER_TEMP/notary_key.p8"
+          echo "$APPLE_API_KEY_P8" | base64 --decode > "$KEY"
+          ditto -c -k --keepParent DragonMIDI.app notarize.zip
+          xcrun notarytool submit notarize.zip --wait --timeout 30m \
+            --key "$KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --output-format json > notary.json || true
+          cat notary.json
+          SUBMISSION_ID=$(python3 -c "import json;print(json.load(open('notary.json')).get('id',''))")
+          STATUS=$(python3 -c "import json;print(json.load(open('notary.json')).get('status',''))")
+          if [ -n "$SUBMISSION_ID" ]; then
+            # Apple's per-file report: names every binary it rejected and why.
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --key "$KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID"
+          fi
+          rm -f "$KEY" notarize.zip
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization status: ${STATUS:-submission failed}"
+            exit 1
+          fi
+          xcrun stapler staple DragonMIDI.app
+          xcrun stapler validate DragonMIDI.app
+          spctl --assess --type execute --verbose=4 DragonMIDI.app
 
       - name: Package .app as zip
         run: |
           cd dist
-          zip -r DragonMIDI-mac.zip DragonMIDI.app
+          ditto -c -k --keepParent DragonMIDI.app DragonMIDI-mac.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -61,3 +136,7 @@ jobs:
           files: dist/DragonMIDI-mac.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true

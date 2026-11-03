@@ -59,8 +59,11 @@ exe = EXE(
     console=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    # CI sets MACOS_SIGNING_IDENTITY (Developer ID Application); PyInstaller then
+    # signs every collected binary and the bundle with hardened runtime +
+    # timestamp. Unset (local builds) = ad-hoc signing, as before.
+    codesign_identity=os.environ.get('MACOS_SIGNING_IDENTITY') or None,
+    entitlements_file=os.path.join(REPO_ROOT, 'assets/entitlements.plist'),
 )
 
 coll = COLLECT(
