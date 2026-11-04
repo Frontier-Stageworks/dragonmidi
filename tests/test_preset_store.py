@@ -36,7 +36,7 @@ def test_save_creates_the_configurations_dir_and_a_file_named_after_the_profile(
 def test_save_then_load_round_trips_bank_and_group_indices(configs_dir: Path) -> None:
     table = {1: {1: {"axis_name": "PAN", "min": 0.0, "max": 100.0}}, 3: {2: {"axis_name": "TILT", "min": -50.0, "max": 50.0}}}
     save_group_axis_targets(configs_dir, "nanoKONTROL Studio", table)
-    loaded = load_group_axis_targets(configs_dir, "nanoKONTROL Studio")
+    loaded = load_group_axis_targets(configs_dir, "nanoKONTROL Studio", 8)
     assert loaded == table
 
 
@@ -44,8 +44,8 @@ def test_save_then_load_round_trips_bank_and_group_indices(configs_dir: Path) ->
 def test_two_profiles_get_independent_files(configs_dir: Path) -> None:
     save_group_axis_targets(configs_dir, "nanoKONTROL Studio", {1: {1: _VALID_ENTRY}})
     save_group_axis_targets(configs_dir, "nanoKONTROL2", {2: {1: _VALID_ENTRY}})
-    assert load_group_axis_targets(configs_dir, "nanoKONTROL Studio") == {1: {1: _VALID_ENTRY}}
-    assert load_group_axis_targets(configs_dir, "nanoKONTROL2") == {2: {1: _VALID_ENTRY}}
+    assert load_group_axis_targets(configs_dir, "nanoKONTROL Studio", 8) == {1: {1: _VALID_ENTRY}}
+    assert load_group_axis_targets(configs_dir, "nanoKONTROL2", 8) == {2: {1: _VALID_ENTRY}}
 
 
 # --- MAP-STORE-002: missing file is not an error, not a bulk-populate loop ---
@@ -53,13 +53,13 @@ def test_two_profiles_get_independent_files(configs_dir: Path) -> None:
 
 # @spec MAP-STORE-002
 def test_load_with_no_file_returns_an_empty_table(configs_dir: Path) -> None:
-    assert load_group_axis_targets(configs_dir, "Never Saved") == {}
+    assert load_group_axis_targets(configs_dir, "Never Saved", 8) == {}
 
 
 # @spec MAP-STORE-002
 def test_load_with_no_configurations_dir_at_all_returns_an_empty_table(tmp_path: Path) -> None:
     never_created = tmp_path / "does" / "not" / "exist"
-    assert load_group_axis_targets(never_created, "Anything") == {}
+    assert load_group_axis_targets(never_created, "Anything", 8) == {}
 
 
 # --- MAP-STORE-003: bounds validation, invalid entries skipped with a logged warning ---
@@ -73,7 +73,7 @@ def test_bank_index_zero_is_rejected_not_misassigned_via_negative_indexing(confi
     path = configs_dir
     path.mkdir(parents=True)
     (path / "Test.json").write_text(json.dumps({"bank_axes": {"0": {"1": _VALID_ENTRY}}}))
-    loaded = load_group_axis_targets(configs_dir, "Test")
+    loaded = load_group_axis_targets(configs_dir, "Test", 8)
     assert loaded == {}
     assert "bank" in caplog.text.lower()
 
@@ -83,7 +83,7 @@ def test_bank_index_zero_is_rejected_not_misassigned_via_negative_indexing(confi
 def test_out_of_range_or_non_numeric_bank_index_is_skipped(configs_dir: Path, bad_bank_index: str) -> None:
     configs_dir.mkdir(parents=True)
     (configs_dir / "Test.json").write_text(json.dumps({"bank_axes": {bad_bank_index: {"1": _VALID_ENTRY}}}))
-    assert load_group_axis_targets(configs_dir, "Test") == {}
+    assert load_group_axis_targets(configs_dir, "Test", 8) == {}
 
 
 @pytest.mark.parametrize("bad_group_index", ["0", "6", "-1", "not_a_number"])
@@ -91,7 +91,17 @@ def test_out_of_range_or_non_numeric_bank_index_is_skipped(configs_dir: Path, ba
 def test_out_of_range_or_non_numeric_group_index_is_skipped(configs_dir: Path, bad_group_index: str) -> None:
     configs_dir.mkdir(parents=True)
     (configs_dir / "Test.json").write_text(json.dumps({"bank_axes": {"1": {bad_group_index: _VALID_ENTRY}}}))
-    assert load_group_axis_targets(configs_dir, "Test") == {}
+    assert load_group_axis_targets(configs_dir, "Test", 8) == {}
+
+
+# @spec MAP-STORE-003
+def test_bank_index_ceiling_is_the_caller_supplied_bank_count_not_a_fixed_8(configs_dir: Path) -> None:
+    # Bank index 9 is out of range for an 8-bank profile but perfectly valid for a
+    # 12-bank one - the ceiling is the bank_count argument, not a module constant.
+    configs_dir.mkdir(parents=True)
+    (configs_dir / "Test.json").write_text(json.dumps({"bank_axes": {"9": {"1": _VALID_ENTRY}}}))
+    assert load_group_axis_targets(configs_dir, "Test", 8) == {}
+    assert load_group_axis_targets(configs_dir, "Test", 12) == {9: {1: _VALID_ENTRY}}
 
 
 @pytest.mark.parametrize(
@@ -107,7 +117,7 @@ def test_out_of_range_or_non_numeric_group_index_is_skipped(configs_dir: Path, b
 def test_malformed_entry_shape_is_skipped(configs_dir: Path, bad_entry: dict) -> None:
     configs_dir.mkdir(parents=True)
     (configs_dir / "Test.json").write_text(json.dumps({"bank_axes": {"1": {"1": bad_entry}}}))
-    assert load_group_axis_targets(configs_dir, "Test") == {}
+    assert load_group_axis_targets(configs_dir, "Test", 8) == {}
 
 
 # @spec MAP-STORE-003
@@ -123,7 +133,7 @@ def test_invalid_entries_do_not_block_the_files_other_valid_entries(configs_dir:
             }
         )
     )
-    loaded = load_group_axis_targets(configs_dir, "Test")
+    loaded = load_group_axis_targets(configs_dir, "Test", 8)
     assert loaded == {2: {1: {"axis_name": "TILT", "min": 0.0, "max": 100.0}}}
 
 
@@ -131,7 +141,7 @@ def test_invalid_entries_do_not_block_the_files_other_valid_entries(configs_dir:
 def test_completely_malformed_json_is_treated_like_a_missing_file(configs_dir: Path, caplog: pytest.LogCaptureFixture) -> None:
     configs_dir.mkdir(parents=True)
     (configs_dir / "Test.json").write_text("{not valid json")
-    assert load_group_axis_targets(configs_dir, "Test") == {}
+    assert load_group_axis_targets(configs_dir, "Test", 8) == {}
 
 
 # --- MAP-STORE-004: save rewrites the whole table, not a diff/merge ---
@@ -141,7 +151,7 @@ def test_completely_malformed_json_is_treated_like_a_missing_file(configs_dir: P
 def test_save_fully_replaces_the_previous_contents_not_merges(configs_dir: Path) -> None:
     save_group_axis_targets(configs_dir, "Test", {1: {1: _VALID_ENTRY}, 2: {1: _VALID_ENTRY}})
     save_group_axis_targets(configs_dir, "Test", {1: {1: _VALID_ENTRY}})  # Bank 2's entry dropped
-    loaded = load_group_axis_targets(configs_dir, "Test")
+    loaded = load_group_axis_targets(configs_dir, "Test", 8)
     assert loaded == {1: {1: _VALID_ENTRY}}
 
 
@@ -149,7 +159,7 @@ def test_save_fully_replaces_the_previous_contents_not_merges(configs_dir: Path)
 def test_save_with_an_empty_table_still_writes_a_valid_empty_file(configs_dir: Path) -> None:
     save_group_axis_targets(configs_dir, "Test", {1: {1: _VALID_ENTRY}})
     save_group_axis_targets(configs_dir, "Test", {})
-    assert load_group_axis_targets(configs_dir, "Test") == {}
+    assert load_group_axis_targets(configs_dir, "Test", 8) == {}
 
 
 # --- MAP-STORE-005: write failure fails silently, doesn't raise ---
@@ -188,4 +198,4 @@ def test_load_and_save_are_plain_synchronous_functions(configs_dir: Path) -> Non
     # A save followed immediately by a load in the same thread must see the write -
     # there is no deferred/background completion to race against.
     save_group_axis_targets(configs_dir, "Test", {1: {1: _VALID_ENTRY}})
-    assert load_group_axis_targets(configs_dir, "Test") == {1: {1: _VALID_ENTRY}}
+    assert load_group_axis_targets(configs_dir, "Test", 8) == {1: {1: _VALID_ENTRY}}

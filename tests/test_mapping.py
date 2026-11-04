@@ -1246,6 +1246,54 @@ def test_solo_n_offset_follows_the_active_group(fader_number: int) -> None:
     assert result == WebSocketCommand(f"select-AX{fader_number + 1 + 8}")  # N + 8*(2-1)
 
 
+_SYNTHETIC_NEXT_TRACK_CC = 111
+
+
+def _synthetic_profile(fader_count: int, solo_offset: int = 300):
+    # A non-8-bank profile, to prove MAP-WS-002's Group offset follows the active
+    # profile's bank_count rather than a hardcoded 8. Declares next_track so the
+    # test can advance the active Group through the same public press path every
+    # other Group-switching test uses, rather than reaching into a private method.
+    controls = ControlsConfig(
+        faders=tuple(range(fader_count)),
+        knobs=(),
+        mutes=(),
+        solos=tuple(range(solo_offset, solo_offset + fader_count)),
+        transport={"next_track": _SYNTHETIC_NEXT_TRACK_CC},
+        jog_wheel=None,
+    )
+    return build_profile(
+        name=f"Synthetic {fader_count}-Bank",
+        match_substring=f"synthetic{fader_count}bank",
+        has_native_mode=False,
+        default_channel=CHANNEL,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        controls=controls,
+    )
+
+
+@given(fader_number=st.sampled_from(list(range(12))))
+# @spec MAP-WS-002
+def test_solo_n_offset_follows_a_non_8_bank_counts_profile(fader_number: int) -> None:
+    # bank_count = 12: Group 2's offset must be 12 (N + 12*(2-1)), not 8.
+    profile = _synthetic_profile(fader_count=12)
+    engine = MappingEngine(profile=profile)
+    solo_cc = 300 + fader_number
+
+    engine.process_websocket(cc_event(solo_cc, 0, channel=CHANNEL), now=0.0)
+    result = engine.process_websocket(cc_event(solo_cc, 127, channel=CHANNEL), now=0.0)
+    assert result == WebSocketCommand(f"select-AX{fader_number + 1}")  # Group 1: offset 0 regardless of bank_count
+
+    engine.process(cc_event(_SYNTHETIC_NEXT_TRACK_CC, 0, channel=CHANNEL), now=1.0)
+    engine.process(cc_event(_SYNTHETIC_NEXT_TRACK_CC, 127, channel=CHANNEL), now=1.0)  # Group 1 -> 2
+    assert engine.active_group == 2
+
+    engine.process_websocket(cc_event(solo_cc, 0, channel=CHANNEL), now=2.0)
+    result = engine.process_websocket(cc_event(solo_cc, 127, channel=CHANNEL), now=2.0)
+    assert result == WebSocketCommand(f"select-AX{fader_number + 1 + 12}")  # N + bank_count*(2-1), bank_count=12
+
+
 @given(fader_number=st.sampled_from(FADER_CCS))
 # @spec MAP-WS-002, MAP-WS-009
 def test_solo_produces_no_osc_output(fader_number: int) -> None:

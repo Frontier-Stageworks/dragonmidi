@@ -11,7 +11,7 @@ JOG_WHEEL_ROW_KEY: _Key = ("cc", JOG_WHEEL_CC)
 JOG_WHEEL_ARC_ROW_KEY: _Key = ("jog_wheel_keystroke", None)
 KNOB_ROW_KEY: _Key = ("knob_summary", None)
 MUTE_ROW_KEY: _Key = ("mute_summary", None)
-SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for all 8 Solo CCs
+SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for all of a profile's Solo CCs
 
 
 def midi_source_label(key: _Key, channel: int) -> str:
@@ -71,14 +71,19 @@ def _bank_summary_rows(engine: MappingEngine) -> list[RowView]:
     """
     profile = engine.profile
     channel = profile.default_channel
+    bank_count = profile.bank_count
     rows: list[RowView] = []
     if profile.knob_to_fader:
+        # Only the bank-derived knobs (the first bank_count, positionally - MAP-CONFIG-008)
+        # occupy this encoder range; a profile with fewer knobs than bank_count has a
+        # shorter knob_to_fader, so the upper bound follows its actual size, not bank_count*2.
+        upper = bank_count + len(profile.knob_to_fader)
         rows.append(
             RowView(
                 key=KNOB_ROW_KEY,
                 name="Knob (pot)",
                 midi_source=cc_range_label(profile.knob_to_fader, channel),
-                target="Bank-derived: follows fader's axis, or Encoder 9-16 if unassigned",
+                target=f"Bank-derived: follows fader's axis, or Encoder {bank_count + 1}-{upper} if unassigned",
                 editable=False,
             )
         )
@@ -88,7 +93,7 @@ def _bank_summary_rows(engine: MappingEngine) -> list[RowView]:
                 key=MUTE_ROW_KEY,
                 name="Mute",
                 midi_source=cc_range_label(profile.mute_to_fader, channel),
-                target="Bank-derived: setZero on assigned axis, or Reset encoder 1-8",
+                target=f"Bank-derived: setZero on assigned axis, or Reset encoder 1-{len(profile.mute_to_fader)}",
                 editable=False,
             )
         )
@@ -162,11 +167,14 @@ def _websocket_target_rows(engine: MappingEngine) -> list[RowView]:
         )
     if ws_keys.solos:
         g = engine.active_group
-        low, high = 1 + 8 * (g - 1), 8 + 8 * (g - 1)
+        bank_count = engine.profile.bank_count
+        solo_count = len(ws_keys.solos)  # the actual Solo count - independent of bank_count
+        offset = bank_count * (g - 1)  # matches MappingEngine.process_websocket's own formula
+        low, high = 1 + offset, solo_count + offset
         rows.append(
             RowView(
                 key=SOLO_ROW_KEY,
-                name="Solo 1-8",
+                name=f"Solo 1-{solo_count}",
                 midi_source=cc_range_label(ws_keys.solos, channel),
                 # Recomputed every call from the active Group (@spec MAP-GROUP-002) -
                 # "button N -> AXN" phrasing dropped in favor of the plain Group

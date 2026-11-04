@@ -18,6 +18,7 @@ from dragonmidi.mapping import (
     _MapEntry,
     build_bank_membership,
     build_opinionated_map,
+    build_profile,
     build_websocket_keys,
     validate_controls_config,
 )
@@ -195,6 +196,26 @@ def test_omitted_transport_key_produces_no_row() -> None:
     assert ("cc", 45) not in result  # record was never declared
 
 
+# --- MAP-CONFIG-002/006: knob encoder-channel offset follows the profile's actual
+# --- fader count (bank_count), not a hardcoded 8 ---
+
+
+# @spec MAP-CONFIG-002
+def test_knob_encoder_offset_follows_fader_count_not_a_hardcoded_8() -> None:
+    # 4 faders -> knob encoder channels start at 5, not 9.
+    controls = _minimal_valid_controls(faders=tuple(range(4)), knobs=(100, 101))
+    result = build_opinionated_map(controls, has_scene_button=False)
+    assert result[("cc", 100)].address == "/dragonframe/encoder/5"
+    assert result[("cc", 101)].address == "/dragonframe/encoder/6"
+
+
+# @spec MAP-CONFIG-002
+def test_knob_encoder_offset_for_a_12_fader_profile() -> None:
+    controls = _minimal_valid_controls(faders=tuple(range(12)), knobs=(100,))
+    result = build_opinionated_map(controls, has_scene_button=False)
+    assert result[("cc", 100)].address == "/dragonframe/encoder/13"
+
+
 # --- MAP-CONFIG-005: WebSocket-targeted keys are sourced from controls too ---
 
 
@@ -235,22 +256,45 @@ def test_websocket_targeted_keys_are_absent_from_the_opinionated_map() -> None:
         assert ("cc", cc) not in result
 
 
-# --- MAP-CONFIG-006: faders/knobs/mutes/solos must each be exactly 8 entries ---
+# --- MAP-CONFIG-006: faders defines bank_count (>=1); knobs/mutes/solos are independently sized ---
 
 
-@pytest.mark.parametrize("field", ["faders", "knobs", "mutes", "solos"])
 # @spec MAP-CONFIG-006
-def test_wrong_length_control_list_fails_validation(field: str) -> None:
-    controls = _minimal_valid_controls(**{field: tuple(range(7))})
+def test_empty_faders_fails_validation() -> None:
+    controls = _minimal_valid_controls(faders=())
     with pytest.raises(ControlsConfigError):
         validate_controls_config(controls, has_jog_wheel=False)
 
 
-@pytest.mark.parametrize("field", ["faders", "knobs", "mutes", "solos"])
+@pytest.mark.parametrize("fader_count", [1, 4, 8, 12])
 # @spec MAP-CONFIG-006
-def test_exactly_8_entries_passes_validation(field: str) -> None:
-    controls = _minimal_valid_controls(**{field: tuple(range(8))})
+def test_faders_of_any_nonzero_length_passes_validation(fader_count: int) -> None:
+    controls = _minimal_valid_controls(faders=tuple(range(fader_count)))
+    validate_controls_config(controls, has_jog_wheel=False)  # must not raise - not pinned to 8
+
+
+@pytest.mark.parametrize("field", ["knobs", "mutes", "solos"])
+# @spec MAP-CONFIG-006
+def test_absent_knob_mute_solo_passes_validation(field: str) -> None:
+    # A device simply lacking a capability (empty list) is not a validation failure.
+    controls = _minimal_valid_controls(**{field: ()})
     validate_controls_config(controls, has_jog_wheel=False)  # must not raise
+
+
+@pytest.mark.parametrize("field", ["knobs", "mutes", "solos"])
+@pytest.mark.parametrize("count", [1, 7, 12])
+# @spec MAP-CONFIG-006
+def test_knob_mute_solo_length_independent_of_faders_count_passes_validation(field: str, count: int) -> None:
+    # 8 faders paired with a knobs/mutes/solos list of some other length (including
+    # more than 8, e.g. a device with more encoders than channel strips) is not rejected.
+    controls = _minimal_valid_controls(faders=tuple(range(8)), **{field: tuple(range(300, 300 + count))})
+    validate_controls_config(controls, has_jog_wheel=False)  # must not raise
+
+
+# @spec MAP-CONFIG-006
+def test_more_knobs_than_faders_passes_validation() -> None:
+    controls = _minimal_valid_controls(faders=tuple(range(4)), knobs=tuple(range(100, 116)))
+    validate_controls_config(controls, has_jog_wheel=False)  # must not raise - 16 knobs, 4 faders
 
 
 # --- MAP-CONFIG-007: jog_wheel is required when has_jog_wheel is true ---
@@ -296,6 +340,62 @@ def test_bank_membership_pairs_by_index_not_cc_offset() -> None:
     assert membership["fader_keys"] == frozenset(("cc", cc) for cc in range(8))
 
 
+# --- ControllerProfile.bank_count: derived from faders, not a stored/global value ---
+
+
+# @spec MAP-CONFIG-002, MAP-CONFIG-006
+def test_bank_count_is_derived_from_faders_length() -> None:
+    profile = build_profile(
+        name="Synthetic",
+        match_substring="synthetic",
+        has_native_mode=False,
+        default_channel=0,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        controls=_minimal_valid_controls(faders=tuple(range(12))),
+    )
+    assert profile.bank_count == 12
+
+
+@pytest.mark.parametrize("fader_count", [1, 4, 8, 12])
+# @spec MAP-CONFIG-002, MAP-CONFIG-006
+def test_bank_count_matches_declared_fader_count_for_any_size(fader_count: int) -> None:
+    profile = build_profile(
+        name="Synthetic",
+        match_substring="synthetic",
+        has_native_mode=False,
+        default_channel=0,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        controls=_minimal_valid_controls(faders=tuple(range(fader_count))),
+    )
+    assert profile.bank_count == fader_count
+
+
+# @spec MAP-CONFIG-002, MAP-CONFIG-006
+def test_studio_and_nanokontrol2_bank_count_is_8() -> None:
+    studio = build_profile(
+        name="nanoKONTROL Studio",
+        match_substring="nanokontrolstudio",
+        has_native_mode=True,
+        default_channel=15,
+        has_jog_wheel=True,
+        has_scene_button=True,
+        controls=STUDIO_CONTROLS,
+    )
+    nanokontrol2 = build_profile(
+        name="nanoKONTROL2",
+        match_substring="nanokontrol2",
+        has_native_mode=False,
+        default_channel=0,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        controls=NANOKONTROL2_CONTROLS,
+    )
+    assert studio.bank_count == 8
+    assert nanokontrol2.bank_count == 8
+
+
 # @spec MAP-CONFIG-008
 def test_bank_membership_matches_legacy_offsets_for_the_bundled_layout() -> None:
     # The two shipped controllers' CCs happen to be offset-aligned (knobs = faders
@@ -305,3 +405,20 @@ def test_bank_membership_matches_legacy_offsets_for_the_bundled_layout() -> None
     for fader_cc in range(8):
         assert membership["knob_to_fader"][("cc", fader_cc + 16)] == ("cc", fader_cc)
         assert membership["mute_to_fader"][("cc", fader_cc + 48)] == ("cc", fader_cc)
+
+
+# @spec MAP-CONFIG-008
+def test_bank_membership_truncates_to_the_shorter_of_faders_and_knobs() -> None:
+    # 4 faders but 6 knobs: only the first 4 knobs pair to a Bank; the extra 2 are
+    # simply not Bank-derived (still present as plain opinionated-map entries,
+    # verified separately by the _knob_entries tests above).
+    controls = _minimal_valid_controls(faders=(0, 1, 2, 3), knobs=(100, 101, 102, 103, 104, 105))
+    membership = build_bank_membership(controls)
+    assert membership["knob_to_fader"] == {
+        ("cc", 100): ("cc", 0),
+        ("cc", 101): ("cc", 1),
+        ("cc", 102): ("cc", 2),
+        ("cc", 103): ("cc", 3),
+    }
+    assert ("cc", 104) not in membership["knob_to_fader"]
+    assert ("cc", 105) not in membership["knob_to_fader"]

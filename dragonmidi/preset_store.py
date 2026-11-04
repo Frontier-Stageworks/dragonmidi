@@ -7,7 +7,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _MIN_BANK_INDEX = 1
-_MAX_BANK_INDEX = 8
 _MIN_GROUP_INDEX = 1
 _MAX_GROUP_INDEX = 5
 
@@ -41,15 +40,16 @@ def _validate_entry(entry: object) -> dict[str, object] | None:
     return {"axis_name": axis_name, "min": float(min_value), "max": float(max_value)}
 
 
-def load_group_axis_targets(configurations_dir: Path, profile_name: str) -> dict[int, dict[int, dict]]:
+def load_group_axis_targets(configurations_dir: Path, profile_name: str, bank_count: int) -> dict[int, dict[int, dict]]:
     """Loads and validates a Controller Profile's persisted (Bank, Group)
-    axis-assignment table. Bounds-checks each entry's Bank index (1-8) and Group
-    index (1-5) before use - closing a negative-indexing bug an unvalidated Bank
-    index of `0` would otherwise cause downstream (`bank_fader_keys[-1]`
-    resolving to the *last* Bank instead of erroring). An entry failing
-    validation (bad index, wrong shape) is skipped with a logged warning; the
-    file's other valid entries still load. A missing or unparseable file is
-    treated as an empty table, not an error.
+    axis-assignment table. Bounds-checks each entry's Bank index (1 through the
+    caller-supplied `bank_count` - the active profile's own `ControllerProfile.
+    bank_count`, not a fixed global) and Group index (1-5) before use - closing a
+    negative-indexing bug an unvalidated Bank index of `0` would otherwise cause
+    downstream (`bank_fader_keys[-1]` resolving to the *last* Bank instead of
+    erroring). An entry failing validation (bad index, wrong shape) is skipped
+    with a logged warning; the file's other valid entries still load. A missing
+    or unparseable file is treated as an empty table, not an error.
 
     @spec MAP-STORE-001, MAP-STORE-002, MAP-STORE-003
     """
@@ -70,7 +70,7 @@ def load_group_axis_targets(configurations_dir: Path, profile_name: str) -> dict
 
     result: dict[int, dict[int, dict]] = {}
     for raw_bank_index, groups in bank_axes.items():
-        bank_index = _parse_index(raw_bank_index, _MIN_BANK_INDEX, _MAX_BANK_INDEX)
+        bank_index = _parse_index(raw_bank_index, _MIN_BANK_INDEX, bank_count)
         if bank_index is None or not isinstance(groups, dict):
             logger.warning("Skipping invalid bank index %r in %s", raw_bank_index, path)
             continue

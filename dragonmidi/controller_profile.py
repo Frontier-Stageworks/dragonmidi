@@ -61,6 +61,18 @@ class ControllerProfile:
         if self.control_names is None:
             object.__setattr__(self, "control_names", {})
 
+    @property
+    def bank_count(self) -> int:
+        """Number of logical channel strips/Banks this profile has, derived from
+        `bank_fader_keys` (itself `len(controls.faders)`) rather than stored
+        independently - 8 for both bundled Korg profiles; a future controller's
+        width (including one determined at runtime, e.g. Intech Grid) is whatever
+        its faders declare.
+
+        @spec MAP-CONFIG-002, MAP-CONFIG-006
+        """
+        return len(self.bank_fader_keys)
+
     def matches(self, port_name: str) -> bool:
         """Fuzzy name match against an enumerated MIDI port name: strip
         non-alphanumeric characters, lowercase, and check for the profile's

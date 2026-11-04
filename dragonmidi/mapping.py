@@ -121,8 +121,8 @@ def _fader_entries(ccs: Sequence[int]) -> dict[_Key, _MapEntry]:
     return {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{i + 1}") for i, cc in enumerate(ccs)}
 
 
-def _knob_entries(ccs: Sequence[int]) -> dict[_Key, _MapEntry]:
-    return {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{9 + i}") for i, cc in enumerate(ccs)}
+def _knob_entries(ccs: Sequence[int], bank_count: int) -> dict[_Key, _MapEntry]:
+    return {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{bank_count + 1 + i}") for i, cc in enumerate(ccs)}
 
 
 def _mute_entries(ccs: Sequence[int]) -> dict[_Key, _MapEntry]:
@@ -142,11 +142,17 @@ def _transport_entries(transport: Mapping[str, int]) -> dict[_Key, _MapEntry]:
 
 
 def validate_controls_config(controls: ControlsConfig, has_jog_wheel: bool) -> None:
-    """@spec MAP-CONFIG-006, MAP-CONFIG-007"""
-    for field_name in ("faders", "knobs", "mutes", "solos"):
-        values = getattr(controls, field_name)
-        if len(values) != 8:
-            raise ControlsConfigError(f"'{field_name}' must have exactly 8 entries, got {len(values)}")
+    """`faders` defines the profile's `bank_count` (`ControllerProfile.bank_count`)
+    and must be non-empty; `knobs`/`mutes`/`solos` are independently sized - each
+    may be empty (that capability doesn't exist on this device) or any other
+    length, including more entries than `faders` (a device with more encoders
+    than channel strips) - neither is validated against `bank_count` or against
+    each other.
+
+    @spec MAP-CONFIG-002, MAP-CONFIG-006, MAP-CONFIG-007
+    """
+    if len(controls.faders) == 0:
+        raise ControlsConfigError("'faders' must have at least 1 entry")
     if has_jog_wheel and controls.jog_wheel is None:
         raise ControlsConfigError("has_jog_wheel is true but 'jog_wheel' CC is missing")
 
@@ -159,7 +165,7 @@ def build_opinionated_map(controls: ControlsConfig, has_scene_button: bool) -> d
     """
     entries: dict[_Key, _MapEntry] = {
         **_fader_entries(controls.faders),
-        **_knob_entries(controls.knobs),
+        **_knob_entries(controls.knobs, len(controls.faders)),
         **_mute_entries(controls.mutes),
         **_transport_entries(controls.transport),
     }
@@ -217,8 +223,18 @@ def build_group_keys(controls: ControlsConfig) -> GroupKeys:
 
 def build_control_names(controls: ControlsConfig, has_scene_button: bool) -> dict[_Key, str]:
     """Mapping View display names built from the active profile's config, replacing
-    the old module-level CC-keyed `CONTROL_NAMES` literal in `mapping_view_model.py`."""
+    the old module-level CC-keyed `CONTROL_NAMES` literal in `mapping_view_model.py`.
+
+    Every declared knob/mute gets a name here, not only the bank-derived ones -
+    harmless for a profile where every knob/mute is bank-derived (the name is
+    simply never looked up for those, since `build_configuration_rows` collapses
+    them into the single Knob/Mute summary row), but required once `knobs`/`mutes`
+    can outnumber `faders` (@spec MAP-CONFIG-002, MAP-CONFIG-006): the extra,
+    non-bank-derived entries get their own Configuration Dialog row and need a name.
+    """
     names: dict[_Key, str] = {("cc", cc): f"Fader Channel {i + 1}" for i, cc in enumerate(controls.faders)}
+    names.update({("cc", cc): f"Knob {i + 1}" for i, cc in enumerate(controls.knobs)})
+    names.update({("cc", cc): f"Mute {i + 1}" for i, cc in enumerate(controls.mutes)})
     for name, cc in controls.transport.items():
         label = _TRANSPORT_DISPLAY_NAMES.get(name)
         if label is not None:
@@ -746,9 +762,11 @@ class MappingEngine:
         if key in ws_keys.solos:
             if not self._press_edge(key, event, now):
                 return None
-            # Group-aware as of Phase 6: Solo N in Group g addresses N + 8*(g-1)
-            # (@spec MAP-WS-002, MAP-GROUP-002).
-            axis_number = ws_keys.solos.index(key) + 1 + 8 * (self._active_group - 1)
+            # Group-aware as of Phase 6: Solo N in Group g addresses N + bank_count*(g-1)
+            # (@spec MAP-WS-002, MAP-GROUP-002). bank_count, not a literal 8 - the
+            # active profile's own strip count, so this stays correct for any future
+            # non-8 profile (e.g. a runtime-derived Intech Grid width) with no change here.
+            axis_number = ws_keys.solos.index(key) + 1 + self._profile.bank_count * (self._active_group - 1)
             return WebSocketCommand(f"select-AX{axis_number}")
 
         if key == ws_keys.cycle:

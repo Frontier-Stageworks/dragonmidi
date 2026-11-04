@@ -173,7 +173,9 @@ class DragonMidiWindow(QMainWindow):
         # @spec MAP-STORE-002: load the default profile's persisted (Bank, Group)
         # axis table before the Mapping View is built, so the initial render
         # (UI-MAP-011) already reflects it.
-        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), self._default_profile.name))
+        self._mapping.load_group_axis_targets(
+            load_group_axis_targets(_configurations_dir(), self._default_profile.name, self._default_profile.bank_count)
+        )
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._websocket_output = WebSocketOutputAdapter()
         self._monitor = SignalMonitor()
@@ -367,7 +369,7 @@ class DragonMidiWindow(QMainWindow):
         # @spec MAP-STORE-002, MAP-STORE-007: loaded synchronously, in the same
         # handler as set_profile() above and before the Mapping View refreshes -
         # no caller can observe _group_axis_targets cleared-but-not-yet-reloaded.
-        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), profile.name))
+        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), profile.name, profile.bank_count))
         self._midi.set_profile(profile)
         self._profile_hint_label.setText(profile.setup_hint or "")
         self._profile_hint_label.setVisible(show_setup_hint(profile.setup_hint))  # @spec UI-PROFILE-003

@@ -105,9 +105,9 @@ def _parse_controls(raw: object, path: Path) -> ControlsConfig:
     try:
         return ControlsConfig(
             faders=tuple(raw["faders"]),
-            knobs=tuple(raw["knobs"]),
-            mutes=tuple(raw["mutes"]),
-            solos=tuple(raw["solos"]),
+            knobs=tuple(raw.get("knobs") or ()),
+            mutes=tuple(raw.get("mutes") or ()),
+            solos=tuple(raw.get("solos") or ()),
             transport=dict(raw.get("transport") or {}),
             jog_wheel=raw.get("jog_wheel"),
         )

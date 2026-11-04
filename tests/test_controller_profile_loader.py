@@ -215,6 +215,38 @@ def test_missing_required_field_fails_validation(bundled_dir: Path, user_dir: Pa
     assert result.failures[0].path == path
 
 
+# --- MAP-CONFIG-002/006: knobs/mutes/solos are optional in the controls: block;
+# --- faders of any nonzero length is accepted, not pinned to 8 ---
+
+
+# @spec MAP-CONFIG-002, MAP-CONFIG-006
+def test_controls_block_omitting_knobs_mutes_solos_loads_successfully(bundled_dir: Path, user_dir: Path) -> None:
+    user_dir.mkdir(parents=True)
+    _write_profile(
+        bundled_dir,
+        "a.yaml",
+        name="A",
+        match_substring="a",
+        controls={"faders": list(range(4)), "transport": {}},  # knobs/mutes/solos omitted entirely
+    )
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=user_dir)
+    assert result.failures == ()
+    assert result.profiles[0].bank_count == 4
+    assert result.profiles[0].knob_to_fader == {}
+    assert result.profiles[0].mute_to_fader == {}
+
+
+# @spec MAP-CONFIG-002, MAP-CONFIG-006
+def test_controls_block_with_a_12_fader_count_loads_successfully(bundled_dir: Path, user_dir: Path) -> None:
+    user_dir.mkdir(parents=True)
+    controls = dict(_DEFAULT_CONTROLS)
+    controls["faders"] = list(range(12))  # longer than knobs/mutes/solos (still 8 each) - not rejected
+    _write_profile(bundled_dir, "a.yaml", name="A", match_substring="a", controls=controls)
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=user_dir)
+    assert result.failures == ()
+    assert result.profiles[0].bank_count == 12
+
+
 # --- PROFILE-LOAD-011: failure count and identifying paths are exposed ---
 
 

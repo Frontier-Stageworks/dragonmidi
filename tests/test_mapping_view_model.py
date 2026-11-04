@@ -12,7 +12,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.events import MidiEvent
-from dragonmidi.mapping import CHANNEL, NANOKONTROL2_PROFILE, STUDIO_PROFILE, MappingEngine
+from dragonmidi.mapping import CHANNEL, NANOKONTROL2_PROFILE, STUDIO_PROFILE, ControlsConfig, MappingEngine, build_profile
 from dragonmidi.mapping_view_model import (
     JOG_WHEEL_ARC_ROW_KEY,
     JOG_WHEEL_ROW_KEY,
@@ -168,6 +168,55 @@ def test_solo_summary_row_target_follows_the_active_group() -> None:
     rows = {row.key: row for row in build_configuration_rows(engine)}
     row = rows[SOLO_ROW_KEY]
     assert row.target == "select-AX9 – select-AX16 (Group 2)"
+
+
+def _synthetic_4_bank_profile():
+    # bank_count=4, with a knobs list longer than faders (6 knobs) and a mutes
+    # list the same length as faders (4) - proves the summary-row text follows
+    # each field's own actual size, not a hardcoded 8 or bank_count*2.
+    controls = ControlsConfig(
+        faders=(0, 1, 2, 3),
+        knobs=(16, 17, 18, 19, 20, 21),
+        mutes=(48, 49, 50, 51),
+        solos=(32, 33, 34, 35),
+        transport={"next_track": 59},
+        jog_wheel=None,
+    )
+    return build_profile(
+        name="Synthetic 4-Bank",
+        match_substring="synthetic4bank",
+        has_native_mode=False,
+        default_channel=CHANNEL,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        controls=controls,
+    )
+
+
+def test_solo_summary_row_name_and_range_follow_a_non_8_bank_profile() -> None:
+    engine = MappingEngine(profile=_synthetic_4_bank_profile())
+    rows = {row.key: row for row in build_configuration_rows(engine)}
+    row = rows[SOLO_ROW_KEY]
+    assert row.name == "Solo 1-4"
+    assert row.target == "select-AX1 – select-AX4 (Group 1)"
+
+
+def test_knob_and_mute_summary_row_text_follow_a_non_8_bank_profile() -> None:
+    # 4 faders, 6 knobs (only the first 4 pair to a Bank), 4 mutes.
+    engine = MappingEngine(profile=_synthetic_4_bank_profile())
+    rows = {row.key: row for row in build_configuration_rows(engine)}
+    assert "Encoder 5-8" in rows[KNOB_ROW_KEY].target  # bank_count+1 .. bank_count+len(knob_to_fader)=4
+    assert "Reset encoder 1-4" in rows[MUTE_ROW_KEY].target
+
+
+def test_extra_unpaired_knobs_get_their_own_named_row_not_a_crash() -> None:
+    # The 5th/6th knobs (CC 20, 21) have no Bank to pair with (only 4 faders) -
+    # build_configuration_rows must still be able to name and render them as
+    # individual rows rather than raising a KeyError on a missing control name.
+    engine = MappingEngine(profile=_synthetic_4_bank_profile())
+    rows = {row.key: row for row in build_configuration_rows(engine)}
+    assert rows[("cc", 20)].name == "Knob 5"
+    assert rows[("cc", 21)].name == "Knob 6"
 
 
 # --- Single-instance rows: unchanged content, relocated ---

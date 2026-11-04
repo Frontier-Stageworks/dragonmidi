@@ -60,10 +60,10 @@ controls:
 
 | Field | Required | Type | Meaning |
 |---|---|---|---|
-| `faders` | yes | list of 8 CC numbers | Fader 1 through Fader 8, in order. |
-| `knobs` | yes | list of 8 CC numbers | Knob 1 through Knob 8, in order. |
-| `mutes` | yes | list of 8 CC numbers | Mute button 1 through 8, in order. |
-| `solos` | yes | list of 8 CC numbers | Solo button 1 through 8, in order. |
+| `faders` | yes | list of CC numbers, at least 1 | Fader 1 through Fader N, in order. **The length of this list is your device's logical strip/Bank count** — 8 for a nanoKONTROL-shaped device, but any count is fine. |
+| `knobs` | no (default: none) | list of CC numbers, any length | Knob 1 through Knob N, in order. Doesn't need to match `faders`' count — a device can have more (or fewer, or zero) encoders than channel strips; only the first as-many-as-`faders` pair up with a Bank (see Limits below). |
+| `mutes` | no (default: none) | list of CC numbers, any length | Mute button 1 through N, in order. Same independent-length rule as `knobs`. |
+| `solos` | no (default: none) | list of CC numbers, any length | Solo button 1 through N, in order. Same independent-length rule as `knobs`. |
 | `transport` | yes (may be empty: `{}`) | named CC numbers | See table below. Any name you leave out simply doesn't exist as a control for this device. |
 | `jog_wheel` | required only if `has_jog_wheel` is `true` | CC number | The jog wheel's CC number. Omit entirely if your device has no jog wheel. |
 
@@ -87,12 +87,12 @@ implementation chart or use a MIDI monitor tool to read the numbers directly).
 
 ## Limits
 
-- **Exactly 8 of each**: `faders`, `knobs`, `mutes`, and `solos` must each list
-  exactly 8 CC numbers. A device with a different number of channel strips isn't
-  supported by a config file alone.
+- **`faders` sets your device's strip/Bank count; the other three don't need to match it.** `faders` must list at least 1 CC number — its length *is* the Bank count (8 for a nanoKONTROL-shaped device, but a 4-strip or 12-strip device is just as supported). `knobs`/`mutes`/`solos` can each be omitted, empty, shorter, the same length, or longer than `faders` — a device with 8 faders but 16 knobs declares that directly.
 - **Fader/knob/mute CCs don't need to line up numerically.** Bank 1 is always
-  index 0 of each list, Bank 2 is index 1, and so on — the numbers themselves can
-  be anything.
+  index 0 of each list, Bank 2 is index 1, and so on, up through the Bank count —
+  the numbers themselves can be anything. If `knobs`/`mutes` has more entries than
+  `faders`, the extra ones still work as plain controls; they just aren't paired to
+  a Bank.
 - **`has_jog_wheel`/`has_scene_button` assume KORG's own encoding.** Setting either
   to `true` tells DragonMIDI to expect the exact same signal shape the KORG
   nanoKONTROL family uses (a specific relative-value encoding for the jog wheel, a
