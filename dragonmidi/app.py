@@ -235,7 +235,7 @@ class DragonMidiWindow(QMainWindow):
         )
         layout.addWidget(self._mapping_view, 1)
 
-        footer_label = QLabel(f'Developed by Frontier Stageworks · MIT License · <a href="{_REPO_URL}">{_REPO_URL}</a>')
+        footer_label = QLabel(f'Developed by Frontier Stageworks · GPL-3.0-or-later · <a href="{_REPO_URL}">{_REPO_URL}</a>')
         footer_label.setOpenExternalLinks(True)
         footer_label.setAlignment(Qt.AlignCenter)
         footer_label.setStyleSheet("font-size: 11px;")
