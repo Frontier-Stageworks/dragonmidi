@@ -8,7 +8,7 @@ It also owns the controller-specific quirk that makes the Studio side of the app
 
 ## Controller Profiles
 
-A `ControllerProfile` is the one place this component's (and, downstream, the Static Mapping Engine's) per-device knowledge lives, so neither component hardcodes a single controller's quirks:
+A `ControllerProfile` is the one place this component's (and, downstream, the Static Mapping Engine's) per-device knowledge lives for a static, YAML-declared controller, so neither component hardcodes a single controller's quirks. **As of Intech Grid support**, `MidiInputAdapter`'s `profile` (constructor parameter, `set_profile()`, and the `profile` property) is typed against the structural `ActiveController` shape (`dragonmidi/active_controller.py`) rather than concretely against `ControllerProfile` — `ControllerProfile` still satisfies that shape unmodified, and remains the only *source* of profiles this component's own device-discovery/Native-Mode machinery concerns itself with (see `docs/llds/intech-grid.md § Active Grid Controller` for the other satisfying implementation, `GridRuntimeController`, and why Grid needed a second one rather than reusing this one):
 
 | Field | Meaning |
 |---|---|
