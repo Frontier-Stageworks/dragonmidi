@@ -18,11 +18,24 @@
 
 from __future__ import annotations
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from dragonmidi.events import KeyCombo, MidiEvent, WebSocketCommand
-from dragonmidi.mapping import CHANNEL, OPINIONATED_MAP, ControlsConfig, MappingEngine, build_profile
+from dragonmidi.mapping import (
+    BUTTON_ACTION_MUTE,
+    BUTTON_ACTION_NONE,
+    BUTTON_ACTION_SOLO,
+    CHANNEL,
+    OPINIONATED_MAP,
+    ROTARY_ACTION_ADJUST,
+    ROTARY_ACTION_NONE,
+    STUDIO_PROFILE,
+    ControlsConfig,
+    MappingEngine,
+    build_profile,
+)
 
 FADER_CCS = list(range(8))  # CC 0-7 -> encoder 1-8
 KNOB_CCS = list(range(16, 24))  # CC 16-23 -> encoder 9-16
@@ -665,6 +678,145 @@ def test_record_and_select_stay_unmapped_regardless_of_bank_axis(fader_number: i
     engine.set_axis_target(("cc", fader_number), 1, "PAN", 0.0, 100.0)
     result = engine.process(cc_event(bank_base + fader_number, 127), now=0.0)
     assert result is None
+
+
+# --- Phase 1.2: independent per-channel Rotary/Button action assignment ---
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BTNACT-001
+def test_rotary_and_button_actions_default_to_legacy_behavior(fader_number: int) -> None:
+    engine = MappingEngine()
+    fader_key = ("cc", fader_number)
+    assert engine.rotary_action(fader_key) == ROTARY_ACTION_ADJUST
+    assert engine.button_action(fader_key) == BUTTON_ACTION_MUTE
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BTNACT-002
+def test_rotary_action_none_suppresses_the_nudge_entirely(fader_number: int) -> None:
+    fader_key = ("cc", fader_number)
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
+    engine.set_rotary_action(fader_key, ROTARY_ACTION_NONE)
+    engine.process(cc_event(knob_number, 60), now=0.0)  # would establish baseline if enabled
+    result = engine.process(cc_event(knob_number, 90), now=0.001)
+    assert result is None
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BTNACT-003
+def test_button_action_none_suppresses_setzero(fader_number: int) -> None:
+    fader_key = ("cc", fader_number)
+    mute_number = fader_number + _MUTE_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
+    engine.set_button_action(fader_key, BUTTON_ACTION_NONE)
+    engine.process(cc_event(mute_number, 0), now=0.0)
+    result = engine.process(cc_event(mute_number, 127), now=0.0)
+    assert result is None
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BTNACT-003
+def test_button_action_solo_produces_no_osc_but_selects_this_channel_via_websocket(fader_number: int) -> None:
+    fader_key = ("cc", fader_number)
+    mute_number = fader_number + _MUTE_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)  # Solo is independent of axis state (MAP-WS-002 parity)
+    engine.set_button_action(fader_key, BUTTON_ACTION_SOLO)
+
+    engine.process(cc_event(mute_number, 0), now=0.0)
+    osc_result = engine.process(cc_event(mute_number, 127), now=0.0)
+    assert osc_result is None  # no OSC output - process_websocket owns Solo
+
+    engine_ws = MappingEngine()
+    engine_ws.set_button_action(fader_key, BUTTON_ACTION_SOLO)
+    engine_ws.process_websocket(cc_event(mute_number, 0), now=0.0)
+    ws_result = engine_ws.process_websocket(cc_event(mute_number, 127), now=0.0)
+    assert ws_result == WebSocketCommand(f"select-AX{fader_number + 1}")
+
+
+# @spec MAP-BTNACT-003
+def test_button_action_solo_is_group_aware_like_the_native_solo_row() -> None:
+    fader_key = ("cc", 0)
+    mute_number = 0 + _MUTE_BANK_OFFSET
+    engine = MappingEngine()
+    engine.set_button_action(fader_key, BUTTON_ACTION_SOLO)
+    engine.step_active_group(1)  # Group 2: bank_count(8) * (2-1) + 1 = 9
+
+    engine.process_websocket(cc_event(mute_number, 0), now=0.0)
+    result = engine.process_websocket(cc_event(mute_number, 127), now=0.0)
+    assert result == WebSocketCommand("select-AX9")
+
+
+@given(fader_number=st.sampled_from(FADER_CCS))
+# @spec MAP-BTNACT-002, MAP-BTNACT-004
+def test_set_rotary_action_rejects_non_fader_keys(fader_number: int) -> None:
+    engine = MappingEngine()
+    knob_number = fader_number + _KNOB_BANK_OFFSET
+    with pytest.raises(ValueError):
+        engine.set_rotary_action(("cc", knob_number), ROTARY_ACTION_NONE)
+
+
+def test_set_button_action_rejects_an_unsupported_action_string() -> None:
+    engine = MappingEngine()
+    with pytest.raises(ValueError):
+        engine.set_button_action(("cc", 0), "shuttle")  # not a supported action
+
+
+# @spec MAP-BTNACT-004
+def test_default_action_values_are_not_persisted_but_overrides_are() -> None:
+    engine = MappingEngine()
+    fader_key = ("cc", 0)
+    assert engine.dump_bank_control_actions() == {}
+    engine.set_button_action(fader_key, BUTTON_ACTION_SOLO)
+    engine.set_rotary_action(fader_key, ROTARY_ACTION_NONE)
+    assert engine.dump_bank_control_actions() == {1: {"rotary": ROTARY_ACTION_NONE, "button": BUTTON_ACTION_SOLO}}
+    engine.set_button_action(fader_key, BUTTON_ACTION_MUTE)  # back to default - no longer dumped
+    assert engine.dump_bank_control_actions() == {1: {"rotary": ROTARY_ACTION_NONE}}
+
+
+# @spec MAP-BTNACT-005
+def test_bank_control_actions_round_trip_through_dump_and_load() -> None:
+    engine = MappingEngine()
+    engine.set_button_action(("cc", 0), BUTTON_ACTION_SOLO)
+    engine.set_rotary_action(("cc", 2), ROTARY_ACTION_NONE)
+    dumped = engine.dump_bank_control_actions()
+
+    loaded_engine = MappingEngine()
+    loaded_engine.load_bank_control_actions(dumped)
+    assert loaded_engine.button_action(("cc", 0)) == BUTTON_ACTION_SOLO
+    assert loaded_engine.rotary_action(("cc", 2)) == ROTARY_ACTION_NONE
+    assert loaded_engine.dump_bank_control_actions() == dumped
+
+
+# @spec MAP-BTNACT-005
+def test_load_bank_control_actions_ignores_an_unrecognized_action_string() -> None:
+    engine = MappingEngine()
+    engine.load_bank_control_actions({1: {"button": "not_a_real_action"}})
+    assert engine.button_action(("cc", 0)) == BUTTON_ACTION_MUTE  # left at default, not raised
+
+
+# @spec MAP-BTNACT-005
+def test_load_bank_control_actions_ignores_an_out_of_range_bank_index() -> None:
+    engine = MappingEngine()
+    engine.load_bank_control_actions({99: {"button": BUTTON_ACTION_SOLO}})  # must not raise
+    assert engine.dump_bank_control_actions() == {}
+
+
+# @spec MAP-BTNACT-001
+def test_set_profile_clears_action_overrides_but_reset_does_not() -> None:
+    engine = MappingEngine()
+    fader_key = ("cc", 0)
+    engine.set_button_action(fader_key, BUTTON_ACTION_SOLO)
+
+    engine.reset()  # ordinary reconnect
+    assert engine.button_action(fader_key) == BUTTON_ACTION_SOLO
+
+    engine.set_profile(STUDIO_PROFILE)  # genuine profile switch
+    assert engine.button_action(fader_key) == BUTTON_ACTION_MUTE
 
 
 @given(fader_number=st.sampled_from(FADER_CCS))

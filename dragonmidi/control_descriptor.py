@@ -38,9 +38,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .mapping_view_model import KNOB_ROW_KEY, MUTE_ROW_KEY, SOLO_ROW_KEY
+from .mapping_view_model import JOG_WHEEL_ARC_ROW_KEY, JOG_WHEEL_ROW_KEY, KNOB_ROW_KEY, MUTE_ROW_KEY, SOLO_ROW_KEY
 
 _COLLAPSED_SUMMARY_ROW_KEYS = {KNOB_ROW_KEY, MUTE_ROW_KEY, SOLO_ROW_KEY}
+
+# Physical hardware identity only - never the control's assigned function
+# (Phase 1.2). A jog wheel/VSN1 jog is its own physical shape, distinct from
+# an ordinary button, even though neither gets an Inspector editor yet
+# (`inspector_registry.py`) - no new jog functionality in this phase, just
+# accurate labeling.
+_JOG_KEYS = {JOG_WHEEL_ROW_KEY, JOG_WHEEL_ARC_ROW_KEY}
+_JOG_TAGS = {"grid_vsn1_jog", "grid_vsn1_jog_button"}
 
 if TYPE_CHECKING:
     from .active_controller import ActiveController
@@ -53,7 +61,7 @@ if TYPE_CHECKING:
 class ControlDescriptor:
     key: "_Key"
     label: str
-    control_type: str  # "fader" | "button"
+    control_type: str  # "fader" | "rotary" | "button" | "jog"
 
 
 def build_control_descriptors(
@@ -71,9 +79,12 @@ def build_control_descriptors(
     descriptors = [ControlDescriptor(key=row.key, label=row.name, control_type="fader") for row in fader_rows]
     seen = {row.key for row in fader_rows}
 
+    # A Knob-role control is physically a Rotary (Korg's Knob, PBF4's potentiometer) -
+    # distinct from the generic Button shape, so it gets its own Inspector editor
+    # (@spec UI-CTRLDESC-002, Phase 1.2).
     for knob_key in active_controller.knob_to_fader:
         label = active_controller.control_names.get(knob_key, "Knob")
-        descriptors.append(ControlDescriptor(key=knob_key, label=label, control_type="button"))
+        descriptors.append(ControlDescriptor(key=knob_key, label=label, control_type="rotary"))
         seen.add(knob_key)
     for mute_key in active_controller.mute_to_fader:
         label = active_controller.control_names.get(mute_key, "Mute")
@@ -89,12 +100,18 @@ def build_control_descriptors(
     for row in configuration_rows:
         if row.key in seen:
             continue  # the collapsed Knob/Mute/Solo summary rows - superseded by the per-bank expansion above
-        descriptors.append(ControlDescriptor(key=row.key, label=row.name, control_type="button"))
+        control_type = "jog" if row.key in _JOG_KEYS else "button"
+        descriptors.append(ControlDescriptor(key=row.key, label=row.name, control_type=control_type))
         seen.add(row.key)
 
     for key, label in active_controller.control_names.items():
         if key in seen:
             continue
-        control_type = "fader" if key in active_controller.fader_keys else "button"
+        if key in active_controller.fader_keys:
+            control_type = "fader"
+        elif key[0] in _JOG_TAGS:
+            control_type = "jog"
+        else:
+            control_type = "button"
         descriptors.append(ControlDescriptor(key=key, label=label, control_type=control_type))
     return descriptors

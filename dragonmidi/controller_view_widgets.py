@@ -17,20 +17,37 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QTree
 from .control_descriptor import ControlDescriptor, build_control_descriptors
 from .control_grouping import ControlGroup, build_control_groups
 from .inspector_registry import has_editor
-from .mapping import MappingEngine
+from .mapping import (
+    BUTTON_ACTION_MUTE,
+    BUTTON_ACTION_NONE,
+    BUTTON_ACTION_SOLO,
+    BUTTON_ACTIONS,
+    ROTARY_ACTION_ADJUST,
+    ROTARY_ACTION_NONE,
+    ROTARY_ACTIONS,
+    MappingEngine,
+)
 from .mapping_view_model import (
     ACTIVE_GROUP_COLOR,
     GROUP_LETTERS,
     INACTIVE_GROUP_COLOR,
-    KNOB_ROW_KEY,
-    MUTE_ROW_KEY,
     build_configuration_rows,
     build_fader_rows,
     group_axis_picker_states,
     group_step_plan,
 )
-from .mapping_widgets import _SingleAxisTargetField
+from .mapping_widgets import _ActionComboField, _SingleAxisTargetField
 from .osc_io import AxisDiscovery
+
+_ROTARY_ACTION_LABELS = {
+    ROTARY_ACTION_ADJUST: "Follow Channel (adjust assigned axis)",
+    ROTARY_ACTION_NONE: "Unassigned",
+}
+_BUTTON_ACTION_LABELS = {
+    BUTTON_ACTION_MUTE: "Mute (zero assigned axis)",
+    BUTTON_ACTION_SOLO: "Solo (select this channel)",
+    BUTTON_ACTION_NONE: "Unassigned",
+}
 
 _ACTIVE_GROUP_BUTTON_STYLE = f"background-color: {ACTIVE_GROUP_COLOR}; color: white; font-weight: 600;"
 _INACTIVE_GROUP_BUTTON_STYLE = f"background-color: #e5e5e5; color: {INACTIVE_GROUP_COLOR}; font-weight: 600;"
@@ -137,6 +154,10 @@ class ControllerView(QWidget):
         super().__init__()
         self._engine = mapping_engine
         self._axis_discovery = axis_discovery
+        # Fires on any persisted-config change the Inspector makes - an axis-target
+        # edit (its original purpose) or, as of Phase 1.2, a Rotary/Button action
+        # edit. The parameter name predates the latter and is kept as-is to avoid
+        # an unrelated rename across app.py's wiring.
         self._on_group_axis_changed = on_group_axis_changed
         self._descriptors: list[ControlDescriptor] = []
         self._descriptor_by_key: dict = {}
@@ -144,7 +165,11 @@ class ControllerView(QWidget):
         self._group_items: list[QTreeWidgetItem] = []
         self._no_matches_item: QTreeWidgetItem | None = None
         self._selected_key = None
-        self._inspector_field: _SingleAxisTargetField | None = None
+        self._inspector_field: _SingleAxisTargetField | _ActionComboField | None = None
+        # Which branch populated `_inspector_field` - discriminates how
+        # `_sync_inspector_field()` should read the engine back into it
+        # ("fader" | "rotary" | "button"), `None` when no field is shown.
+        self._inspector_kind: str | None = None
         # Captured the first time a search becomes non-empty, restored when
         # it's cleared - `None` means "not currently filtering" (@spec
         # UI-CTRLSEARCH-004).
@@ -330,28 +355,56 @@ class ControllerView(QWidget):
         """@spec UI-CTRLVIEW-005"""
         self._clear_inspector_layout()
         self._inspector_field = None
+        self._inspector_kind = None
         self._inspector_layout.addWidget(QLabel(_PLACEHOLDER_TEXT))
 
     def _show_inspector_for(self, descriptor: ControlDescriptor) -> None:
+        """@spec UI-CTRLVIEW-006, UI-CTRLVIEW-010 (Phase 1.2): a Fader gets its
+        existing 1-Group axis-target field unchanged; a Rotary or a
+        bank-derived Button (a Knob-role/Mute-role control - PBF4's Rotary/
+        Button included, now that they're wired like Korg's Knob/Mute) gets
+        its own independent action-assignment field. Every other control
+        (transport, Scene, Solo, VSN1 buttons/jog, ...) falls to the
+        existing "no settings yet" placeholder - @spec UI-CTRLVIEW-007."""
         self._clear_inspector_layout()
-        if has_editor(descriptor.control_type):
+        profile = self._engine.profile
+        bank_derived_button = descriptor.control_type == "button" and descriptor.key in profile.mute_to_fader
+        if not has_editor(descriptor.control_type, bank_derived=bank_derived_button):
+            self._inspector_field = None
+            self._inspector_kind = None
+            configuration_rows = {row.key: row for row in build_configuration_rows(self._engine)}
+            self._inspector_layout.addWidget(QLabel(descriptor.label))
+            self._inspector_layout.addWidget(QLabel(_NO_SETTINGS_TEXT))
+            self._inspector_layout.addWidget(QLabel(self._summary_text(descriptor, configuration_rows)))
+            return
+
+        if descriptor.control_type == "fader":
             # @spec UI-CTRLVIEW-006: one field for the active Group only, not
             # the 5-Group grid `_AxisTargetEditor` renders in Table View.
             field = _SingleAxisTargetField(
                 on_change=lambda name, mn, mx, k=descriptor.key: self._on_axis_change(k, name, mn, mx),
                 on_clear=lambda k=descriptor.key: self._on_axis_clear(k),
             )
-            self._inspector_field = field
-            self._inspector_layout.addWidget(QLabel(descriptor.label))
-            self._inspector_layout.addWidget(field)
-            self._sync_inspector_field()
-        else:
-            # @spec UI-CTRLVIEW-007
-            self._inspector_field = None
-            configuration_rows = {row.key: row for row in build_configuration_rows(self._engine)}
-            self._inspector_layout.addWidget(QLabel(descriptor.label))
-            self._inspector_layout.addWidget(QLabel(_NO_SETTINGS_TEXT))
-            self._inspector_layout.addWidget(QLabel(self._summary_text(descriptor, configuration_rows)))
+            self._inspector_kind = "fader"
+        elif descriptor.control_type == "rotary":
+            fader_key = profile.bank_fader_key(descriptor.key)
+            field = _ActionComboField(
+                options=tuple((action, _ROTARY_ACTION_LABELS[action]) for action in ROTARY_ACTIONS),
+                on_change=lambda action, fk=fader_key: self._on_rotary_action_change(fk, action),
+            )
+            self._inspector_kind = "rotary"
+        else:  # bank-derived "button"
+            fader_key = profile.mute_to_fader[descriptor.key]
+            field = _ActionComboField(
+                options=tuple((action, _BUTTON_ACTION_LABELS[action]) for action in BUTTON_ACTIONS),
+                on_change=lambda action, fk=fader_key: self._on_button_action_change(fk, action),
+            )
+            self._inspector_kind = "button"
+
+        self._inspector_field = field
+        self._inspector_layout.addWidget(QLabel(descriptor.label))
+        self._inspector_layout.addWidget(field)
+        self._sync_inspector_field()
 
     def _on_axis_change(self, key, name: str, min_value: float, max_value: float) -> None:
         # Reads `self._engine.active_group` at call time, not at closure-creation
@@ -364,41 +417,56 @@ class ControllerView(QWidget):
         self._engine.clear_group_axis_target(key, self._engine.active_group)
         self._notify_group_axis_changed()
 
+    def _on_rotary_action_change(self, fader_key, action: str) -> None:
+        """@spec UI-CTRLVIEW-010, MAP-BTNACT-002"""
+        self._engine.set_rotary_action(fader_key, action)
+        self._notify_group_axis_changed()
+
+    def _on_button_action_change(self, fader_key, action: str) -> None:
+        """@spec UI-CTRLVIEW-010, MAP-BTNACT-003"""
+        self._engine.set_button_action(fader_key, action)
+        self._notify_group_axis_changed()
+
     def _notify_group_axis_changed(self) -> None:
         if self._on_group_axis_changed is not None:
             self._on_group_axis_changed()
 
     def _summary_text(self, descriptor: ControlDescriptor, configuration_rows: dict) -> str:
-        """@spec UI-CTRLVIEW-002. Knob/Mute (now per-bank descriptors, not
-        the collapsed summary row - `UI-CTRLDESC-004`) reuse the existing
-        generic rule text `build_configuration_rows()` already computes for
-        `KNOB_ROW_KEY`/`MUTE_ROW_KEY` - the same text for every bank, since
-        the *rule* ("follows the fader's axis") is genuinely bank-independent
-        and nothing bank-specific is actually known to summarize safely.
-        Solo gets a real, bank-specific computed value instead of reusing
-        text at all: it's never actually "unassigned" (its target is a fixed
-        formula, `MAP-WS-002`), so showing "Unassigned" for it would be
-        wrong, not just uninformative - caught re-reading this function
-        against the Phase 1.1 spec's own worked example ("Solo - Select
-        AX1"), not by a failing test. The final fallback ("Unassigned" for a
+        """@spec UI-CTRLVIEW-002. Rotary/bank-derived Button (Phase 1.2) now
+        show their *actual* per-channel assigned action - genuinely bank-
+        specific since Phase 1.2 made the action itself independently
+        configurable, no longer the single generic rule text every bank
+        used to share. Solo keeps its own real, bank-specific computed
+        value: it's never actually "unassigned" (its target is a fixed
+        formula, `MAP-WS-002`). The final fallback ("Unassigned" for a
         descriptor with no matching `RowView` at all) covers a control with a
         `control_names` label but no `opinionated_map` entry yet - e.g. a
         VSN1 button, per `control_descriptor.py`'s three-source union."""
+        profile = self._engine.profile
+        active_group = self._engine.active_group
         if descriptor.control_type == "fader":
-            active_group = self._engine.active_group
             state = group_axis_picker_states(self._engine, descriptor.key, self._axis_discovery.axes)[active_group - 1]
             return f"{state.current} · Axis" if state.current else "Unassigned"
-        profile = self._engine.profile
-        if descriptor.key in profile.knob_to_fader:
-            row = configuration_rows.get(KNOB_ROW_KEY)
-            return row.target if row is not None else "Unassigned"
+        if descriptor.control_type == "rotary":
+            fader_key = profile.bank_fader_key(descriptor.key)
+            if self._engine.rotary_action(fader_key) == ROTARY_ACTION_NONE:
+                return "Unassigned"
+            target = self._engine.axis_target(fader_key, active_group)
+            return f"Adjust {target.axis_name}" if target is not None else "Adjust · no axis assigned"
         if descriptor.key in profile.mute_to_fader:
-            row = configuration_rows.get(MUTE_ROW_KEY)
-            return row.target if row is not None else "Unassigned"
+            fader_key = profile.mute_to_fader[descriptor.key]
+            action = self._engine.button_action(fader_key)
+            if action == BUTTON_ACTION_NONE:
+                return "Unassigned"
+            if action == BUTTON_ACTION_SOLO:
+                bank_index = profile.bank_fader_keys.index(fader_key) + 1
+                axis_number = bank_index + profile.bank_count * (active_group - 1)
+                return f"select-AX{axis_number}"
+            target = self._engine.axis_target(fader_key, active_group)
+            return f"Mute {target.axis_name}" if target is not None else "Mute · no axis assigned"
         ws_keys = profile.websocket_keys
         if ws_keys is not None and descriptor.key in ws_keys.solos:
             bank_number = ws_keys.solos.index(descriptor.key) + 1
-            active_group = self._engine.active_group
             axis_number = bank_number + profile.bank_count * (active_group - 1)
             return f"select-AX{axis_number}"
         row = configuration_rows.get(descriptor.key)
@@ -407,11 +475,19 @@ class ControllerView(QWidget):
     def _sync_inspector_field(self) -> None:
         if self._inspector_field is None or self._selected_key is None:
             return
-        active_group = self._engine.active_group
-        axis_target = self._engine.axis_target(self._selected_key, active_group)
-        current_min, current_max = (axis_target.min_value, axis_target.max_value) if axis_target is not None else (0.0, 100.0)
-        state = group_axis_picker_states(self._engine, self._selected_key, self._axis_discovery.axes)[active_group - 1]
-        self._inspector_field.sync(state, current_min, current_max)
+        if self._inspector_kind == "fader":
+            active_group = self._engine.active_group
+            axis_target = self._engine.axis_target(self._selected_key, active_group)
+            current_min, current_max = (axis_target.min_value, axis_target.max_value) if axis_target is not None else (0.0, 100.0)
+            state = group_axis_picker_states(self._engine, self._selected_key, self._axis_discovery.axes)[active_group - 1]
+            self._inspector_field.sync(state, current_min, current_max)
+        elif self._inspector_kind == "rotary":
+            fader_key = self._engine.profile.bank_fader_key(self._selected_key)
+            self._inspector_field.sync(self._engine.rotary_action(fader_key))
+        elif self._inspector_kind == "button":
+            fader_key = self._engine.profile.mute_to_fader.get(self._selected_key)
+            if fader_key is not None:
+                self._inspector_field.sync(self._engine.button_action(fader_key))
 
     def refresh(self) -> None:
         """Recomputes every row's summary text and the Inspector's live

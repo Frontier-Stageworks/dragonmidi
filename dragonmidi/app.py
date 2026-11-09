@@ -34,7 +34,7 @@ from .mapping import MappingEngine
 from .mapping_widgets import ConfigurationDialog, MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
 from .osc_io import AxisDiscovery, OscClient, OscListener
-from .preset_store import load_group_axis_targets, save_group_axis_targets
+from .preset_store import load_bank_actions, load_group_axis_targets, save_group_axis_targets
 from .queue_drain import drain_queue
 from .settings_dialog import SettingsDialog
 from .shutdown import run_shutdown_sequence
@@ -180,6 +180,10 @@ class DragonMidiWindow(QMainWindow):
         # (UI-MAP-011) already reflects it.
         self._mapping.load_group_axis_targets(
             load_group_axis_targets(_configurations_dir(), self._default_profile.name, self._default_profile.bank_count)
+        )
+        # @spec MAP-BTNACT-005: loaded the same way, before the Mapping View is built.
+        self._mapping.load_bank_control_actions(
+            load_bank_actions(_configurations_dir(), self._default_profile.name, self._default_profile.bank_count)
         )
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._websocket_output = WebSocketOutputAdapter()
@@ -403,6 +407,7 @@ class DragonMidiWindow(QMainWindow):
         # call as set_profile() above and before the Mapping View rebuilds - no
         # caller can observe _group_axis_targets cleared-but-not-yet-reloaded.
         self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), controller.name, controller.bank_count))
+        self._mapping.load_bank_control_actions(load_bank_actions(_configurations_dir(), controller.name, controller.bank_count))
         self._midi.set_profile(controller)
         # `setup_hint` is a `ControllerProfile`-only field, not part of the
         # `ActiveController` shape `GridRuntimeController` also satisfies -
@@ -422,8 +427,17 @@ class DragonMidiWindow(QMainWindow):
             self._midi.poll_discovery()
 
     def _save_group_axis_targets(self) -> None:
-        """@spec MAP-STORE-004"""
-        save_group_axis_targets(_configurations_dir(), self._mapping.profile.name, self._mapping.dump_group_axis_targets())
+        """@spec MAP-STORE-004, MAP-BTNACT-005: saves both the (Bank, Group) axis
+        table and the per-Bank Rotary/Button action overrides together, always
+        re-dumped fresh from the engine - the one callback both `ControllerView`'s
+        axis-target edits and its Phase 1.2 Rotary/Button action edits invoke
+        (`on_group_axis_changed`), so neither piece is ever written stale."""
+        save_group_axis_targets(
+            _configurations_dir(),
+            self._mapping.profile.name,
+            self._mapping.dump_group_axis_targets(),
+            self._mapping.dump_bank_control_actions(),
+        )
 
     def _on_config_applied(self, config: EndpointConfig, listen_port_changed: bool) -> None:
         self._osc_client.configure(config.host, config.dragonframe_port)

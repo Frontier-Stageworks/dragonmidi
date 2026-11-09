@@ -84,6 +84,36 @@ def test_unsupported_module_between_two_pbf4_does_not_reset_numbering() -> None:
     assert outcome.controller.bank_count == 8
 
 
+# --- Phase 1.2: PBF4's Rotary/Button are bank-derived, like Korg's Knob/Mute ---
+
+
+def test_single_pbf4_wires_pot_and_button_to_their_own_channels_fader() -> None:
+    controller = build_grid_controller(_topology([_pbf4(0)])).controller
+    for channel in range(1, 5):
+        assert controller.knob_to_fader[("grid_pbf4_pot", channel)] == ("grid_fader", channel)
+        assert controller.mute_to_fader[("grid_pbf4_button", channel)] == ("grid_fader", channel)
+        assert controller.bank_fader_key(("grid_pbf4_pot", channel)) == ("grid_fader", channel)
+        assert controller.bank_fader_key(("grid_pbf4_button", channel)) == ("grid_fader", channel)
+    assert controller.fader_to_knob[("grid_fader", 1)] == ("grid_pbf4_pot", 1)
+
+
+def test_pbf4_vsn1_pbf4_chain_keeps_pot_button_fader_alignment_across_modules() -> None:
+    """The VSN1 sandwiched in the middle must not shift the second PBF4
+    module's pot/button indices out of alignment with its own fader's."""
+    controller = build_grid_controller(_topology([_pbf4(0), _vsn1(1), _pbf4(2)])).controller
+    assert controller.bank_count == 8
+    for channel in range(1, 9):
+        assert controller.knob_to_fader[("grid_pbf4_pot", channel)] == ("grid_fader", channel)
+        assert controller.mute_to_fader[("grid_pbf4_button", channel)] == ("grid_fader", channel)
+
+
+def test_vsn1_only_topology_has_no_knob_or_mute_wiring() -> None:
+    controller = build_grid_controller(_topology([_vsn1(0)])).controller
+    assert controller.knob_to_fader == {}
+    assert controller.mute_to_fader == {}
+    assert controller.fader_to_knob == {}
+
+
 # --- VSN1 identity independent of position (GRID-CTRL-003) ---
 
 

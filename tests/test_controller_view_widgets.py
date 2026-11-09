@@ -218,28 +218,65 @@ def test_solo_summary_follows_the_active_group() -> None:
     assert "select-AX9" in view._item_by_key[solo_key_bank_1].text(0)
 
 
-# @spec UI-CTRLVIEW-002
-def test_knob_and_mute_summaries_reuse_the_existing_rule_text() -> None:
+# @spec UI-CTRLVIEW-002 (Phase 1.2)
+def test_knob_and_mute_summaries_show_the_real_per_channel_action_not_shared_text() -> None:
+    """Phase 1.2 made the Knob/Mute action itself independently configurable
+    per channel, so the summary can no longer reuse one generic rule-text
+    string shared by every bank (the pre-Phase-1.2 behavior) - it must show
+    each control's actual current action instead."""
     _qapp()
     engine = MappingEngine(profile=STUDIO_PROFILE)
     view = ControllerView(engine, AxisDiscovery())
     view.refresh()
     knob_key = next(iter(STUDIO_PROFILE.knob_to_fader))
     mute_key = next(iter(STUDIO_PROFILE.mute_to_fader))
-    assert "Bank-derived" in view._item_by_key[knob_key].text(0)
-    assert "Bank-derived" in view._item_by_key[mute_key].text(0)
+    # Default action, no axis assigned yet to either control's channel.
+    assert "Adjust" in view._item_by_key[knob_key].text(0)
+    assert "Mute" in view._item_by_key[mute_key].text(0)
 
 
-# @spec UI-CTRLVIEW-007
-def test_selecting_a_knob_row_shows_no_editor() -> None:
+# @spec UI-CTRLVIEW-010 (Phase 1.2)
+def test_selecting_a_knob_row_shows_an_action_editor() -> None:
+    """A Rotary (Korg's Knob) is independently configurable as of Phase 1.2 -
+    it now gets a real editor, not the "no settings yet" placeholder a
+    generic "button"-typed control still gets."""
     _qapp()
     engine = MappingEngine(profile=STUDIO_PROFILE)
     view = ControllerView(engine, AxisDiscovery())
     knob_key = next(iter(STUDIO_PROFILE.knob_to_fader))
     _select(view, knob_key)
+    assert view._inspector_field is not None
+    assert view._inspector_kind == "rotary"
+
+
+# @spec UI-CTRLVIEW-007
+def test_selecting_a_transport_button_row_shows_no_editor() -> None:
+    """A non-bank-derived button (Play, a plain transport key) has no
+    configurable action - it keeps the pre-Phase-1.2 placeholder."""
+    _qapp()
+    engine = MappingEngine(profile=STUDIO_PROFILE)
+    view = ControllerView(engine, AxisDiscovery())
+    play_key = ("cc", 41)
+    _select(view, play_key)
     assert view._inspector_field is None
     texts = [view._inspector_layout.itemAt(i).widget().text() for i in range(view._inspector_layout.count())]
     assert any("No settings available" in text for text in texts)
+
+
+# @spec UI-CTRLVIEW-010, MAP-BTNACT-002, MAP-BTNACT-003
+def test_selecting_a_mute_row_shows_an_action_editor_and_editing_it_persists() -> None:
+    _qapp()
+    engine = MappingEngine(profile=STUDIO_PROFILE)
+    view = ControllerView(engine, AxisDiscovery())
+    mute_key = next(iter(STUDIO_PROFILE.mute_to_fader))
+    fader_key = STUDIO_PROFILE.mute_to_fader[mute_key]
+    _select(view, mute_key)
+    assert view._inspector_field is not None
+    assert view._inspector_kind == "button"
+
+    view._inspector_field._combo.setCurrentIndex(view._inspector_field._combo.findData("solo"))
+
+    assert engine.button_action(fader_key) == "solo"
 
 
 # @spec UI-CTRLVIEW-006

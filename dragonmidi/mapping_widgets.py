@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 
 from PySide6.QtCore import Qt
@@ -170,6 +170,43 @@ class _SingleAxisTargetField(QWidget):
         if min_value is None or max_value is None:
             return
         self._on_change(name, min_value, max_value)
+
+
+class _ActionComboField(QWidget):
+    """One combo box binding a single control's independent action
+    assignment (Rotary or Button, Phase 1.2) to the engine - the Inspector's
+    counterpart to `_SingleAxisTargetField` for non-fader controls. Carries
+    no controller-specific vocabulary itself; `options` (an ordered
+    sequence of `(action, label)` pairs) supplies the choices, so the same
+    class serves both Rotary's and Button's distinct action vocabularies.
+
+    @spec UI-CTRLVIEW-010, MAP-BTNACT-002, MAP-BTNACT-003
+    """
+
+    def __init__(self, options: Sequence[tuple[str, str]], on_change: Callable[[str], None]) -> None:
+        super().__init__()
+        self._on_change = on_change
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._combo = QComboBox()
+        for action, label in options:
+            self._combo.addItem(label, userData=action)
+        self._combo.currentIndexChanged.connect(lambda _index: self._emit_change())
+        layout.addWidget(self._combo)
+
+    def _emit_change(self) -> None:
+        action = self._combo.currentData()
+        if action is not None:
+            self._on_change(action)
+
+    def sync(self, action: str) -> None:
+        """Called every UI tick, same as `_SingleAxisTargetField.sync()` -
+        a no-op when the engine's current value already matches what's
+        displayed."""
+        index = self._combo.findData(action)
+        if index != -1 and self._combo.currentIndex() != index:
+            with _signals_blocked(self._combo):
+                self._combo.setCurrentIndex(index)
 
 
 class _AxisTargetEditor(QWidget):

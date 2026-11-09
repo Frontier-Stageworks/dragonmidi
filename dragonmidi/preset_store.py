@@ -40,6 +40,65 @@ def _validate_entry(entry: object) -> dict[str, object] | None:
     return {"axis_name": axis_name, "min": float(min_value), "max": float(max_value)}
 
 
+def _validate_action_entry(entry: object) -> dict[str, str] | None:
+    """Shape validation only (`"rotary"`/`"button"` must be strings if
+    present) - the specific action vocabulary (`ROTARY_ACTIONS`/
+    `BUTTON_ACTIONS`) is validated by `MappingEngine.load_bank_control_actions`
+    instead, so this module stays decoupled from `mapping.py`'s domain
+    constants, same separation `_validate_entry` already draws for axis
+    targets.
+
+    @spec MAP-BTNACT-005
+    """
+    if not isinstance(entry, dict):
+        return None
+    result: dict[str, str] = {}
+    for role in ("rotary", "button"):
+        value = entry.get(role)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return None
+        result[role] = value
+    return result
+
+
+def load_bank_actions(configurations_dir: Path, profile_name: str, bank_count: int) -> dict[int, dict[str, str]]:
+    """Loads a Controller Profile's persisted per-Bank Rotary/Button action
+    overrides (Phase 1.2) - the independent-assignment counterpart to
+    `load_group_axis_targets`, stored under its own `bank_actions` key in the
+    same per-profile file. Bounds-checked the same way; a missing file or
+    missing key is an empty table, not an error.
+
+    @spec MAP-STORE-001, MAP-STORE-002, MAP-STORE-003, MAP-BTNACT-005
+    """
+    path = _file_path(configurations_dir, profile_name)
+    if not path.is_file():
+        return {}
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Skipping unreadable Preset Store file %s: %s", path, exc)
+        return {}
+
+    bank_actions = raw.get("bank_actions") if isinstance(raw, dict) else None
+    if not isinstance(bank_actions, dict):
+        return {}
+
+    result: dict[int, dict[str, str]] = {}
+    for raw_bank_index, entry in bank_actions.items():
+        bank_index = _parse_index(raw_bank_index, _MIN_BANK_INDEX, bank_count)
+        validated = _validate_action_entry(entry) if bank_index is not None else None
+        if bank_index is None or validated is None:
+            logger.warning("Skipping invalid action entry (bank %r) in %s", raw_bank_index, path)
+            continue
+        if validated:
+            result[bank_index] = validated
+    return result
+
+
 def load_group_axis_targets(configurations_dir: Path, profile_name: str, bank_count: int) -> dict[int, dict[int, dict]]:
     """Loads and validates a Controller Profile's persisted (Bank, Group)
     axis-assignment table. Bounds-checks each entry's Bank index (1 through the
@@ -84,20 +143,36 @@ def load_group_axis_targets(configurations_dir: Path, profile_name: str, bank_co
     return result
 
 
-def save_group_axis_targets(configurations_dir: Path, profile_name: str, bank_axes: dict[int, dict[int, dict]]) -> None:
-    """Writes a Controller Profile's complete (Bank, Group) axis-assignment table,
-    replacing any previous contents entirely (full rewrite, not a diff/merge).
+def save_group_axis_targets(
+    configurations_dir: Path,
+    profile_name: str,
+    bank_axes: dict[int, dict[int, dict]],
+    bank_actions: dict[int, dict[str, str]] | None = None,
+) -> None:
+    """Writes a Controller Profile's complete (Bank, Group) axis-assignment table
+    and, as of Phase 1.2, its per-Bank Rotary/Button action overrides - both in one
+    atomic full rewrite of the same file, replacing any previous contents entirely
+    (not a diff/merge): a caller who only has one of the two pieces at hand must
+    still pass the other (`MappingEngine.dump_group_axis_targets`/
+    `dump_bank_control_actions` together, always re-dumped fresh from the engine)
+    rather than this function merging with the file's existing contents, which
+    would reintroduce the staleness/race this module's full-rewrite design
+    deliberately avoids. `bank_actions` defaults to an empty table for a caller
+    that hasn't adopted it yet - unchanged behavior, just an added empty key.
     Creates `configurations_dir` if it doesn't exist. Fails silently on a write
     error (disk full, permissions, or the directory path being blocked by a
     non-directory file) - logged, not raised, matching the Keystroke/WebSocket
     output adapters' precedent; in-memory engine state stays authoritative for
     the running session regardless of whether the write succeeded.
 
-    @spec MAP-STORE-001, MAP-STORE-004, MAP-STORE-005, MAP-STORE-006
+    @spec MAP-STORE-001, MAP-STORE-004, MAP-STORE-005, MAP-STORE-006, MAP-BTNACT-005
     """
     path = _file_path(configurations_dir, profile_name)
     payload = {
-        "bank_axes": {str(bank_index): {str(group_index): entry for group_index, entry in groups.items()} for bank_index, groups in bank_axes.items()}
+        "bank_axes": {
+            str(bank_index): {str(group_index): entry for group_index, entry in groups.items()} for bank_index, groups in bank_axes.items()
+        },
+        "bank_actions": {str(bank_index): dict(actions) for bank_index, actions in (bank_actions or {}).items()},
     }
     try:
         configurations_dir.mkdir(parents=True, exist_ok=True)

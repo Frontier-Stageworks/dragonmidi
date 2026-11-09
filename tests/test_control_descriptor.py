@@ -72,6 +72,8 @@ def test_knob_mute_solo_are_expanded_per_real_key_not_collapsed() -> None:
 
 # @spec UI-CTRLDESC-002, UI-CTRLDESC-004
 def test_knob_mute_solo_labels_and_types() -> None:
+    """Phase 1.2: a Knob-role control is physically a Rotary, distinct from
+    the generic Button shape Mute/Solo remain."""
     engine = MappingEngine(profile=STUDIO_PROFILE)
     descriptors = {d.key: d for d in _descriptors(engine)}
     first_knob_key = next(iter(STUDIO_PROFILE.knob_to_fader))
@@ -80,17 +82,19 @@ def test_knob_mute_solo_labels_and_types() -> None:
     assert descriptors[first_knob_key].label == STUDIO_PROFILE.control_names[first_knob_key]
     assert descriptors[first_mute_key].label == STUDIO_PROFILE.control_names[first_mute_key]
     assert descriptors[first_solo_key].label == "Solo"
-    assert descriptors[first_knob_key].control_type == "button"
+    assert descriptors[first_knob_key].control_type == "rotary"
     assert descriptors[first_mute_key].control_type == "button"
     assert descriptors[first_solo_key].control_type == "button"
 
 
 # @spec UI-CTRLDESC-002
-def test_jog_wheel_rows_classify_as_button() -> None:
+def test_jog_wheel_rows_classify_as_jog() -> None:
+    """Phase 1.2: the jog wheel's own physical shape, distinct from an
+    ordinary button, even though it gets no Inspector editor yet."""
     engine = MappingEngine(profile=STUDIO_PROFILE)
     descriptors = {d.key: d for d in _descriptors(engine)}
-    assert descriptors[JOG_WHEEL_ROW_KEY].control_type == "button"
-    assert descriptors[JOG_WHEEL_ARC_ROW_KEY].control_type == "button"
+    assert descriptors[JOG_WHEEL_ROW_KEY].control_type == "jog"
+    assert descriptors[JOG_WHEEL_ARC_ROW_KEY].control_type == "jog"
 
 
 # @spec UI-CTRLDESC-002
@@ -151,11 +155,12 @@ def test_vsn1_buttons_and_jog_are_present_though_absent_from_both_row_builders()
 
 
 # @spec UI-CTRLDESC-002
-def test_vsn1_jog_and_buttons_classify_as_button_via_the_fallback() -> None:
+def test_vsn1_jog_classifies_as_jog_and_buttons_as_button_via_the_fallback() -> None:
     controller = _vsn1_controller()
     engine = MappingEngine(profile=controller)
     descriptors = {d.key: d for d in _descriptors(engine)}
-    assert descriptors[("grid_vsn1_jog", None)].control_type == "button"
+    assert descriptors[("grid_vsn1_jog", None)].control_type == "jog"
+    assert descriptors[("grid_vsn1_jog_button", None)].control_type == "jog"
     assert descriptors[("grid_vsn1_button", 1)].control_type == "button"
 
 
@@ -183,7 +188,7 @@ def test_fallback_classifies_fader_vs_button_and_knob_is_expanded_not_dropped() 
     descriptors = {d.key: d for d in build_control_descriptors([], [], fake)}
     assert descriptors[("cc", 0)].control_type == "fader"
     assert descriptors[("cc", 1)].label == "Fake Knob"  # expanded via knob_to_fader, not dropped
-    assert descriptors[("cc", 1)].control_type == "button"
+    assert descriptors[("cc", 1)].control_type == "rotary"  # Phase 1.2: a Knob-role control is a Rotary
     assert descriptors[("cc", 2)].control_type == "button"
 
 

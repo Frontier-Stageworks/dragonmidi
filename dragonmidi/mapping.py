@@ -24,6 +24,23 @@ _STEP_MOCO_BACKWARD = KeyCombo(frozenset({"alt", "shift"}), "left")
 
 _KNOB_STEP_SCALE = 0.1  # axis position units per one MIDI raw-value increment
 
+# Independent per-channel Rotary/Button action assignment (Phase 1.2): which
+# supported behavior a bank-derived Knob-role or Mute-role control actually
+# performs, overriding the legacy fixed pairing on a per-(fader_key) basis.
+# Both defaults reproduce the exact pre-Phase-1.2 hardcoded behavior - a
+# profile/controller with no overrides stored behaves byte-identically to
+# before this feature existed (@spec MAP-BTNACT-001).
+ROTARY_ACTION_ADJUST = "adjust"  # legacy default: nudge the channel's assigned axis (MAP-BANK-001)
+ROTARY_ACTION_NONE = "none"  # explicitly unassigned - no output at all
+ROTARY_ACTIONS: tuple[str, ...] = (ROTARY_ACTION_ADJUST, ROTARY_ACTION_NONE)
+_DEFAULT_ROTARY_ACTION = ROTARY_ACTION_ADJUST
+
+BUTTON_ACTION_MUTE = "mute"  # legacy default: setZero on the channel's assigned axis (MAP-BANK-002)
+BUTTON_ACTION_SOLO = "solo"  # select-AXn for this channel, Group-aware - like MAP-WS-002's Solo row
+BUTTON_ACTION_NONE = "none"  # explicitly unassigned - no output at all
+BUTTON_ACTIONS: tuple[str, ...] = (BUTTON_ACTION_MUTE, BUTTON_ACTION_SOLO, BUTTON_ACTION_NONE)
+_DEFAULT_BUTTON_ACTION = BUTTON_ACTION_MUTE
+
 
 @dataclass(frozen=True)
 class _MapEntry:
@@ -391,6 +408,12 @@ class MappingEngine:
         # reading is available from Dragonframe (see `process`'s `axis_positions` param)
         # (@spec MAP-BANK-008).
         self._axis_position: dict[_Key, float] = {}
+        # Per-channel Rotary/Button action overrides (Phase 1.2), keyed by fader_key -
+        # absent means "use the legacy default" (@spec MAP-BTNACT-001). Survives an
+        # ordinary reconnect (reset()), cleared only on a Controller Profile switch
+        # (set_profile()), same lifetime as _group_axis_targets.
+        self._rotary_action: dict[_Key, str] = {}
+        self._button_action: dict[_Key, str] = {}
         # Cycle's last-selected axis index, -1 = nothing selected yet (@spec MAP-WS-005).
         self._cycle_index: int = -1
         # Active Group, 1-5 - unlike _cycle_index, 1 is always a valid starting state,
@@ -438,6 +461,8 @@ class MappingEngine:
         self._group_axis_targets.clear()
         self._global_encoder_mode = False
         self._axis_position.clear()
+        self._rotary_action.clear()
+        self._button_action.clear()
         self._active_group = 1  # @spec MAP-GROUP-007
 
     def tracked_controls(self) -> set[_Key]:
@@ -571,6 +596,89 @@ class MappingEngine:
             }
         return result
 
+    def rotary_action(self, fader_key: _Key) -> str:
+        """The Rotary (Knob-role) action currently assigned to Bank
+        `fader_key`'s channel - `ROTARY_ACTION_ADJUST` (the legacy default)
+        unless explicitly overridden.
+
+        @spec MAP-BTNACT-001, MAP-BTNACT-002
+        """
+        return self._rotary_action.get(fader_key, _DEFAULT_ROTARY_ACTION)
+
+    def set_rotary_action(self, fader_key: _Key, action: str) -> None:
+        """@spec MAP-BTNACT-002, MAP-BTNACT-004"""
+        if fader_key not in self._profile.fader_keys:
+            raise ValueError(f"rotary action target must be a fader key, got {fader_key!r}")
+        if action not in ROTARY_ACTIONS:
+            raise ValueError(f"unsupported rotary action: {action!r}")
+        if action == _DEFAULT_ROTARY_ACTION:
+            self._rotary_action.pop(fader_key, None)
+        else:
+            self._rotary_action[fader_key] = action
+
+    def button_action(self, fader_key: _Key) -> str:
+        """The Button (Mute-role) action currently assigned to Bank
+        `fader_key`'s channel - `BUTTON_ACTION_MUTE` (the legacy default,
+        setZero) unless explicitly overridden to Solo or None.
+
+        @spec MAP-BTNACT-001, MAP-BTNACT-003
+        """
+        return self._button_action.get(fader_key, _DEFAULT_BUTTON_ACTION)
+
+    def set_button_action(self, fader_key: _Key, action: str) -> None:
+        """@spec MAP-BTNACT-003, MAP-BTNACT-004"""
+        if fader_key not in self._profile.fader_keys:
+            raise ValueError(f"button action target must be a fader key, got {fader_key!r}")
+        if action not in BUTTON_ACTIONS:
+            raise ValueError(f"unsupported button action: {action!r}")
+        if action == _DEFAULT_BUTTON_ACTION:
+            self._button_action.pop(fader_key, None)
+        else:
+            self._button_action[fader_key] = action
+
+    def dump_bank_control_actions(self) -> dict[int, dict[str, str]]:
+        """Reverse of `load_bank_control_actions`, for the Preset Store to write
+        out - parallel to `dump_group_axis_targets`. Only non-default overrides
+        are present (an all-default engine dumps an empty table).
+
+        @spec MAP-BTNACT-005
+        """
+        bank_index_by_fader_key = {key: i + 1 for i, key in enumerate(self._profile.bank_fader_keys)}
+        result: dict[int, dict[str, str]] = {}
+        for fader_key, action in self._rotary_action.items():
+            bank_index = bank_index_by_fader_key.get(fader_key)
+            if bank_index is not None:
+                result.setdefault(bank_index, {})["rotary"] = action
+        for fader_key, action in self._button_action.items():
+            bank_index = bank_index_by_fader_key.get(fader_key)
+            if bank_index is not None:
+                result.setdefault(bank_index, {})["button"] = action
+        return result
+
+    def load_bank_control_actions(self, bank_actions: dict[int, dict[str, str]]) -> None:
+        """Bulk-populate per-channel Rotary/Button action overrides from the
+        Preset Store's validated shape (`{bank_index: {"rotary": action,
+        "button": action}}`), translating Bank index -> fader key via
+        `ControllerProfile.bank_fader_keys` - the action-table counterpart to
+        `load_group_axis_targets`. An unrecognized action string (the Preset
+        Store validates shape, not vocabulary) is silently ignored, leaving
+        that role at its default - a forward-compatibility-safe default,
+        not a crash.
+
+        @spec MAP-BTNACT-005
+        """
+        bank_fader_keys = self._profile.bank_fader_keys
+        for bank_index, actions in bank_actions.items():
+            if not (1 <= bank_index <= len(bank_fader_keys)):
+                continue
+            fader_key = bank_fader_keys[bank_index - 1]
+            rotary = actions.get("rotary")
+            if rotary in ROTARY_ACTIONS:
+                self.set_rotary_action(fader_key, rotary)
+            button = actions.get("button")
+            if button in BUTTON_ACTIONS:
+                self.set_button_action(fader_key, button)
+
     def process(self, event: MidiEvent, now: float, axis_positions: dict[str, float] | None = None) -> OscMessage | None:
         """`axis_positions` is the OSC Listener's most recently observed position per
         axis name (`AxisDiscovery.axes`), if available - used to clamp Knob N's nudges
@@ -681,9 +789,11 @@ class MappingEngine:
         axis_target: _AxisTarget,
         axis_positions: dict[str, float] | None,
     ) -> OscMessage | None:
-        """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-005, MAP-BANK-008"""
+        """@spec MAP-BANK-001, MAP-BANK-002, MAP-BANK-005, MAP-BANK-008, MAP-BTNACT-002, MAP-BTNACT-003"""
         axis_path = f"/dragonframe/axis/{axis_target.axis_name}"
         if key in self._profile.knob_to_fader:
+            if self.rotary_action(fader_key) == ROTARY_ACTION_NONE:
+                return None  # explicitly unassigned (@spec MAP-BTNACT-002) - no nudge output at all
             previous = self._previous_value.get(key)
             self._previous_value[key] = event.raw_value
             if previous is None:
@@ -713,7 +823,13 @@ class MappingEngine:
                     return None  # already at the boundary in the requested direction
             self._axis_position[fader_key] = clamped_position
             return OscMessage(f"{axis_path}/stepPosition", (float(clamped_delta),))
-        # Mute (the only other bank-derived kind - Solo is WebSocket-targeted, MAP-WS-002)
+        # Mute-role (the other bank-derived kind). Default action is Mute (setZero,
+        # unchanged from before Phase 1.2); None produces nothing here; Solo produces
+        # nothing here either - it's handled by process_websocket() instead, which
+        # owns every WebSocketCommand output (@spec MAP-BTNACT-003).
+        action = self.button_action(fader_key)
+        if action in (BUTTON_ACTION_NONE, BUTTON_ACTION_SOLO):
+            return None
         return self._process_press(key, event, now, f"{axis_path}/setZero")
 
     def _process_jog(self, event: MidiEvent) -> OscMessage | None:
@@ -767,11 +883,34 @@ class MappingEngine:
         (`docs/llds/static-mapping.md`).
 
         @spec MAP-WS-001, MAP-WS-002, MAP-WS-003, MAP-WS-004, MAP-WS-005
-        @spec MAP-WS-006, MAP-WS-007, MAP-WS-008, MAP-WS-009
+        @spec MAP-WS-006, MAP-WS-007, MAP-WS-008, MAP-WS-009, MAP-BTNACT-003
         """
-        if event.type != "cc" or event.channel != self._profile.default_channel:
+        if event.channel != self._profile.default_channel:
             return None
         key: _Key = (event.type, event.number)
+
+        # A Mute-role control explicitly overridden to Solo (Phase 1.2) addresses its
+        # own channel's axis number, independent of the profile's own `ws_keys.solos`
+        # list - checked before the `event.type != "cc"` gate below, since a Grid
+        # PBF4 Button's `event.type` is its Grid logical tag, never "cc" (@spec
+        # MAP-BTNACT-003). Any other Mute-role key (the default Mute action, or an
+        # explicit None) produces no WebSocketCommand - process() owns those.
+        bank_derived_fader_key = self._profile.mute_to_fader.get(key)
+        if bank_derived_fader_key is not None:
+            if self.button_action(bank_derived_fader_key) != BUTTON_ACTION_SOLO:
+                return None
+            if not self._press_edge(key, event, now):
+                return None
+            bank_fader_keys = self._profile.bank_fader_keys
+            try:
+                bank_index = bank_fader_keys.index(bank_derived_fader_key) + 1
+            except ValueError:
+                return None
+            axis_number = bank_index + self._profile.bank_count * (self._active_group - 1)
+            return WebSocketCommand(f"select-AX{axis_number}")
+
+        if event.type != "cc":
+            return None
         ws_keys = self._profile.websocket_keys
 
         if ws_keys is None:

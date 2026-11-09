@@ -15,7 +15,7 @@ import pytest
 from dragonmidi.grid_controller import GRID_PROFILE_NAME, Ready, build_grid_controller
 from dragonmidi.grid_modules import ModuleType
 from dragonmidi.grid_topology import GridModule, GridTopology
-from dragonmidi.preset_store import load_group_axis_targets, save_group_axis_targets
+from dragonmidi.preset_store import load_bank_actions, load_group_axis_targets, save_group_axis_targets
 
 _VALID_ENTRY = {"axis_name": "PAN", "min": 0.0, "max": 100.0}
 
@@ -202,6 +202,58 @@ def test_load_and_save_are_plain_synchronous_functions(configs_dir: Path) -> Non
     # there is no deferred/background completion to race against.
     save_group_axis_targets(configs_dir, "Test", {1: {1: _VALID_ENTRY}})
     assert load_group_axis_targets(configs_dir, "Test", 8) == {1: {1: _VALID_ENTRY}}
+
+
+# --- Phase 1.2: per-Bank Rotary/Button action overrides, stored alongside
+# --- bank_axes in the same per-profile file under its own "bank_actions" key ---
+
+
+# @spec MAP-BTNACT-005
+def test_save_and_load_bank_actions_round_trip(configs_dir: Path) -> None:
+    actions = {1: {"rotary": "none"}, 3: {"button": "solo"}}
+    save_group_axis_targets(configs_dir, "Test", {}, actions)
+    assert load_bank_actions(configs_dir, "Test", 8) == actions
+
+
+# @spec MAP-BTNACT-005
+def test_saving_bank_axes_and_bank_actions_together_does_not_clobber_either(configs_dir: Path) -> None:
+    axes = {1: {1: _VALID_ENTRY}}
+    actions = {1: {"button": "solo"}}
+    save_group_axis_targets(configs_dir, "Test", axes, actions)
+    assert load_group_axis_targets(configs_dir, "Test", 8) == axes
+    assert load_bank_actions(configs_dir, "Test", 8) == actions
+
+
+# @spec MAP-BTNACT-005
+def test_save_group_axis_targets_without_bank_actions_still_writes_an_empty_table(configs_dir: Path) -> None:
+    """Backward compatibility: a caller passing only `bank_axes` (the
+    pre-Phase-1.2 call shape) must not raise, and must not leave a
+    previously saved `bank_actions` table stale - it's dropped, same full-
+    rewrite semantics bank_axes itself already has."""
+    save_group_axis_targets(configs_dir, "Test", {}, {1: {"button": "solo"}})
+    save_group_axis_targets(configs_dir, "Test", {1: {1: _VALID_ENTRY}})  # old 3-arg call shape
+    assert load_bank_actions(configs_dir, "Test", 8) == {}
+
+
+# @spec MAP-BTNACT-005
+def test_load_bank_actions_with_no_file_returns_an_empty_table(configs_dir: Path) -> None:
+    assert load_bank_actions(configs_dir, "Never Saved", 8) == {}
+
+
+@pytest.mark.parametrize("bad_bank_index", ["0", "9", "-1", "not_a_number"])
+# @spec MAP-BTNACT-005
+def test_load_bank_actions_skips_an_out_of_range_or_non_numeric_bank_index(configs_dir: Path, bad_bank_index: str) -> None:
+    configs_dir.mkdir(parents=True)
+    (configs_dir / "Test.json").write_text(json.dumps({"bank_actions": {bad_bank_index: {"button": "solo"}}}))
+    assert load_bank_actions(configs_dir, "Test", 8) == {}
+
+
+@pytest.mark.parametrize("bad_entry", [{"button": 123}, {"rotary": ["not", "a", "string"]}, "not_a_dict"])
+# @spec MAP-BTNACT-005
+def test_load_bank_actions_skips_a_malformed_entry_shape(configs_dir: Path, bad_entry: object) -> None:
+    configs_dir.mkdir(parents=True)
+    (configs_dir / "Test.json").write_text(json.dumps({"bank_actions": {"1": bad_entry}}))
+    assert load_bank_actions(configs_dir, "Test", 8) == {}
 
 
 # --- Intech Grid integration: no Preset Store code change needed (docs/llds/intech-grid.md

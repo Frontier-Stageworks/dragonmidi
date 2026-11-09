@@ -189,14 +189,14 @@ A small operational/teach panel can surface selected axis, current mode, recent 
 ### P0 — Discover, model, and safely map hardware
 
 - [ ] Audit current architecture, saved configuration schema, and all three supported controller-family integrations.
-- [ ] Define a normalized input identity: `{device, module, control, type, rawMidi}`; avoid depending on CC number alone when possible.
-- [ ] Add device capability descriptors for faders, absolute knobs, relative wheels, and buttons.
+- [ ] Define a normalized input identity: `{device, module, control, type, rawMidi}`; avoid depending on CC number alone when possible. (Partial: `ControlDescriptor.key`/`control_type` already carry `control`+`type`; Grid's raw-vs-logical `_Key` split already separates `rawMidi` from logical identity for its own controller family. No unified cross-family `{device, module, ...}` struct exists yet.)
+- [ ] Add device capability descriptors for faders, absolute knobs, relative wheels, and buttons. (Partial, Phase 1.2: `ControlDescriptor.control_type` now distinguishes `"fader"`/`"rotary"`/`"button"`/`"jog"` by physical shape, not just `"fader"`/`"button"`, and PBF4's Rotary/Button are wired into `knob_to_fader`/`mute_to_fader` like Korg's Knob/Mute. Still just a type tag, not a richer per-type capability struct, e.g. range/step metadata.)
 - [ ] Normalize MIDI input events, including relative encoders and press/release pairs.
-- [ ] Define a mapping domain model separating **input**, **behavior**, **target**, **layer**, and per-control **options**.
-- [x] Implement controller-aware control selection and a contextual inspector. (Controller View + Inspector, Phase 8 of `docs/high-level-design.md`'s Delivery Phasing; today exposes only the existing axis-target assignment, per that phase's explicit scope.)
+- [ ] Define a mapping domain model separating **input**, **behavior**, **target**, **layer**, and per-control **options**. (Partial, Phase 1.2: `MappingEngine.rotary_action`/`button_action` separate a bank-derived control's **behavior** choice from its **input** identity and its channel's **target** — the independent-assignment slice of this item. A full `input`/`behavior`/`target`/`layer`/`options` domain model generalizing beyond Rotary/Button is still open.)
+- [x] Implement controller-aware control selection and a contextual inspector. (Controller View + Inspector, Phase 8 of `docs/high-level-design.md`'s Delivery Phasing. Phase 1.2 added independent action editors for Rotary and bank-derived Button controls, alongside the existing Fader axis-target editor.)
 - [x] Implement the Mappings list/table as a dense alternate view. (The prior Mapping View + Configuration Dialog, preserved verbatim as "Table View," reachable via a footer toggle from the Controller View.)
 - [ ] Expose live input activity for each control and MIDI learn/select-by-moving.
-- [x] Maintain backward compatibility with existing mappings, A–E groups, and nanoKONTROL behavior. (Full existing test suite - 547 tests - passes unchanged; A-E Groups reused via the existing `step_active_group` mechanism, not replaced; Table View is the same widgets, same persistence format.)
+- [x] Maintain backward compatibility with existing mappings, A–E groups, and nanoKONTROL behavior. (Full existing test suite - 650 tests - passes; A-E Groups reused via the existing `step_active_group` mechanism, not replaced; Table View is the same widgets, same persistence format. Phase 1.2's Rotary/Button action overrides default to the pre-Phase-1.2 derived behavior, so an existing saved configuration with no `bank_actions` entry loads and behaves identically to before.)
 - [ ] Test device disconnect/reconnect and mapping identity stability.
 
 **Acceptance criteria**

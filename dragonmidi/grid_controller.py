@@ -74,14 +74,22 @@ class GridRuntimeController:
         control_names: Mapping[_Key, str],
         address_table: Mapping[_Key, _Key],
         topology: GridTopology,
+        knob_to_fader: Mapping[_Key, _Key] | None = None,
+        mute_to_fader: Mapping[_Key, _Key] | None = None,
     ) -> None:
         self.default_channel = default_channel
         self.bank_count = bank_count
         self.bank_fader_keys = bank_fader_keys
         self.fader_keys = fader_keys
-        self.knob_to_fader: dict[_Key, _Key] = {}
-        self.mute_to_fader: dict[_Key, _Key] = {}
-        self.fader_to_knob: dict[_Key, _Key] = {}
+        # PBF4's Rotary (potentiometer) and Button elements, Phase 1.2 - populated
+        # exactly like a Korg profile's Knob/Mute, since PBF4's pot/button share
+        # their channel's fader's own numeric index within and across modules
+        # (docs/llds/intech-grid.md § Module Definitions; see build_grid_controller's
+        # `knob_to_fader`/`mute_to_fader` construction). Empty for a VSN1-only
+        # topology, same as before Phase 1.2.
+        self.knob_to_fader: dict[_Key, _Key] = dict(knob_to_fader or {})
+        self.mute_to_fader: dict[_Key, _Key] = dict(mute_to_fader or {})
+        self.fader_to_knob: dict[_Key, _Key] = {fader_key: knob_key for knob_key, fader_key in self.knob_to_fader.items()}
         self.opinionated_map = opinionated_map
         self.control_names = control_names
         self.address_table = address_table
@@ -195,6 +203,19 @@ def build_grid_controller(topology: GridTopology) -> "Ready | UnsupportedTopolog
     )
     opinionated_map = _fader_entries(fader_raw_ccs, key_type="grid_fader")
 
+    # PBF4's pot/button per-tag counters increment in lockstep with its fader's own
+    # (every PBF4 module contributes exactly one of each per channel, in the same
+    # per-module order - docs/llds/intech-grid.md § Module Definitions), so index i's
+    # pot/fader/button always belong to the same physical channel strip across any
+    # number/order of PBF4 modules mixed with VSN1 modules (whose elements never
+    # touch these three counters at all). `min(..., bank_count)` is defensive only -
+    # it's always equal today, since no other module type contributes a fader.
+    # @spec GRID-CTRL-011
+    pot_count = min(counters["grid_pbf4_pot"], bank_count)
+    button_count = min(counters["grid_pbf4_button"], bank_count)
+    knob_to_fader = {("grid_pbf4_pot", i): ("grid_fader", i) for i in range(1, pot_count + 1)}
+    mute_to_fader = {("grid_pbf4_button", i): ("grid_fader", i) for i in range(1, button_count + 1)}
+
     controller = GridRuntimeController(
         default_channel=topology.current_page % 16,
         bank_count=bank_count,
@@ -204,6 +225,8 @@ def build_grid_controller(topology: GridTopology) -> "Ready | UnsupportedTopolog
         control_names=control_names,
         address_table=address_table,
         topology=topology,
+        knob_to_fader=knob_to_fader,
+        mute_to_fader=mute_to_fader,
     )
     return Ready(controller=controller)
 
