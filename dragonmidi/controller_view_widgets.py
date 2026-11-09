@@ -233,24 +233,55 @@ class ControllerView(QWidget):
         self._show_inspector_placeholder()
         self.refresh()
 
-    def _build_group_item(self, group: ControlGroup) -> QTreeWidgetItem:
-        """@spec UI-CTRLTREE-001, UI-CTRLTREE-002: a group header is a
-        top-level item with no `ItemIsSelectable` flag - clicking it can
-        never make it `currentItem()`, which is what lets a previously
-        selected control's highlight survive a header click elsewhere
-        (`UI-CTRLTREE-003`)."""
+    def _build_group_item(self, group: ControlGroup, parent: QTreeWidgetItem | None = None) -> QTreeWidgetItem:
+        """@spec UI-CTRLTREE-001, UI-CTRLTREE-002: a group header has no
+        `ItemIsSelectable` flag - clicking it can never make it
+        `currentItem()`, which is what lets a previously selected control's
+        highlight survive a header click elsewhere (`UI-CTRLTREE-003`). A
+        `"module"`-kind group's `children` (Phase 1.3, `UI-CTRLTREE-007`) are
+        rendered the same way - as nested group-header items, tagged
+        identically to a top-level group - rather than as a second item kind,
+        so click/expand/selection handling needs no branch for them. This is
+        one additional, non-recursive level: `ControlGroup.children` is never
+        itself nested, so this method never calls itself more than twice
+        deep."""
         group_item = QTreeWidgetItem([group.label])
         group_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
         group_item.setData(0, _ITEM_KIND_ROLE, "group")
         group_item.setData(0, _ITEM_PAYLOAD_ROLE, group.id)
-        self._tree.addTopLevelItem(group_item)
-        for descriptor in group.controls:
-            leaf = QTreeWidgetItem([descriptor.label])
-            leaf.setData(0, _ITEM_KIND_ROLE, "control")
-            leaf.setData(0, _ITEM_PAYLOAD_ROLE, descriptor.key)
-            group_item.addChild(leaf)
-            self._item_by_key[descriptor.key] = leaf
+        if parent is None:
+            self._tree.addTopLevelItem(group_item)
+        else:
+            parent.addChild(group_item)
+        if group.children:
+            for child in group.children:
+                self._build_group_item(child, parent=group_item)
+        else:
+            for descriptor in group.controls:
+                leaf = QTreeWidgetItem([descriptor.label])
+                leaf.setData(0, _ITEM_KIND_ROLE, "control")
+                leaf.setData(0, _ITEM_PAYLOAD_ROLE, descriptor.key)
+                group_item.addChild(leaf)
+                self._item_by_key[descriptor.key] = leaf
         return group_item
+
+    def _all_group_items(self) -> list[QTreeWidgetItem]:
+        """Every `"group"`-kind item, top-level and nested (Phase 1.3) -
+        used only for expand-state bookkeeping across a search (below), not
+        for the top-level build/filter loops, which iterate `_group_items`
+        directly."""
+        result: list[QTreeWidgetItem] = []
+
+        def _walk(item: QTreeWidgetItem) -> None:
+            result.append(item)
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child.data(0, _ITEM_KIND_ROLE) == "group":
+                    _walk(child)
+
+        for top in self._group_items:
+            _walk(top)
+        return result
 
     def _on_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
         """@spec UI-CTRLTREE-002: clicking a group header toggles
@@ -282,8 +313,9 @@ class ControllerView(QWidget):
         query = text.strip().lower()
         if query and self._expanded_group_ids_before_filter is None:
             # First keystroke of a new search - remember what was expanded
-            # so clearing the search can restore it (UI-CTRLSEARCH-004).
-            self._expanded_group_ids_before_filter = {item.data(0, _ITEM_PAYLOAD_ROLE) for item in self._group_items if item.isExpanded()}
+            # (top-level and nested, Phase 1.3) so clearing the search can
+            # restore it (UI-CTRLSEARCH-004).
+            self._expanded_group_ids_before_filter = {item.data(0, _ITEM_PAYLOAD_ROLE) for item in self._all_group_items() if item.isExpanded()}
         self._apply_filter(query)
         if not query:
             self._expanded_group_ids_before_filter = None
@@ -293,28 +325,52 @@ class ControllerView(QWidget):
         summary, set by `refresh()`) plus its group's label - cheap string
         containment checks over text already computed for display, not a
         new recomputation path (@spec UI-CTRLSEARCH-005). Does not touch
-        `_selected_key` or the Inspector either way (@spec UI-CTRLSEARCH-003)."""
-        any_match = False
-        for group_item in self._group_items:
-            if not query:
+        `_selected_key` or the Inspector either way (@spec UI-CTRLSEARCH-003).
+        Recurses through the one additional module/nested-group level
+        (Phase 1.3, @spec UI-CTRLSEARCH-006) via `_filter_item` below - no
+        new matching rule, just the same one applied one level deeper."""
+        if not query:
+            # Restore every group item - top-level and nested (Phase 1.3) -
+            # not just the top level; a nested group expanded only by the
+            # search (e.g. a matching Channel inside a non-matching sibling
+            # Module) must collapse back too, the same as a top-level one.
+            restore = self._expanded_group_ids_before_filter
+            for group_item in self._all_group_items():
                 group_item.setHidden(False)
-                restore = self._expanded_group_ids_before_filter
                 if restore is not None:
                     group_item.setExpanded(group_item.data(0, _ITEM_PAYLOAD_ROLE) in restore)
-                continue
-            group_matches = query in group_item.text(0).lower()
-            child_match_found = False
-            for child_index in range(group_item.childCount()):
-                child = group_item.child(child_index)
-                child_matches = group_matches or query in child.text(0).lower()
-                child.setHidden(not child_matches)
-                child_match_found = child_match_found or child_matches
-            group_visible = group_matches or child_match_found
-            group_item.setHidden(not group_visible)
-            if group_visible:
-                group_item.setExpanded(True)
+            self._update_no_matches_item(show=False)
+            return
+
+        any_match = False
+        for group_item in self._group_items:
+            if self._filter_item(group_item, query, inherited_match=False):
                 any_match = True
         self._update_no_matches_item(show=bool(query) and not any_match)
+
+    def _filter_item(self, item: QTreeWidgetItem, query: str, *, inherited_match: bool) -> bool:
+        """A group (top-level or nested) is visible if its own label matches
+        or `inherited_match` is already true (a matching ancestor's label
+        makes every descendant visible, unfiltered - the same rule the
+        original single-level implementation applied to its direct
+        children, generalized here to cascade through nested groups too),
+        or at least one child is itself visible. Returns whether `item` ended
+        up visible."""
+        own_match = inherited_match or query in item.text(0).lower()
+        child_match_found = False
+        for child_index in range(item.childCount()):
+            child = item.child(child_index)
+            if child.data(0, _ITEM_KIND_ROLE) == "group":
+                child_visible = self._filter_item(child, query, inherited_match=own_match)
+            else:
+                child_visible = own_match or query in child.text(0).lower()
+                child.setHidden(not child_visible)
+            child_match_found = child_match_found or child_visible
+        visible = own_match or child_match_found
+        item.setHidden(not visible)
+        if visible:
+            item.setExpanded(True)
+        return visible
 
     def _update_no_matches_item(self, show: bool) -> None:
         """@spec UI-CTRLSEARCH-005: a simple empty state, not a dead list."""

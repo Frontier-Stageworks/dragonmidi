@@ -5,15 +5,19 @@ settled `GridTopology`, satisfying the same `ActiveController` shape
 shape is discovered at runtime, not declared in a YAML file.
 
 Construction fails closed (`GridControllerBuildOutcome`): a multi-row topology,
-more than one recognized VSN1, or any raw-MIDI-address collision between two
-recognized elements all abort construction entirely rather than producing a
-partial or best-guess controller.
+or any raw-MIDI-address collision between two recognized elements, aborts
+construction entirely rather than producing a partial or best-guess controller.
+As of Phase 1.3, any number of recognized VSN1 modules is supported - VSN1's
+buttons number globally across every VSN1 present and its jog/jog-button carry
+a VSN1-instance ordinal, the same generalization PBF4's faders/pots/buttons
+already had (docs/llds/intech-grid.md § Module Definitions).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import NamedTuple
 
 from .events import MidiEvent
 from .grid_modules import GridElement, ModuleType, definition_for_type
@@ -50,6 +54,16 @@ class AddressCollision:
     second_logical_key: _Key
 
 
+class ModuleRef(NamedTuple):
+    """Which physical module a logical key came from (Phase 1.3, additive -
+    @spec GRID-CTRL-012). `ordinal` is the module's 1-based normalized
+    left-to-right rank among *recognized* modules only; `module_type` is its
+    `ModuleType.value` ("PBF4"/"VSN1")."""
+
+    ordinal: int
+    module_type: str
+
+
 class GridRuntimeController:
     """Satisfies `active_controller.ActiveController` structurally. Not a
     frozen dataclass - its fields are derived from a topology snapshot, and
@@ -76,11 +90,21 @@ class GridRuntimeController:
         topology: GridTopology,
         knob_to_fader: Mapping[_Key, _Key] | None = None,
         mute_to_fader: Mapping[_Key, _Key] | None = None,
+        module_shape: tuple[str, ...] = (),
+        control_module: Mapping[_Key, ModuleRef] | None = None,
     ) -> None:
         self.default_channel = default_channel
         self.bank_count = bank_count
         self.bank_fader_keys = bank_fader_keys
         self.fader_keys = fader_keys
+        # Phase 1.3, additive (@spec GRID-CTRL-012, GRID-CTRL-013): read by
+        # docs/llds/named-controller.md's shape-based matching (`module_shape`)
+        # and docs/llds/app-ui.md's module-tier Control Grouping
+        # (`control_module`/`module_count`). Neither affects address_table
+        # resolution or existing logical-key numbering.
+        self.module_shape = module_shape
+        self.control_module: dict[_Key, ModuleRef] = dict(control_module or {})
+        self.module_count = len(module_shape)
         # PBF4's Rotary (potentiometer) and Button elements, Phase 1.2 - populated
         # exactly like a Korg profile's Knob/Mute, since PBF4's pot/button share
         # their channel's fader's own numeric index within and across modules
@@ -116,9 +140,19 @@ class Ready:
 _PBF4_ROLE_TAGS = {"fader": "grid_fader", "potentiometer": "grid_pbf4_pot", "button": "grid_pbf4_button"}
 _VSN1_ROLE_TAGS = {"button": "grid_vsn1_button", "endless": "grid_vsn1_jog", "jog_button": "grid_vsn1_jog_button"}
 
-# Both carry at most one instance per module - identified by `(tag, None)`,
-# the same shape `grid_vsn1_jog` already used, rather than a counted index.
-_SINGULAR_CONTROL_NAMES = {"grid_vsn1_jog": "VSN1 Jog", "grid_vsn1_jog_button": "VSN1 Jog Push"}
+# One VSN1 module contributes exactly this many buttons (its 12 button-role
+# elements - index 0-7 then 9-12) - used only to recover a per-module local
+# button number for display text from the global `grid_vsn1_button` index
+# (Phase 1.3; the global index itself remains the logical identity).
+_VSN1_BUTTONS_PER_MODULE = 12
+
+# Phase 1.3: jog/jog-button are no longer singular `(tag, None)` keys - with
+# more than one recognized VSN1 that would alias every module's jog onto the
+# same logical identity. Each now carries its VSN1-instance ordinal (1-based,
+# left-to-right among VSN1 modules only); a lone VSN1 still gets ordinal `1`,
+# identical in every way that matters to the old `None` (nothing is persisted
+# under either shape today - docs/llds/intech-grid.md § Persistence).
+_VSN1_JOG_LABELS = {"grid_vsn1_jog": "Jog", "grid_vsn1_jog_button": "Jog Push"}
 
 
 def _raw_key_for(module_x: int, module_y: int, page: int, element: GridElement) -> _Key:
@@ -140,20 +174,26 @@ def _raw_key_for(module_x: int, module_y: int, page: int, element: GridElement) 
 
 
 def build_grid_controller(topology: GridTopology) -> "Ready | UnsupportedTopology | AddressCollision":
-    """@spec GRID-CTRL-001 through GRID-CTRL-009, GRID-TOPO-010, GRID-TOPO-011"""
+    """@spec GRID-CTRL-001 through GRID-CTRL-005, GRID-CTRL-009, GRID-CTRL-012,
+    GRID-CTRL-013, GRID-TOPO-010, GRID-TOPO-011"""
     if not validate_single_row(topology):
         return UnsupportedTopology("modules span more than one row (y coordinate)")
 
+    # Phase 1.3: any number of recognized VSN1 modules is supported - the
+    # former "at most one" rejection is removed; global VSN1 numbering below
+    # removes the logical-identity-aliasing risk it existed to prevent.
     recognized_vsn1_count = sum(1 for m in topology.modules if m.module_type is ModuleType.VSN1)
-    if recognized_vsn1_count > 1:
-        return UnsupportedTopology("more than one recognized VSN1 module is present")
 
     ordered = normalize_linear_order(topology.modules)
 
     control_names: dict[_Key, str] = {}
     address_table: dict[_Key, _Key] = {}
+    control_module: dict[_Key, ModuleRef] = {}
+    module_shape: list[str] = []
     fader_raw_ccs: list[int] = []  # synthetic "CC numbers" (logical indices) fed to build_bank_membership
     counters = {"grid_fader": 0, "grid_pbf4_pot": 0, "grid_pbf4_button": 0, "grid_vsn1_button": 0}
+    recognized_module_ordinal = 0
+    vsn1_ordinal = 0
 
     def _record(raw_key: _Key, logical_key: _Key) -> AddressCollision | None:
         existing = address_table.get(raw_key)
@@ -165,6 +205,10 @@ def build_grid_controller(topology: GridTopology) -> "Ready | UnsupportedTopolog
     for module in ordered:
         if module.module_type is None:
             continue  # unrecognized - contributes no elements, doesn't threaten uniqueness (§6)
+        recognized_module_ordinal += 1
+        module_shape.append(module.module_type.value)
+        if module.module_type is ModuleType.VSN1:
+            vsn1_ordinal += 1
         definition = definition_for_type(module.module_type)
         for element in sorted(definition.elements, key=lambda e: e.index):
             if element.role == "lcd":
@@ -174,23 +218,35 @@ def build_grid_controller(topology: GridTopology) -> "Ready | UnsupportedTopolog
             if tag is None:
                 continue
 
-            if tag in _SINGULAR_CONTROL_NAMES:
-                logical_key: _Key = (tag, None)
-                control_names[logical_key] = _SINGULAR_CONTROL_NAMES[tag]
+            if tag in _VSN1_JOG_LABELS:
+                # Phase 1.3: ordinal-tagged, not singular `(tag, None)` - see
+                # _VSN1_JOG_LABELS' docstring comment above.
+                logical_key: _Key = (tag, vsn1_ordinal)
+                label = _VSN1_JOG_LABELS[tag]
+                display = f"VSN1 {label}" if recognized_vsn1_count == 1 else f"VSN1 #{vsn1_ordinal} {label}"
+                control_names[logical_key] = display
             else:
                 counters[tag] += 1
                 index = counters[tag]
                 logical_key = (tag, index)
-                display = {
-                    "grid_fader": f"Grid Fader {index}",
-                    "grid_pbf4_pot": f"Grid Pot {index}",
-                    "grid_pbf4_button": f"Grid PBF4 Button {index}",
-                    "grid_vsn1_button": f"VSN1 Button {index}",
-                }[tag]
+                if tag == "grid_vsn1_button":
+                    local_index = ((index - 1) % _VSN1_BUTTONS_PER_MODULE) + 1
+                    display = (
+                        f"VSN1 Button {local_index}"
+                        if recognized_vsn1_count == 1
+                        else f"VSN1 #{vsn1_ordinal} Button {local_index}"
+                    )
+                else:
+                    display = {
+                        "grid_fader": f"Grid Fader {index}",
+                        "grid_pbf4_pot": f"Grid Pot {index}",
+                        "grid_pbf4_button": f"Grid PBF4 Button {index}",
+                    }[tag]
                 control_names[logical_key] = display
                 if tag == "grid_fader":
                     fader_raw_ccs.append(index)
 
+            control_module[logical_key] = ModuleRef(ordinal=recognized_module_ordinal, module_type=module.module_type.value)
             raw_key = _raw_key_for(module.x, module.y, topology.current_page, element)
             collision = _record(raw_key, logical_key)
             if collision is not None:
@@ -227,6 +283,8 @@ def build_grid_controller(topology: GridTopology) -> "Ready | UnsupportedTopolog
         topology=topology,
         knob_to_fader=knob_to_fader,
         mute_to_fader=mute_to_fader,
+        module_shape=tuple(module_shape),
+        control_module=control_module,
     )
     return Ready(controller=controller)
 

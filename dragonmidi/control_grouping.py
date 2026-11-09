@@ -7,7 +7,7 @@ exposes (`bank_fader_keys`, `knob_to_fader`, `mute_to_fader`,
 tags) - never from parsing a display-name string, and never from checking
 the controller's own name/type.
 
-@spec UI-CTRLGROUP-001 through UI-CTRLGROUP-005
+@spec UI-CTRLGROUP-001 through UI-CTRLGROUP-008
 """
 
 from __future__ import annotations
@@ -45,7 +45,12 @@ class ControlGroup:
     id: str
     label: str
     controls: tuple["ControlDescriptor", ...]
-    kind: str  # "channel" | "global" | "fallback" | "vsn1_buttons" | "vsn1_jog"
+    kind: str  # "channel" | "global" | "fallback" | "vsn1_buttons" | "vsn1_jog" | "module"
+    # Phase 1.3: non-empty only for kind == "module", whose own `controls` is
+    # then always empty - a "module" group exists only to hold `children`,
+    # each an ordinary existing-kind group with its own real leaf controls.
+    # Never nested more than this one level (UI-CTRLGROUP-007).
+    children: tuple["ControlGroup", ...] = ()
 
 
 def _bank_index_for(key: "_Key", active_controller: "ActiveController") -> int | None:
@@ -124,4 +129,56 @@ def build_control_groups(descriptors: "list[ControlDescriptor]", active_controll
             # fallback) - everything lands in one generically-named group
             # rather than being dropped.
             groups.append(ControlGroup(id=FALLBACK_GROUP_ID, label=FALLBACK_GROUP_LABEL, controls=tuple(leftover), kind="fallback"))
-    return groups
+    return _wrap_in_modules(groups, active_controller)
+
+
+def _wrap_in_modules(groups: "list[ControlGroup]", active_controller: "ActiveController") -> "list[ControlGroup]":
+    """Phase 1.3: nests the groups `build_control_groups` would otherwise
+    return under a `"module"` tier, but only when more than one physical
+    module is actually present (`module_count > 1`) - a lone PBF4/VSN1, and
+    every non-Grid controller (which has no `module_count` attribute at
+    all), renders exactly as before, byte-for-byte.
+
+    @spec UI-CTRLGROUP-006, UI-CTRLGROUP-007, UI-CTRLGROUP-008
+    """
+    module_count = getattr(active_controller, "module_count", 1)
+    if module_count <= 1:
+        return groups
+
+    control_module = getattr(active_controller, "control_module", {})
+    module_shape = getattr(active_controller, "module_shape", ())
+
+    per_ordinal: dict[int, list[ControlGroup]] = {}
+    unassigned: list[ControlDescriptor] = []
+
+    for group in groups:
+        by_ordinal: dict[int, list[ControlDescriptor]] = {}
+        for descriptor in group.controls:
+            ref = control_module.get(descriptor.key)
+            if ref is None:
+                # Defensive only - every Grid logical key has a control_module
+                # entry today (GRID-CTRL-012); never silently dropped if that
+                # ever stops being true.
+                unassigned.append(descriptor)
+                continue
+            by_ordinal.setdefault(ref.ordinal, []).append(descriptor)
+        for ordinal, members in by_ordinal.items():
+            per_ordinal.setdefault(ordinal, []).append(
+                ControlGroup(id=f"{group.id}-m{ordinal}", label=group.label, controls=tuple(members), kind=group.kind)
+            )
+
+    wrapped: list[ControlGroup] = []
+    for ordinal in sorted(per_ordinal):
+        module_type = module_shape[ordinal - 1] if 0 <= ordinal - 1 < len(module_shape) else "?"
+        wrapped.append(
+            ControlGroup(
+                id=f"module-{ordinal}",
+                label=f"Module {ordinal} ({module_type})",
+                controls=(),
+                kind="module",
+                children=tuple(per_ordinal[ordinal]),
+            )
+        )
+    if unassigned:
+        wrapped.append(ControlGroup(id=GLOBAL_GROUP_ID, label=GLOBAL_GROUP_LABEL, controls=tuple(unassigned), kind="global"))
+    return wrapped

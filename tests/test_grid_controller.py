@@ -118,10 +118,12 @@ def test_vsn1_only_topology_has_no_knob_or_mute_wiring() -> None:
 
 
 def test_vsn1_logical_identities_independent_of_position() -> None:
+    # @spec GRID-CTRL-003 - with exactly one recognized VSN1, its ordinal is
+    # always 1 regardless of where it sits in the row.
     left = build_grid_controller(_topology([_vsn1(0), _pbf4(1), _pbf4(2)])).controller
     middle = build_grid_controller(_topology([_pbf4(0), _vsn1(1), _pbf4(2)])).controller
     right = build_grid_controller(_topology([_pbf4(0), _pbf4(1), _vsn1(2)])).controller
-    expected_keys = {("grid_vsn1_button", n) for n in range(1, 13)} | {("grid_vsn1_jog", None)}
+    expected_keys = {("grid_vsn1_button", n) for n in range(1, 13)} | {("grid_vsn1_jog", 1)}
     for controller in (left, middle, right):
         present = {k for k in controller.control_names if k[0] in ("grid_vsn1_button", "grid_vsn1_jog")}
         assert present == expected_keys
@@ -132,7 +134,9 @@ def test_vsn1_button_count_is_12() -> None:
     controller = outcome.controller
     button_keys = {k for k in controller.control_names if k[0] == "grid_vsn1_button"}
     assert button_keys == {("grid_vsn1_button", n) for n in range(1, 13)}
-    assert ("grid_vsn1_jog", None) in controller.control_names
+    assert ("grid_vsn1_jog", 1) in controller.control_names
+    assert controller.control_names[("grid_vsn1_button", 1)] == "VSN1 Button 1"
+    assert controller.control_names[("grid_vsn1_jog", 1)] == "VSN1 Jog"
 
 
 # --- Multi-row rejection (GRID-CTRL / GRID-TOPO-010) ---
@@ -143,12 +147,35 @@ def test_multi_row_topology_is_rejected() -> None:
     assert isinstance(outcome, UnsupportedTopology)
 
 
-# --- Multiple VSN1 rejection (GRID-CTRL-004) ---
+# --- Multiple VSN1 modules supported, globally numbered (GRID-CTRL-003/004, Phase 1.3) ---
 
 
-def test_two_vsn1_modules_rejected() -> None:
+def test_two_vsn1_modules_are_supported_and_numbered_globally() -> None:
     outcome = build_grid_controller(_topology([_vsn1(0), _pbf4(1), _vsn1(2)]))
-    assert isinstance(outcome, UnsupportedTopology)
+    assert isinstance(outcome, Ready)
+    controller = outcome.controller
+    button_keys = {k for k in controller.control_names if k[0] == "grid_vsn1_button"}
+    # Module 1's (left VSN1's) 12 buttons are keys 1-12; module 2's (right
+    # VSN1's) are 13-24 - a global sequence, same pattern PBF4 already used.
+    assert button_keys == {("grid_vsn1_button", n) for n in range(1, 25)}
+    # Jog/jog-button carry a VSN1-instance ordinal (1 for the left VSN1, 2 for
+    # the right), not the raw-address-based module position.
+    assert ("grid_vsn1_jog", 1) in controller.control_names
+    assert ("grid_vsn1_jog", 2) in controller.control_names
+    assert controller.control_names[("grid_vsn1_jog", 1)] == "VSN1 #1 Jog"
+    assert controller.control_names[("grid_vsn1_jog", 2)] == "VSN1 #2 Jog"
+    # Display text for the globally-numbered buttons shows the per-module
+    # local number (1-12), prefixed by VSN1 instance, not the global index.
+    assert controller.control_names[("grid_vsn1_button", 1)] == "VSN1 #1 Button 1"
+    assert controller.control_names[("grid_vsn1_button", 13)] == "VSN1 #2 Button 1"
+    assert controller.control_names[("grid_vsn1_button", 24)] == "VSN1 #2 Button 12"
+
+
+def test_two_vsn1_modules_raw_addresses_do_not_collide() -> None:
+    # The two VSN1s sit at different x positions, so their raw addresses
+    # differ even though both contribute 12 buttons each - no AddressCollision.
+    outcome = build_grid_controller(_topology([_vsn1(0), _pbf4(1), _vsn1(2)]))
+    assert isinstance(outcome, Ready)
 
 
 def test_one_vsn1_is_fine() -> None:
@@ -261,9 +288,9 @@ def test_vsn1_jog_push_button_gets_its_own_logical_identity_sharing_the_jogs_raw
     outcome = build_grid_controller(_topology([_vsn1(0)]))
     assert isinstance(outcome, Ready)
     controller = outcome.controller
-    assert controller.address_table[("cc", 40)] == ("grid_vsn1_jog", None)
-    assert controller.address_table[("note", 40)] == ("grid_vsn1_jog_button", None)
-    assert controller.control_names[("grid_vsn1_jog_button", None)] == "VSN1 Jog Push"
+    assert controller.address_table[("cc", 40)] == ("grid_vsn1_jog", 1)
+    assert controller.address_table[("note", 40)] == ("grid_vsn1_jog_button", 1)
+    assert controller.control_names[("grid_vsn1_jog_button", 1)] == "VSN1 Jog Push"
 
 
 def test_grid_runtime_controller_matches_the_confirmed_midi_interface_name() -> None:
@@ -324,3 +351,52 @@ def test_midi_input_adapter_auto_connects_using_grid_runtime_controller_matches(
     adapter.poll_discovery()
     assert adapter.connected is True
     assert adapter.device_name == "Intech Grid MIDI"
+
+
+# --- module_shape / control_module / module_count (GRID-CTRL-012, GRID-CTRL-013, Phase 1.3) ---
+
+
+def test_module_shape_reflects_recognized_modules_in_normalized_order() -> None:
+    controller = build_grid_controller(_topology([_pbf4(0), _vsn1(1), _pbf4(2)])).controller
+    assert controller.module_shape == ("PBF4", "VSN1", "PBF4")
+    assert controller.module_count == 3
+
+
+def test_module_shape_excludes_unrecognized_modules() -> None:
+    controller = build_grid_controller(_topology([_pbf4(0), _unsupported(1), _pbf4(2)])).controller
+    assert controller.module_shape == ("PBF4", "PBF4")
+    assert controller.module_count == 2
+
+
+def test_single_module_has_module_count_1() -> None:
+    assert build_grid_controller(_topology([_pbf4(0)])).controller.module_count == 1
+    assert build_grid_controller(_topology([_vsn1(0)])).controller.module_count == 1
+
+
+def test_module_shape_is_invariant_to_usb_root_offset() -> None:
+    # A USB-root change shifts every module's absolute x by a constant offset
+    # without changing left-to-right order - module_shape must not change.
+    a = build_grid_controller(_topology([_pbf4(0), _vsn1(1), _pbf4(2)])).controller
+    b = build_grid_controller(_topology([_pbf4(10), _vsn1(11), _pbf4(12)])).controller
+    assert a.module_shape == b.module_shape
+
+
+def test_control_module_assigns_each_logical_key_its_owning_module_ordinal_and_type() -> None:
+    controller = build_grid_controller(_topology([_pbf4(0), _vsn1(1), _pbf4(2)])).controller
+    # Module 1 (first PBF4): faders/pots/buttons 1-4.
+    assert controller.control_module[("grid_fader", 1)].ordinal == 1
+    assert controller.control_module[("grid_fader", 1)].module_type == "PBF4"
+    assert controller.control_module[("grid_pbf4_pot", 4)].ordinal == 1
+    # Module 2 (the VSN1): all its buttons/jog.
+    assert controller.control_module[("grid_vsn1_button", 1)].ordinal == 2
+    assert controller.control_module[("grid_vsn1_button", 1)].module_type == "VSN1"
+    assert controller.control_module[("grid_vsn1_jog", 1)].ordinal == 2
+    # Module 3 (second PBF4): faders 5-8, still ordinal 3, unaffected by the
+    # interposed VSN1 (same non-interruption guarantee GRID-CTRL-002 states).
+    assert controller.control_module[("grid_fader", 5)].ordinal == 3
+    assert controller.control_module[("grid_fader", 5)].module_type == "PBF4"
+
+
+def test_control_module_every_recognized_logical_key_has_an_entry() -> None:
+    controller = build_grid_controller(_topology([_pbf4(0), _vsn1(1), _pbf4(2)])).controller
+    assert set(controller.control_module.keys()) == set(controller.control_names.keys())

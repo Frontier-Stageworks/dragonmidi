@@ -107,6 +107,9 @@ A modal `QDialog`, opened per `UI-CFGDLG-001` above. Holds every control's assig
 - [x] **UI-CTRLGROUP-003**: A descriptor whose key's `kind` is `"grid_vsn1_button"` shall be placed in one group of `kind == "vsn1_buttons"` labeled `"Buttons"`; a descriptor whose key's `kind` is `"grid_vsn1_jog"` or `"grid_vsn1_jog_button"` shall be placed in one group of `kind == "vsn1_jog"` labeled `"Jog Wheel"`. Neither group shall be labeled or treated as a channel.
 - [x] **UI-CTRLGROUP-004**: Where no descriptor resolves to a channel group and no VSN1-specific group applies, every remaining descriptor shall be placed in one group of `kind == "fallback"` labeled `"Controls"`, rather than being omitted.
 - [x] **UI-CTRLGROUP-005**: Every descriptor passed to `build_control_groups` shall appear in exactly one returned group's `controls`; none shall be dropped and none shall appear in more than one group.
+- [x] **UI-CTRLGROUP-006** (Phase 1.3): WHILE `getattr(active_controller, "module_count", 1)` is `1`, `build_control_groups` shall return groups identical in content and order to `UI-CTRLGROUP-001` through `005` — no `"module"`-kind group shall be produced.
+- [x] **UI-CTRLGROUP-007** (Phase 1.3): WHILE `active_controller.module_count` is greater than `1`, `build_control_groups` shall wrap the groups `UI-CTRLGROUP-001` through `004` would otherwise produce into one `kind == "module"` group per distinct module ordinal present in `active_controller.control_module`, in ordinal order, labeled `"Module {ordinal} ({module_type})"`; each module group's `children` shall hold that ordinal's partitioned sub-groups (their own `controls` populated, each sub-group's own `kind`/label unchanged from `UI-CTRLGROUP-001`ff.), and a `"module"` group's own `controls` shall always be empty.
+- [x] **UI-CTRLGROUP-008** (Phase 1.3): A descriptor with no entry in `active_controller.control_module` shall remain in a top-level, un-nested group under `UI-CTRLGROUP-007`'s wrapping, rather than being dropped or raising.
 
 ## Control Tree (Phase 1.1)
 
@@ -116,6 +119,7 @@ A modal `QDialog`, opened per `UI-CFGDLG-001` above. Holds every control's assig
 - [x] **UI-CTRLTREE-004**: Multiple group headers may be expanded simultaneously; expanding or collapsing one group shall not change any other group's expanded/collapsed state.
 - [x] **UI-CTRLTREE-005**: Rebuilding the hierarchy (`UI-CTRLVIEW-004`, a Controller Profile switch) shall reset every group's expanded state to collapsed and clear any active search text; a `refresh()` call (every UI tick) shall never rebuild the tree structure or alter any group's expanded state — only leaf item text may change.
 - [x] **UI-CTRLTREE-006**: Where `build_control_groups` returns no `"channel"`-kind group for the active controller (e.g. VSN1-only), the hierarchy shall contain no group labeled `"Channel {N}"` for any N.
+- [x] **UI-CTRLTREE-007** (Phase 1.3): A `kind == "module"` `ControlGroup` shall render as a top-level, collapsible, non-selectable item (per `UI-CTRLTREE-002`) whose children are its `children` groups' own header items, each in turn expanding to its leaf controls per `UI-CTRLTREE-001`; this is a single additional, non-recursive level — a `"module"` group's children shall never themselves be `"module"`-kind groups.
 
 ## Control Search (Phase 1.1)
 
@@ -124,6 +128,15 @@ A modal `QDialog`, opened per `UI-CFGDLG-001` above. Holds every control's assig
 - [x] **UI-CTRLSEARCH-003**: Changing the search text shall never change `_selected_key` or the Inspector's displayed content, whether or not the currently selected leaf remains visible under the active filter.
 - [x] **UI-CTRLSEARCH-004**: The expanded/collapsed state of every group immediately before the search text first became non-empty shall be recorded; clearing the search text back to empty shall restore every group to that recorded state, not leave groups in whatever expanded state the search left them in.
 - [x] **UI-CTRLSEARCH-005**: While the search text is non-empty and no group is visible under it, the hierarchy shall display a single, non-selectable row reading `"No matching controls."` and no group/leaf rows; that row shall not be present while the search text is empty or at least one group is visible.
+- [x] **UI-CTRLSEARCH-006** (Phase 1.3): A `kind == "module"` group shall be visible under an active search if its own label matches, or at least one of its `children` groups would itself be visible under `UI-CTRLSEARCH-001`'s existing per-group rule — evaluated through the one additional level `UI-CTRLTREE-007` introduces, with no new matching logic beyond that recursion.
+
+## Named Controller UI (Phase 1.3)
+
+- [x] **UI-NAMEDCTRL-001** (scoped to Grid during implementation — see rationale below): Once a Grid Named Controller is active, the existing connection-status text slot (`UI-STATUS-002`) shall render that Named Controller's `display_name` in place of the bare `"Intech Grid"`/raw-port-name text. A static (Korg) profile's connected-status text is unaffected by this spec and continues showing the real connected MIDI device name — overriding it with a Named Controller's `display_name` would suppress genuinely useful information (confirmation of exactly which physical device answered) for a controller family with nothing to disambiguate in the first place, since its hardware shape never varies.
+- [x] **UI-NAMEDCTRL-002**: WHILE an ambiguous-named-controller outcome (`docs/specs/named-controller.md § NAMEDCTRL-MATCH-004`) is unresolved, THE SYSTEM SHALL show a modal dialog listing every candidate's `display_name`, `module_shape`, and `created_at`, plus one "Create new configuration" option; selecting a candidate shall resume Grid activation using that candidate's `id` with no further prompt, and selecting "Create new configuration" shall prompt for a `display_name` (defaulting to the shape-derived default) before creating and activating a new Named Controller.
+- [x] **UI-NAMEDCTRL-003**: The Named Controller Ambiguous dialog (`UI-NAMEDCTRL-002`) shall offer no dismissal that leaves Grid active without a chosen Named Controller; closing it without a selection shall leave Grid un-activated, the same outcome as `UnsupportedTopology`/`AddressCollision`.
+- [x] **UI-NAMEDCTRL-004**: A rename control shall be shown beside the Controller Profile dropdown, enabled only while a Named Controller is currently active; activating it and submitting a new name shall call `rename_named_controller` and update the status text (`UI-NAMEDCTRL-001`) without reconnecting, rebuilding the Mapping View, or writing to the Preset Store.
+- [x] **UI-NAMEDCTRL-005**: The connection-status text used for the pre-existing Grid CDC-ambiguous state (`docs/specs/intech-grid.md § GRID-DISCOVER-004`) and the named-controller-ambiguous state (`UI-NAMEDCTRL-002`) shall never be identical wording.
 
 ## Threading and Shutdown
 
@@ -143,3 +156,5 @@ A modal `QDialog`, opened per `UI-CFGDLG-001` above. Holds every control's assig
 - `dragonmidi/active_controller.py` — the `ActiveController.control_names`/`fader_keys`/`knob_to_fader` members `UI-CTRLDESC-001`/`002` read.
 - `dragonmidi/control_grouping.py`, `docs/llds/app-ui.md § Control Grouping, Control Tree, and Control Search` — the `ControlGroup`/`build_control_groups()` behind `UI-CTRLGROUP-*`, `UI-CTRLTREE-*`.
 - `dragonmidi/grid_modules.py`/`grid_controller.py` — PBF4's per-channel `grid_fader`/`grid_pbf4_pot`/`grid_pbf4_button` index alignment `UI-CTRLGROUP-001`'s last clause relies on.
+- `docs/specs/named-controller.md` — the `NAMEDCTRL-*` specs `UI-NAMEDCTRL-*` is a Qt-facing consumer of.
+- `docs/specs/intech-grid.md § GRID-CTRL-012`/`013` — the `module_shape`/`control_module`/`module_count` fields `UI-CTRLGROUP-006`ff. and `UI-NAMEDCTRL-*` read.

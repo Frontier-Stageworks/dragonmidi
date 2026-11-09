@@ -104,11 +104,18 @@ def test_single_pbf4_has_four_channels_with_fader_pot_button() -> None:
 def test_pbf4_vsn1_pbf4_chain_channel_numbering_ignores_the_interposed_vsn1() -> None:
     """VSN1 contributes its own tags (grid_vsn1_*), which don't share the
     PBF4 per-channel counters - the second PBF4 module's channels must pick
-    up numbering 5-8, not restart or collide."""
+    up numbering 5-8, not restart or collide.
+
+    This is a 3-module topology (Phase 1.3: module_count > 1), so channel
+    groups are nested under the module tier (UI-CTRLGROUP-007) rather than
+    appearing at the top level - see test_multi_module_grid_nests_under_a_
+    module_tier for the module-tier structure itself; this test's own focus
+    (channel *numbering* ignoring the interposed VSN1) still holds, just
+    reached by flattening the two PBF4 modules' children."""
     controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
     engine = MappingEngine(profile=controller)
     groups = build_control_groups(_descriptors(engine), controller)
-    channel_groups = [g for g in groups if g.kind == "channel"]
+    channel_groups = [child for g in groups if g.kind == "module" for child in g.children if child.kind == "channel"]
     assert [g.label for g in channel_groups] == [f"Channel {i}" for i in range(1, 9)]
     for group in channel_groups:
         kinds = {c.key[0] for c in group.controls}
@@ -163,3 +170,112 @@ def test_controller_with_no_recognized_structure_falls_back_to_one_group() -> No
     assert len(groups) == 1
     assert groups[0].label == FALLBACK_GROUP_LABEL
     assert groups[0].controls[0].key == ("cc", 1)
+
+
+# --- Module-tier grouping for multi-module Grid (UI-CTRLGROUP-006/007/008, Phase 1.3) ---
+
+
+# @spec UI-CTRLGROUP-006
+def test_single_module_grid_is_unchanged_no_module_tier() -> None:
+    """A lone PBF4/VSN1 must render exactly as before Phase 1.3 - no
+    "module" group at all, same flat groups as every existing test above."""
+    controller = _grid_controller(_pbf4(0))
+    engine = MappingEngine(profile=controller)
+    groups = build_control_groups(_descriptors(engine), controller)
+    assert not any(g.kind == "module" for g in groups)
+    channel_groups = [g for g in groups if g.kind == "channel"]
+    assert [g.label for g in channel_groups] == [f"Channel {i}" for i in range(1, 5)]
+
+
+# @spec UI-CTRLGROUP-006
+def test_korg_profiles_are_unaffected_no_module_tier() -> None:
+    engine = MappingEngine(profile=STUDIO_PROFILE)
+    groups = build_control_groups(_descriptors(engine), engine.profile)
+    assert not any(g.kind == "module" for g in groups)
+
+
+# @spec UI-CTRLGROUP-007
+def test_multi_module_grid_nests_under_a_module_tier() -> None:
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    groups = build_control_groups(_descriptors(engine), controller)
+
+    module_groups = [g for g in groups if g.kind == "module"]
+    assert [g.label for g in module_groups] == ["Module 1 (PBF4)", "Module 2 (VSN1)", "Module 3 (PBF4)"]
+    for g in module_groups:
+        assert g.controls == ()  # a "module" group never holds leaves directly
+
+    module1, module2, module3 = module_groups
+    assert [c.label for c in module1.children] == ["Channel 1", "Channel 2", "Channel 3", "Channel 4"]
+    assert {c.kind for c in module2.children} == {"vsn1_buttons", "vsn1_jog"}
+    assert [c.label for c in module3.children] == ["Channel 5", "Channel 6", "Channel 7", "Channel 8"]
+
+
+# @spec UI-CTRLGROUP-007
+def test_multi_module_grid_every_descriptor_still_represented_once() -> None:
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    descriptors = _descriptors(engine)
+    groups = build_control_groups(descriptors, controller)
+
+    seen = []
+    for group in groups:
+        if group.kind == "module":
+            for child in group.children:
+                seen.extend(child.controls)
+        else:
+            seen.extend(group.controls)
+    assert sorted(d.key for d in seen) == sorted(d.key for d in descriptors)
+    assert len(seen) == len(descriptors)  # none duplicated across module groups
+
+
+# @spec UI-CTRLGROUP-008
+def test_descriptor_missing_from_control_module_is_not_dropped() -> None:
+    """Defensive branch: every Grid logical key has a `control_module` entry
+    today (GRID-CTRL-012), so this never fires in practice - but a
+    descriptor somehow missing one must still be represented, not silently
+    dropped, under the module-tier wrapping."""
+    from dragonmidi.control_descriptor import ControlDescriptor
+    from dragonmidi.grid_controller import ModuleRef
+
+    class _FakeMultiModuleController:
+        control_names: dict = {}
+        fader_keys: frozenset = frozenset({("grid_fader", 1)})
+        knob_to_fader: dict = {}
+        mute_to_fader: dict = {}
+        websocket_keys: object = None
+        bank_fader_keys: tuple = (("grid_fader", 1),)
+        bank_count: int = 1
+        module_count: int = 2
+        module_shape: tuple = ("PBF4", "PBF4")
+        control_module: dict = {("grid_fader", 1): ModuleRef(ordinal=1, module_type="PBF4")}
+
+        def bank_fader_key(self, key):
+            return None
+
+    fake = _FakeMultiModuleController()
+    orphan = ControlDescriptor(key=("mystery", 1), label="Mystery", control_type="button")
+    descriptors = build_control_descriptors([], [], fake) + [orphan]
+    groups = build_control_groups(descriptors, fake)
+
+    all_controls = []
+    for group in groups:
+        if group.kind == "module":
+            for child in group.children:
+                all_controls.extend(child.controls)
+        else:
+            all_controls.extend(group.controls)
+    assert orphan in all_controls
+    assert any(g.kind == "global" for g in groups)  # the unassigned fallback group
+
+
+# @spec UI-CTRLGROUP-007
+def test_three_vsn1_modules_each_get_their_own_module_group() -> None:
+    controller = _grid_controller(_vsn1(0), _vsn1(1), _vsn1(2))
+    engine = MappingEngine(profile=controller)
+    groups = build_control_groups(_descriptors(engine), controller)
+    module_groups = [g for g in groups if g.kind == "module"]
+    assert [g.label for g in module_groups] == ["Module 1 (VSN1)", "Module 2 (VSN1)", "Module 3 (VSN1)"]
+    for g in module_groups:
+        kinds = {c.kind for c in g.children}
+        assert kinds == {"vsn1_buttons", "vsn1_jog"}

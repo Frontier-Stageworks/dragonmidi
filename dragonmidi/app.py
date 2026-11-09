@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QPushButton,
@@ -27,18 +28,29 @@ from .controller_profile_loader import load_controller_profiles
 from .controller_selection import ControllerChoice, GridChoice, StaticChoice, build_controller_choices
 from .controller_view_widgets import ControllerView, GroupSelectorRow
 from .events import MidiEvent
+from .grid_controller import GridRuntimeController
 from .grid_lifecycle import GridAppCoordinator, GridLifecycle
 from .grid_transport import SerialGridTransport
 from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
 from .mapping import MappingEngine
 from .mapping_widgets import ConfigurationDialog, MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
+from .named_controller_dialog import NamedControllerAmbiguousDialog
+from .named_controller_registry import (
+    Activated,
+    Ambiguous,
+    NamedController,
+    create_grid_named_controller,
+    ensure_static_named_controller,
+    rename_named_controller,
+    resolve_grid_named_controller,
+)
 from .osc_io import AxisDiscovery, OscClient, OscListener
 from .preset_store import load_bank_actions, load_group_axis_targets, save_group_axis_targets
 from .queue_drain import drain_queue
 from .settings_dialog import SettingsDialog
 from .shutdown import run_shutdown_sequence
-from .signal_monitor import SignalMonitor
+from .signal_monitor import ChannelState, SignalMonitor
 from .status_presenter import compute_status_snapshot, config_load_failure_label
 from .status_widgets import IndicatorRow
 from .websocket_output import WebSocketOutputAdapter
@@ -143,6 +155,11 @@ def _configurations_dir() -> Path:
     return Path.home() / "Documents" / "DragonMIDI" / "configurations"
 
 
+def _named_controllers_dir() -> Path:
+    """@spec NAMEDCTRL-DATA-002"""
+    return Path.home() / "Documents" / "DragonMIDI" / "named_controllers"
+
+
 def _default_profile(profiles: tuple[ControllerProfile, ...]) -> ControllerProfile:
     """@spec MIDI-PROFILE-004"""
     for profile in profiles:
@@ -175,15 +192,20 @@ class DragonMidiWindow(QMainWindow):
         self._midi_queue: queue.Queue[MidiEvent] = queue.Queue()
 
         self._mapping = MappingEngine(profile=self._default_profile)
+        # @spec NAMEDCTRL-STATIC-001, NAMEDCTRL-STATIC-002: a transparent 1:1
+        # wrapper for a static profile - id == profile.name always, so the
+        # Preset Store key below is byte-identical to the bare name used
+        # before this feature existed.
+        self._active_named_controller: NamedController = ensure_static_named_controller(_named_controllers_dir(), self._default_profile.name)
         # @spec MAP-STORE-002: load the default profile's persisted (Bank, Group)
         # axis table before the Mapping View is built, so the initial render
         # (UI-MAP-011) already reflects it.
         self._mapping.load_group_axis_targets(
-            load_group_axis_targets(_configurations_dir(), self._default_profile.name, self._default_profile.bank_count)
+            load_group_axis_targets(_configurations_dir(), self._active_named_controller.id, self._default_profile.bank_count)
         )
         # @spec MAP-BTNACT-005: loaded the same way, before the Mapping View is built.
         self._mapping.load_bank_control_actions(
-            load_bank_actions(_configurations_dir(), self._default_profile.name, self._default_profile.bank_count)
+            load_bank_actions(_configurations_dir(), self._active_named_controller.id, self._default_profile.bank_count)
         )
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._websocket_output = WebSocketOutputAdapter()
@@ -291,6 +313,16 @@ class DragonMidiWindow(QMainWindow):
         self._profile_combo.setCurrentIndex(default_index)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         controller_row.addWidget(self._profile_combo)
+        # @spec UI-NAMEDCTRL-004: renames the active Named Controller's
+        # display_name only - enabled whenever one is active, which is
+        # always true after __init__ (the default profile's wrapper is
+        # created there) and briefly false only while Grid is selected but
+        # not yet settled.
+        self._rename_button = QPushButton("✎")
+        self._rename_button.setToolTip("Rename this controller configuration")
+        self._rename_button.setMaximumWidth(28)
+        self._rename_button.clicked.connect(self._on_rename_named_controller_clicked)
+        controller_row.addWidget(self._rename_button)
         controller_row.addStretch(1)
         self._group_selector = GroupSelectorRow(self._mapping)  # @spec UI-GROUPSEL-001
         controller_row.addWidget(self._group_selector)
@@ -387,25 +419,38 @@ class DragonMidiWindow(QMainWindow):
         if isinstance(choice, GridChoice):
             self._grid_coordinator.select_grid()
             self._midi.disconnect()
+            # Disabled until a Named Controller resolves for whatever settles
+            # (`_resolve_and_install_grid_controller`) - the previously-active
+            # controller's Named Controller is still referenced by
+            # `self._active_named_controller` at this point, and renaming it
+            # now would silently rename the wrong (outgoing) configuration.
+            self._rename_button.setEnabled(False)
             return
         self._grid_coordinator.select_static()  # no-op unless Grid was active; closes its CDC connection if so
-        self._install_active_controller(choice.profile)
+        # @spec NAMEDCTRL-STATIC-001: a transparent 1:1 wrapper - id == profile.name
+        # always, so this never prompts and never changes the Preset Store key a
+        # Korg installation already used before this feature existed.
+        named_controller = ensure_static_named_controller(_named_controllers_dir(), choice.profile.name)
+        self._install_active_controller(choice.profile, named_controller)
 
-    def _install_active_controller(self, controller: ActiveController) -> None:
+    def _install_active_controller(self, controller: ActiveController, named_controller: NamedController) -> None:
         """Shared by the static-profile switch path above and the Grid-ready
         transition in `_on_tick()`: installs `controller` as the active
         Mapping Engine/MIDI Input Adapter target, loads its persisted (Bank,
-        Group) axis table under its stable name, and rebuilds - not merely
-        refreshes - the Mapping View and Configuration dialog for its actual
-        structure (@spec MAP-STORE-002, MAP-STORE-007, UI-PROFILE-003,
-        UI-CFGDLG-010, GRID-MAP-002).
+        Group) axis table under the resolved Named Controller's `id` - never
+        `controller.name` directly as of Phase 1.3 (@spec GRID-MAP-003) - and
+        rebuilds - not merely refreshes - the Mapping View and Configuration
+        dialog for its actual structure (@spec MAP-STORE-002, MAP-STORE-007,
+        UI-PROFILE-003, UI-CFGDLG-010, GRID-MAP-002).
         """
+        self._active_named_controller = named_controller
+        self._rename_button.setEnabled(True)
         self._mapping.set_profile(controller)
         # @spec MAP-STORE-002, MAP-STORE-007: loaded synchronously, in the same
         # call as set_profile() above and before the Mapping View rebuilds - no
         # caller can observe _group_axis_targets cleared-but-not-yet-reloaded.
-        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), controller.name, controller.bank_count))
-        self._mapping.load_bank_control_actions(load_bank_actions(_configurations_dir(), controller.name, controller.bank_count))
+        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), named_controller.id, controller.bank_count))
+        self._mapping.load_bank_control_actions(load_bank_actions(_configurations_dir(), named_controller.id, controller.bank_count))
         self._midi.set_profile(controller)
         # `setup_hint` is a `ControllerProfile`-only field, not part of the
         # `ActiveController` shape `GridRuntimeController` also satisfies -
@@ -415,6 +460,59 @@ class DragonMidiWindow(QMainWindow):
         self._mapping_view.rebuild()  # @spec GRID-MAP-002: structural rebuild, not refresh() - bank_count may differ
         self._configuration_dialog.rebuild_for_profile_change()  # @spec UI-CFGDLG-010
         self._controller_view.rebuild()  # @spec UI-CTRLVIEW-004
+
+    def _resolve_and_install_grid_controller(self, ready_controller: GridRuntimeController) -> None:
+        """@spec GRID-APP-003 (revised Phase 1.3), NAMEDCTRL-MATCH-001 through
+        NAMEDCTRL-MATCH-004. Resolves a Named Controller for `ready_controller`'s
+        settled `module_shape` before installing anything. `Activated` installs
+        immediately with no prompt (the common case, same zero-friction feel as
+        before this feature existed). `Ambiguous` shows a blocking dialog; the
+        UI timer is stopped first, not because any output path is actually
+        unsafe while it's open (a Grid-tagged key never matches whatever
+        profile/controller is still installed, the same harmless no-op every
+        other profile switch already relies on), but to avoid the `QTimer`
+        re-entering `_on_tick()` - and this method - while the modal's own
+        nested event loop is running, which every other `exec()` call in this
+        file (Configuration/Settings dialogs) deliberately allows since their
+        content is live-refreshed; this dialog's isn't, so there's nothing to
+        lose by pausing it. Cancelling the dialog installs nothing - Grid
+        stays selected but un-activated until the user reselects it from the
+        dropdown (@spec GRID-APP-002), which always restarts discovery fresh.
+        """
+        outcome = resolve_grid_named_controller(_named_controllers_dir(), _configurations_dir(), ready_controller.module_shape)
+        if isinstance(outcome, Activated):
+            self._install_active_controller(ready_controller, outcome.controller)
+            return
+
+        assert isinstance(outcome, Ambiguous)
+        # @spec NAMEDCTRL-AMBIG-001, UI-NAMEDCTRL-005: a one-time direct widget
+        # update, not a status computed by the next `_on_tick()` (the timer is
+        # about to stop) - distinct wording from the pre-existing Grid CDC
+        # "multiple devices found" text (`_STATUS_TEXT[GridStatus.AMBIGUOUS]`,
+        # grid_lifecycle.py), since the two are different kinds of ambiguity.
+        self._midi_row.set_state(ChannelState.ERROR, "Intech Grid: multiple saved configurations match — choose one")
+        self._ui_timer.stop()
+        try:
+            dialog = NamedControllerAmbiguousDialog(outcome.candidates, ready_controller.module_shape)
+            dialog.exec()
+            chosen = dialog.chosen_candidate()
+        finally:
+            self._ui_timer.start(UI_TICK_MS)
+
+        if chosen is None:
+            return  # @spec UI-NAMEDCTRL-003: no dismissal leaves Grid silently active
+        if isinstance(chosen, str):
+            chosen = create_grid_named_controller(_named_controllers_dir(), ready_controller.module_shape, chosen)
+        self._install_active_controller(ready_controller, chosen)
+
+    def _on_rename_named_controller_clicked(self) -> None:
+        """@spec UI-NAMEDCTRL-004: renames only `display_name` - no
+        reconnect, no Mapping View rebuild, no Preset Store write. Enabled
+        only while a Named Controller is active (see `_build_header`)."""
+        name, ok = QInputDialog.getText(self, "Rename controller", "Name:", text=self._active_named_controller.display_name)
+        if not ok or not name.strip():
+            return
+        self._active_named_controller = rename_named_controller(_named_controllers_dir(), self._active_named_controller.id, name.strip())
 
     def _on_discovery_tick(self) -> None:
         """Skips the ordinary MIDI discovery poll while Grid is selected but
@@ -432,7 +530,7 @@ class DragonMidiWindow(QMainWindow):
         (`on_group_axis_changed`), so neither piece is ever written stale."""
         save_group_axis_targets(
             _configurations_dir(),
-            self._mapping.profile.name,
+            self._active_named_controller.id,
             self._mapping.dump_group_axis_targets(),
             self._mapping.dump_bank_control_actions(),
         )
@@ -452,7 +550,7 @@ class DragonMidiWindow(QMainWindow):
         # the GridRuntimeController exactly once, on the tick it first settles.
         ready_controller = self._grid_coordinator.poll()
         if ready_controller is not None:
-            self._install_active_controller(ready_controller)
+            self._resolve_and_install_grid_controller(ready_controller)
 
         self._mapping_view.refresh()
         self._configuration_dialog.refresh()
@@ -468,13 +566,26 @@ class DragonMidiWindow(QMainWindow):
         # while it is.
         if self._grid_coordinator.grid_active:
             self._monitor.set_error("midi", self._grid_coordinator.is_error())
+        # @spec UI-NAMEDCTRL-001: `GridAppCoordinator.status_override()` is `None`
+        # for GridStatus.ACTIVE specifically (grid_lifecycle.py's own `grid_status_
+        # text()` deliberately leaves that case to the ordinary connected/waiting
+        # logic) - this is where that gap is filled, in app.py rather than
+        # grid_lifecycle.py, since Named Controller identity is a layer above Grid's
+        # own lifecycle knowledge (docs/llds/named-controller.md). Korg's status text
+        # is deliberately left untouched here - it still shows the real connected
+        # device name, matching existing behavior; only Grid's bare "Intech Grid"/
+        # raw-port-name text is replaced, since that's the one place a user actually
+        # needs to tell two saved configurations apart.
+        status_override = self._grid_coordinator.status_override()
+        if status_override is None and self._grid_coordinator.grid_active and self._active_named_controller.kind == "grid":
+            status_override = self._active_named_controller.display_name
         snapshot = compute_status_snapshot(
             self._monitor,
             midi_connected=self._midi_connected,
             midi_device_name=self._midi_device_name,
             listen_port=self._config.applied.listen_port,
             midi_profile_name=self._midi.profile.name,
-            midi_status_override=self._grid_coordinator.status_override(),
+            midi_status_override=status_override,
         )
         self._midi_row.set_state(snapshot.midi.state, snapshot.midi.label)
         self._dragonframe_row.set_state(snapshot.dragonframe.state, snapshot.dragonframe.label)

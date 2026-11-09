@@ -62,7 +62,8 @@ def _select(view: ControllerView, key) -> None:
 
 
 def _group_item(view: ControllerView, label: str):
-    return next(item for item in view._group_items if item.text(0) == label)
+    # Searches top-level and nested (Phase 1.3 module-tier) group items alike.
+    return next(item for item in view._all_group_items() if item.text(0) == label)
 
 
 # --- Hierarchy structure (@spec UI-CTRLTREE-001) ---
@@ -376,7 +377,11 @@ def test_real_pbf4_vsn1_grid_controller_populates_the_tree() -> None:
     engine = MappingEngine(profile=controller)
     view = ControllerView(engine, AxisDiscovery())
 
-    channel_labels = [item.text(0) for item in view._group_items if item.text(0).startswith("Channel")]
+    # 3 modules (Phase 1.3): channel/Buttons groups are nested one level
+    # under a "module" tier (UI-CTRLTREE-007) rather than appearing
+    # top-level - see UI-CTRLTREE-007's own dedicated tests below for the
+    # nesting structure itself.
+    channel_labels = [item.text(0) for item in view._all_group_items() if item.text(0).startswith("Channel")]
     assert channel_labels == [f"Channel {i}" for i in range(1, 9)]
     buttons_group = _group_item(view, "Buttons")
     button_labels = {buttons_group.child(i).text(0) for i in range(buttons_group.childCount())}
@@ -575,3 +580,118 @@ def test_receiving_keyboard_focus_does_not_select_a_row() -> None:
     view._tree.focusInEvent(QFocusEvent(QEvent.Type.FocusIn))
     assert view._tree.currentItem() is None
     assert view._selected_key is None
+
+
+# --- Module-tier nesting for multi-module Grid (UI-CTRLTREE-007, Phase 1.3) ---
+
+
+# @spec UI-CTRLTREE-007
+def test_multi_module_grid_tree_nests_channels_under_module_headers() -> None:
+    _qapp()
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    view = ControllerView(engine, AxisDiscovery())
+
+    top_level_labels = [item.text(0) for item in view._group_items]
+    assert top_level_labels == ["Module 1 (PBF4)", "Module 2 (VSN1)", "Module 3 (PBF4)"]
+    module1 = view._group_items[0]
+    assert module1.data(0, cvw._ITEM_KIND_ROLE) == "group"  # same tag as a top-level channel group
+    channel_1 = module1.child(0)
+    assert channel_1.text(0) == "Channel 1"
+    assert channel_1.data(0, cvw._ITEM_KIND_ROLE) == "group"
+    assert channel_1.childCount() > 0  # leaves (Fader/Knob/Mute) are nested one level deeper
+
+
+# @spec UI-CTRLTREE-007
+def test_single_module_grid_tree_is_unchanged_no_module_header() -> None:
+    _qapp()
+    controller = _grid_controller(_pbf4(0))
+    engine = MappingEngine(profile=controller)
+    view = ControllerView(engine, AxisDiscovery())
+    top_level_labels = [item.text(0) for item in view._group_items]
+    assert top_level_labels == [f"Channel {i}" for i in range(1, 5)]
+
+
+# @spec UI-CTRLTREE-007
+def test_selecting_a_leaf_inside_a_nested_module_group_opens_its_inspector() -> None:
+    _qapp()
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    view = ControllerView(engine, AxisDiscovery())
+    _select(view, ("grid_fader", 1))
+    assert view._selected_key == ("grid_fader", 1)
+
+
+# @spec UI-CTRLTREE-002
+def test_clicking_a_nested_module_group_header_toggles_expansion_without_selecting() -> None:
+    _qapp()
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    view = ControllerView(engine, AxisDiscovery())
+    channel_1 = _group_item(view, "Channel 1")
+    assert channel_1.isExpanded() is False
+    view._on_item_clicked(channel_1, 0)
+    assert channel_1.isExpanded() is True
+    assert view._selected_key is None
+
+
+# --- Search through the module tier (UI-CTRLSEARCH-006, Phase 1.3) ---
+
+
+# @spec UI-CTRLSEARCH-006
+def test_search_finds_a_leaf_nested_two_levels_under_a_module_header() -> None:
+    _qapp()
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    view = ControllerView(engine, AxisDiscovery())
+    view.refresh()  # computes each leaf's rendered summary text search matches against
+
+    view._search_edit.setText("fader 1")
+    module1 = view._group_items[0]
+    assert module1.isHidden() is False
+    assert module1.isExpanded() is True
+    channel_1 = module1.child(0)
+    assert channel_1.isHidden() is False
+    assert channel_1.isExpanded() is True
+    # A sibling module with no matching descendant is hidden entirely.
+    module2 = view._group_items[1]
+    assert module2.isHidden() is True
+
+
+# @spec UI-CTRLSEARCH-006
+def test_search_matching_a_module_headers_own_label_shows_every_descendant() -> None:
+    _qapp()
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    view = ControllerView(engine, AxisDiscovery())
+    view.refresh()
+
+    view._search_edit.setText("module 2")
+    module2 = view._group_items[1]
+    assert module2.isHidden() is False
+    assert module2.isExpanded() is True
+    for i in range(module2.childCount()):
+        child = module2.child(i)
+        assert child.isHidden() is False
+        assert child.isExpanded() is True
+        for j in range(child.childCount()):
+            assert child.child(j).isHidden() is False
+
+
+# @spec UI-CTRLSEARCH-006
+def test_clearing_search_restores_prior_expansion_state_including_nested_groups() -> None:
+    _qapp()
+    controller = _grid_controller(_pbf4(0), _vsn1(1), _pbf4(2))
+    engine = MappingEngine(profile=controller)
+    view = ControllerView(engine, AxisDiscovery())
+    channel_1 = _group_item(view, "Channel 1")
+    channel_1.setExpanded(True)
+    channel_2 = _group_item(view, "Channel 2")
+    assert channel_2.isExpanded() is False
+
+    view._search_edit.setText("fader")  # expands every matching group, including Channel 2
+    assert channel_2.isExpanded() is True
+
+    view._search_edit.setText("")  # cleared
+    assert channel_1.isExpanded() is True  # restored to what it was before searching
+    assert channel_2.isExpanded() is False

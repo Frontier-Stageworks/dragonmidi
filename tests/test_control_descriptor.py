@@ -157,8 +157,8 @@ def test_vsn1_jog_classifies_as_jog_and_buttons_as_button_via_the_fallback() -> 
     controller = _vsn1_controller()
     engine = MappingEngine(profile=controller)
     descriptors = {d.key: d for d in _descriptors(engine)}
-    assert descriptors[("grid_vsn1_jog", None)].control_type == "jog"
-    assert descriptors[("grid_vsn1_jog_button", None)].control_type == "jog"
+    assert descriptors[("grid_vsn1_jog", 1)].control_type == "jog"
+    assert descriptors[("grid_vsn1_jog_button", 1)].control_type == "jog"
     assert descriptors[("grid_vsn1_button", 1)].control_type == "button"
 
 
