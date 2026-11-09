@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-
-def _normalize(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", name.lower())
+from .name_matching import normalize_name as _normalize
 
 
 @dataclass(frozen=True)

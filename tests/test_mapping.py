@@ -1538,6 +1538,29 @@ def test_track_press_produces_no_osc_output() -> None:
     assert engine.process(cc_event(NEXT_TRACK_CC, 127), now=0.0) is None
 
 
+# @spec MAP-GROUP-013
+def test_step_active_group_is_callable_directly_without_a_midi_event() -> None:
+    """The Controller view's Group selector (docs/llds/app-ui.md) is a second,
+    non-MIDI caller of the same stepping method a Track press already uses."""
+    engine = MappingEngine()
+    engine.step_active_group(1)
+    assert engine.active_group == 2
+    engine.step_active_group(1)
+    assert engine.active_group == 3
+    engine.step_active_group(-1)
+    assert engine.active_group == 2
+
+
+# @spec MAP-GROUP-013
+def test_step_active_group_wraps_identically_to_a_track_press() -> None:
+    direct_engine = MappingEngine()
+    track_engine = MappingEngine()
+    for _ in range(5):
+        direct_engine.step_active_group(1)
+        _press(track_engine, NEXT_TRACK_CC, now=float(_))
+    assert direct_engine.active_group == track_engine.active_group == 1
+
+
 # @spec MAP-GROUP-003
 def test_track_press_produces_no_websocket_output() -> None:
     engine = MappingEngine()

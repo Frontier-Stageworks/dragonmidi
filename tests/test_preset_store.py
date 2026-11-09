@@ -12,6 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from dragonmidi.grid_controller import GRID_PROFILE_NAME, Ready, build_grid_controller
+from dragonmidi.grid_modules import ModuleType
+from dragonmidi.grid_topology import GridModule, GridTopology
 from dragonmidi.preset_store import load_group_axis_targets, save_group_axis_targets
 
 _VALID_ENTRY = {"axis_name": "PAN", "min": 0.0, "max": 100.0}
@@ -199,3 +202,33 @@ def test_load_and_save_are_plain_synchronous_functions(configs_dir: Path) -> Non
     # there is no deferred/background completion to race against.
     save_group_axis_targets(configs_dir, "Test", {1: {1: _VALID_ENTRY}})
     assert load_group_axis_targets(configs_dir, "Test", 8) == {1: {1: _VALID_ENTRY}}
+
+
+# --- Intech Grid integration: no Preset Store code change needed (docs/llds/intech-grid.md
+# --- § Persistence) - a GridRuntimeController's bank_count and the fixed "Intech Grid"
+# --- name already work with this module exactly as a static ControllerProfile's do ---
+
+
+# @spec GRID-MAP-003
+def test_preset_store_round_trips_using_grid_profile_name_and_bank_count(configs_dir: Path) -> None:
+    topology = GridTopology(
+        modules=(GridModule(heartbeat_type=1, hwcfg=64, module_type=ModuleType.PBF4, x=0, y=0, rotation=0),),
+        current_page=0,
+    )
+    outcome = build_grid_controller(topology)
+    assert isinstance(outcome, Ready)
+    controller = outcome.controller
+    assert controller.name == GRID_PROFILE_NAME
+
+    save_group_axis_targets(configs_dir, controller.name, {1: {1: _VALID_ENTRY}, 4: {1: _VALID_ENTRY}})
+    loaded = load_group_axis_targets(configs_dir, controller.name, controller.bank_count)
+    assert loaded == {1: {1: _VALID_ENTRY}, 4: {1: _VALID_ENTRY}}
+
+
+# @spec GRID-MAP-004
+def test_preset_store_skips_a_grid_bank_index_beyond_the_currently_connected_chains_bank_count(configs_dir: Path) -> None:
+    # Saved against an 8-fader chain (PBF4|VSN1|PBF4); reconnected with just one
+    # PBF4 (bank_count=4) - Bank 5-8 entries must be skipped, not crash or error.
+    save_group_axis_targets(configs_dir, GRID_PROFILE_NAME, {1: {1: _VALID_ENTRY}, 8: {1: _VALID_ENTRY}})
+    loaded = load_group_axis_targets(configs_dir, GRID_PROFILE_NAME, 4)
+    assert loaded == {1: {1: _VALID_ENTRY}}

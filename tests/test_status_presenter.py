@@ -63,6 +63,30 @@ def test_error_dot_can_coexist_with_a_connected_device_name() -> None:
     assert view.label == "nanoKONTROL Studio"
 
 
+# --- status_override: the seam Intech Grid's pending-state text uses
+# --- (docs/llds/intech-grid.md § UI Implications) - fully backward-compatible,
+# --- every existing call site above omits it and is unaffected ---
+
+
+@given(state=st.sampled_from(list(ChannelState)), connected=st.booleans(), device_name=st.one_of(st.none(), st.text(min_size=1, max_size=20)))
+# @spec UI-STATUS-002
+def test_status_override_wins_over_connected_or_waiting_text(state, connected: bool, device_name) -> None:
+    view = midi_indicator(
+        state,
+        connected=connected,
+        device_name=device_name,
+        profile_name="Intech Grid",
+        status_override="Intech Grid: unsupported topology",
+    )
+    assert view.label == "Intech Grid: unsupported topology"
+
+
+# @spec UI-STATUS-002
+def test_status_override_none_falls_back_to_the_normal_logic_unchanged() -> None:
+    view = midi_indicator(ChannelState.LIVE, connected=True, device_name="Intech Grid MIDI", profile_name="Intech Grid", status_override=None)
+    assert view.label == "Intech Grid MIDI"
+
+
 # --- UI-STATUS-003: Dragonframe row shows the listen port ---
 
 

@@ -407,6 +407,42 @@ def test_bank_membership_matches_legacy_offsets_for_the_bundled_layout() -> None
         assert membership["mute_to_fader"][("cc", fader_cc + 48)] == ("cc", fader_cc)
 
 
+# --- Entry-builder key_type parameterization (Intech Grid prerequisite:
+# --- docs/llds/intech-grid.md § Active Grid Controller "parameterize, don't duplicate") ---
+
+
+# @spec MAP-CONFIG-001, MAP-CONFIG-008
+def test_fader_entries_default_key_type_is_cc_unchanged() -> None:
+    result = build_opinionated_map(STUDIO_CONTROLS, has_scene_button=True)
+    assert result[("cc", 0)].address == "/dragonframe/encoder/1"
+
+
+# @spec MAP-CONFIG-001
+def test_fader_entries_accepts_a_non_cc_key_type() -> None:
+    from dragonmidi.mapping import _fader_entries
+
+    entries = _fader_entries([1, 2, 3], key_type="grid_fader")
+    assert entries[("grid_fader", 1)].address == "/dragonframe/encoder/1"
+    assert entries[("grid_fader", 3)].address == "/dragonframe/encoder/3"
+    assert ("cc", 1) not in entries
+
+
+# @spec MAP-CONFIG-008
+def test_build_bank_membership_default_key_type_is_cc_unchanged() -> None:
+    membership = build_bank_membership(STUDIO_CONTROLS)
+    assert membership["fader_keys"] == frozenset(("cc", cc) for cc in range(8))
+
+
+# @spec MAP-CONFIG-008
+def test_build_bank_membership_accepts_a_non_cc_key_type() -> None:
+    controls = ControlsConfig(faders=(1, 2, 3, 4), knobs=(), mutes=(), solos=(), transport={}, jog_wheel=None)
+    membership = build_bank_membership(controls, key_type="grid_fader")
+    assert membership["fader_keys"] == frozenset(("grid_fader", cc) for cc in (1, 2, 3, 4))
+    assert membership["bank_fader_keys"] == (("grid_fader", 1), ("grid_fader", 2), ("grid_fader", 3), ("grid_fader", 4))
+    assert membership["knob_to_fader"] == {}
+    assert membership["mute_to_fader"] == {}
+
+
 # @spec MAP-CONFIG-008
 def test_bank_membership_truncates_to_the_shorter_of_faders_and_knobs() -> None:
     # 4 faders but 6 knobs: only the first 4 knobs pair to a Bank; the extra 2 are

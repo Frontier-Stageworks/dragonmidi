@@ -25,6 +25,7 @@ from dragonmidi.mapping_view_model import (
     build_configuration_rows,
     build_fader_rows,
     group_axis_picker_states,
+    group_step_plan,
     midi_source_label,
     parse_axis_field,
 )
@@ -506,3 +507,31 @@ def test_build_fader_rows_for_nanokontrol2_returns_its_own_eight_bank_fader_keys
     engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
     rows = build_fader_rows(engine)
     assert [row.key for row in rows] == list(NANOKONTROL2_PROFILE.bank_fader_keys)
+
+
+# @spec UI-GROUPSEL-002
+def test_group_step_plan_same_group_is_zero_steps() -> None:
+    assert group_step_plan(3, 3) == (1, 0)
+
+
+# @spec UI-GROUPSEL-002
+def test_group_step_plan_picks_the_shorter_direction() -> None:
+    assert group_step_plan(1, 3) == (1, 2)  # forward 2 beats backward 3
+    assert group_step_plan(1, 4) == (-1, 2)  # backward 2 (wrapping) beats forward 3
+    assert group_step_plan(5, 1) == (1, 1)  # forward wraps 5->1 in one step
+
+
+@given(st.integers(min_value=1, max_value=5), st.integers(min_value=1, max_value=5))
+def test_group_step_plan_actually_reaches_the_target(current: int, target: int) -> None:
+    direction, count = group_step_plan(current, target)
+    reached = current
+    for _ in range(count):
+        reached = ((reached - 1 + direction) % 5) + 1
+    assert reached == target
+
+
+@given(st.integers(min_value=1, max_value=5), st.integers(min_value=1, max_value=5))
+def test_group_step_plan_never_exceeds_the_opposite_directions_cost(current: int, target: int) -> None:
+    direction, count = group_step_plan(current, target)
+    opposite_cost = (current - target) % 5 if direction == 1 else (target - current) % 5
+    assert count <= opposite_cost

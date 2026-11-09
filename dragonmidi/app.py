@@ -11,20 +11,24 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from .active_controller import ActiveController
 from .config import ConfigController, EndpointConfig
 from .controller_profile import ControllerProfile
 from .controller_profile_loader import load_controller_profiles
+from .controller_selection import ControllerChoice, GridChoice, StaticChoice, build_controller_choices
+from .controller_view_widgets import ControllerView, GroupSelectorRow
 from .events import MidiEvent
+from .grid_lifecycle import GridAppCoordinator, GridLifecycle
+from .grid_transport import SerialGridTransport
 from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
 from .mapping import MappingEngine
 from .mapping_widgets import ConfigurationDialog, MappingView
@@ -32,9 +36,10 @@ from .midi_input import MidiInputAdapter, MidoBackend
 from .osc_io import AxisDiscovery, OscClient, OscListener
 from .preset_store import load_group_axis_targets, save_group_axis_targets
 from .queue_drain import drain_queue
+from .settings_dialog import SettingsDialog
 from .shutdown import run_shutdown_sequence
 from .signal_monitor import SignalMonitor
-from .status_presenter import compute_status_snapshot, config_load_failure_label, show_setup_hint
+from .status_presenter import compute_status_snapshot, config_load_failure_label
 from .status_widgets import IndicatorRow
 from .websocket_output import WebSocketOutputAdapter
 
@@ -43,17 +48,10 @@ DISCOVERY_POLL_MS = 2000
 UI_TICK_MS = 30
 DEFAULT_PROFILE_NAME = "nanoKONTROL Studio"
 _REPO_URL = "https://github.com/Frontier-Stageworks/dragonmidi"
-# Fixed maximum widths for the host/port fields (2026-07-23, user's explicit
-# choice) - sized to their longest realistic content (an IPv4 address/short
-# hostname, and a 5-digit port number) rather than stretching to fill the row.
-_HOST_FIELD_MAX_WIDTH = 110
-_PORT_FIELD_MAX_WIDTH = 55
-# Bounded the same way as the host/port fields - a controller name has no
-# reason to claim more than this much width (2026-07-23, user's explicit choice).
+# Bounded the same way host/port fields are (now in settings_dialog.py) - a
+# controller name has no reason to claim more than this much width
+# (2026-07-23, user's explicit choice).
 _CONTROLLER_COMBO_MAX_WIDTH = 250
-# Fixed width for the "Sending to"/"Listen port" labels so both rows' fields
-# start at the same x position regardless of label text length.
-_NETWORK_LABEL_WIDTH = 90
 
 # Evokes the app icon's own light/dark grey palette (2026-07-23, user's explicit
 # choice, superseding the initial cream/mustard pass) - colors sampled directly
@@ -165,6 +163,13 @@ class DragonMidiWindow(QMainWindow):
         self._load_result = load_controller_profiles(bundled_dir=_bundled_controllers_dir(), user_dir=_user_controllers_dir())
         self._controller_profiles: tuple[ControllerProfile, ...] = self._load_result.profiles
         self._default_profile = _default_profile(self._controller_profiles)
+        # "Intech Grid" sits alongside the loaded profiles in the dropdown without
+        # being one itself - @spec GRID-APP-001. The coordinator is the Qt-independent
+        # state machine deciding when Grid's CDC lifecycle starts/stops and when a
+        # just-settled GridRuntimeController should be installed (docs/llds/intech-grid.md
+        # § Application Integration); it never touches a widget directly.
+        self._controller_choices: tuple[ControllerChoice, ...] = build_controller_choices(self._controller_profiles)
+        self._grid_coordinator = GridAppCoordinator(GridLifecycle(SerialGridTransport()))
 
         self._activity_queue: queue.Queue[str] = queue.Queue()
         self._midi_queue: queue.Queue[MidiEvent] = queue.Queue()
@@ -209,7 +214,7 @@ class DragonMidiWindow(QMainWindow):
         self._websocket_output.start()
 
         self._discovery_timer = QTimer(self)
-        self._discovery_timer.timeout.connect(self._midi.poll_discovery)
+        self._discovery_timer.timeout.connect(self._on_discovery_tick)
         self._discovery_timer.start(DISCOVERY_POLL_MS)
 
         self._ui_timer = QTimer(self)
@@ -220,14 +225,92 @@ class DragonMidiWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
 
+        layout.addLayout(self._build_header())
+
+        self._body_stack = QStackedWidget()
+        self._controller_view = ControllerView(
+            self._mapping,
+            self._axis_discovery,
+            on_group_axis_changed=self._save_group_axis_targets,
+        )
+        self._body_stack.addWidget(self._controller_view)  # page 0, default (@spec UI-SHELL-005)
+        self._body_stack.addWidget(self._build_table_view_page())  # page 1
+        layout.addWidget(self._body_stack, 1)
+
+        layout.addLayout(self._build_footer())
+
+        footer_label = QLabel(f'Developed by Frontier Stageworks · GPL-3.0-or-later · <a href="{_REPO_URL}">{_REPO_URL}</a>')
+        footer_label.setOpenExternalLinks(True)
+        footer_label.setAlignment(Qt.AlignCenter)
+        footer_label.setStyleSheet("font-size: 11px;")
+        layout.addWidget(footer_label)
+
+        self.setCentralWidget(central)
+        self.resize(900, 560)
+
+    def _build_header(self) -> QVBoxLayout:
+        """The shared header (`docs/llds/app-ui.md § Main Window Shell`):
+        renders identically and stays interactive regardless of which body
+        page (`_body_stack`) is currently showing.
+
+        @spec UI-SHELL-001, UI-SHELL-002
+        """
+        header = QVBoxLayout()
+
+        title_row = QHBoxLayout()
         title_label = QLabel(APP_TITLE)
         title_label.setStyleSheet("font-size: 20px; font-weight: bold;")
-        layout.addWidget(title_label)
+        title_row.addWidget(title_label)
+        title_row.addStretch(1)
+        self._midi_row = IndicatorRow("MIDI signal")
+        self._dragonframe_row = IndicatorRow("Dragonframe signal")
+        title_row.addWidget(self._midi_row)
+        title_row.addWidget(self._dragonframe_row)
+        settings_button = QPushButton("⚙")
+        settings_button.clicked.connect(self._on_settings_clicked)
+        title_row.addWidget(settings_button)
+        header.addLayout(title_row)
 
-        top_row = QHBoxLayout()
-        top_row.addWidget(self._build_status_group(), alignment=Qt.AlignTop)
-        top_row.addWidget(self._build_configuration_group(), alignment=Qt.AlignTop)
-        layout.addLayout(top_row)
+        controller_row = QHBoxLayout()
+        controller_row.addWidget(QLabel("Controller"))
+        self._profile_combo = QComboBox()
+        self._profile_combo.addItems([choice.name for choice in self._controller_choices])
+        self._profile_combo.setMaximumWidth(_CONTROLLER_COMBO_MAX_WIDTH)
+        default_index = next(
+            i
+            for i, choice in enumerate(self._controller_choices)
+            if isinstance(choice, StaticChoice) and choice.profile is self._default_profile
+        )
+        # setCurrentIndex() before connecting the signal, so selecting the default
+        # profile (which may not be index 0 - the dropdown lists user-local profiles
+        # first, @spec PROFILE-LOAD-004) doesn't itself fire a redundant initial
+        # profile switch - the engine/adapter already start on self._default_profile
+        # from their constructors.
+        self._profile_combo.setCurrentIndex(default_index)
+        self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        controller_row.addWidget(self._profile_combo)
+        controller_row.addStretch(1)
+        self._group_selector = GroupSelectorRow(self._mapping)  # @spec UI-GROUPSEL-001
+        controller_row.addWidget(self._group_selector)
+        header.addLayout(controller_row)
+
+        load_failure_text = config_load_failure_label(len(self._load_result.failures))
+        self._settings_dialog = SettingsDialog(self._config, load_failure_text)
+        self._settings_dialog.set_profile_hint(self._default_profile.setup_hint)
+
+        return header
+
+    def _build_table_view_page(self) -> QWidget:
+        """Table View's body page: the prior Mapping View, unchanged, plus a
+        button opening the existing modal Configuration Dialog (also
+        unchanged) - the per-control mapping summaries that used to live
+        beside the Controller dropdown now live here instead, distinct from
+        the network-settings Settings Dialog opened from the shared header.
+
+        @spec UI-SHELL-003
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
         self._mapping_view = MappingView(
             self._mapping,
@@ -237,114 +320,41 @@ class DragonMidiWindow(QMainWindow):
         )
         layout.addWidget(self._mapping_view, 1)
 
-        footer_label = QLabel(f'Developed by Frontier Stageworks · GPL-3.0-or-later · <a href="{_REPO_URL}">{_REPO_URL}</a>')
-        footer_label.setOpenExternalLinks(True)
-        footer_label.setAlignment(Qt.AlignCenter)
-        footer_label.setStyleSheet("font-size: 11px;")
-        layout.addWidget(footer_label)
-
-        self.setCentralWidget(central)
-        # QTableWidget.sizeHint() doesn't scale with row count, so Qt's own
-        # central.sizeHint() under-reports how tall the window needs to be to
-        # show every fader row without scrolling (2026-07-23, user's explicit
-        # choice) - isolate everything *except* the Mapping View (which Qt sizes
-        # correctly on its own) and substitute the Mapping View's own explicit
-        # height hint (`table_height_hint()`, the same fix `table_width_hint()`
-        # already applies for width) in its place. Width is unaffected by this -
-        # computed exactly as before, from the table's own column widths.
-        chrome_height = central.sizeHint().height() - self._mapping_view.sizeHint().height()
-        self.resize(self._mapping_view.table_width_hint() + 60, chrome_height + self._mapping_view.table_height_hint())
-
-    def _build_status_group(self) -> QGroupBox:
-        group = QGroupBox("Status")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(8)
-        self._midi_row = IndicatorRow("MIDI signal")
-        self._dragonframe_row = IndicatorRow("Dragonframe signal")
-        layout.addWidget(self._midi_row)
-        layout.addWidget(self._dragonframe_row)
-        layout.addStretch(1)
-        return group
-
-    def _build_configuration_group(self) -> QGroupBox:
-        """Controller selection and network settings share one "Configuration"
-        panel, side-by-side with Status (2026-07-23, user's explicit choice) -
-        both are settings a user sets and rarely revisits, unlike Status's
-        continuously-live indicators. Deliberately compact (user's explicit
-        choice): Controller dropdown and the Configuration button share one row,
-        Apply shares the "Sending to" row rather than getting its own, and a
-        trailing stretch keeps the box's rendered height at its content's
-        natural size rather than whatever height its `Qt.AlignTop`-aligned
-        sibling forces the row to."""
-        group = QGroupBox("Configuration")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(8)
-
-        controller_row = QHBoxLayout()
-        controller_row.addWidget(QLabel("Controller"))
-        self._profile_combo = QComboBox()
-        self._profile_combo.addItems([profile.name for profile in self._controller_profiles])
-        self._profile_combo.setMaximumWidth(_CONTROLLER_COMBO_MAX_WIDTH)
-        default_index = next(i for i, p in enumerate(self._controller_profiles) if p is self._default_profile)
-        # setCurrentIndex() before connecting the signal, so selecting the default
-        # profile (which may not be index 0 - the dropdown lists user-local profiles
-        # first, @spec PROFILE-LOAD-004) doesn't itself fire a redundant initial
-        # profile switch - the engine/adapter already start on self._default_profile
-        # from their constructors.
-        self._profile_combo.setCurrentIndex(default_index)
-        self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
-        controller_row.addWidget(self._profile_combo)
-        # Stretch sits *before* the button, not after (2026-07-23, user's
-        # explicit choice) - pushes "Configuration..." flush to the box's right
-        # edge instead of hugging the dropdown.
-        controller_row.addStretch(1)
-
         self._configuration_dialog = ConfigurationDialog(self._mapping)
+        configuration_row = QHBoxLayout()
+        configuration_row.addStretch(1)
         configuration_button = QPushButton("Configuration…")
         configuration_button.clicked.connect(self._on_configuration_clicked)
-        controller_row.addWidget(configuration_button)
-        layout.addLayout(controller_row)
+        configuration_row.addWidget(configuration_button)
+        layout.addLayout(configuration_row)
 
-        # Always added to the layout, even when hidden (unlike load_failure_text
-        # below) - _on_profile_changed toggles this label's visibility on every
-        # profile switch, which requires it to already have a home in the layout.
-        self._profile_hint_label = QLabel(self._default_profile.setup_hint or "")
-        self._profile_hint_label.setVisible(show_setup_hint(self._default_profile.setup_hint))
-        layout.addWidget(self._profile_hint_label)
+        return page
 
-        load_failure_text = config_load_failure_label(len(self._load_result.failures))
-        if load_failure_text is not None:
-            layout.addWidget(QLabel(load_failure_text))
+    def _build_footer(self) -> QHBoxLayout:
+        """@spec UI-SHELL-004: one shared toggle button switches `_body_stack`;
+        its text names the page switching *to*, not the page currently shown."""
+        footer = QHBoxLayout()
+        self._dragonframe_footer_label = QLabel("")
+        footer.addWidget(self._dragonframe_footer_label)
+        footer.addStretch(1)
+        self._view_toggle_button = QPushButton("Table View")
+        self._view_toggle_button.clicked.connect(self._on_view_toggle_clicked)
+        footer.addWidget(self._view_toggle_button)
+        return footer
 
-        sending_to_label = QLabel("Sending to")
-        sending_to_label.setFixedWidth(_NETWORK_LABEL_WIDTH)
-        listen_port_label = QLabel("Listen port")
-        listen_port_label.setFixedWidth(_NETWORK_LABEL_WIDTH)
+    def _on_view_toggle_clicked(self) -> None:
+        """@spec UI-SHELL-004"""
+        if self._body_stack.currentIndex() == 0:
+            self._body_stack.setCurrentIndex(1)
+            self._view_toggle_button.setText("Controller View")
+        else:
+            self._body_stack.setCurrentIndex(0)
+            self._view_toggle_button.setText("Table View")
 
-        sending_to_row = QHBoxLayout()
-        sending_to_row.addWidget(sending_to_label)
-        self._host_edit = QLineEdit(self._config.applied.host)
-        self._host_edit.setMaximumWidth(_HOST_FIELD_MAX_WIDTH)
-        self._df_port_edit = QLineEdit(str(self._config.applied.dragonframe_port))
-        self._df_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
-        sending_to_row.addWidget(self._host_edit)
-        sending_to_row.addWidget(self._df_port_edit)
-        sending_to_row.addStretch(1)
-        apply_button = QPushButton("Apply")
-        apply_button.clicked.connect(self._on_apply_clicked)
-        sending_to_row.addWidget(apply_button)
-        layout.addLayout(sending_to_row)
-
-        listen_port_row = QHBoxLayout()
-        listen_port_row.addWidget(listen_port_label)
-        self._listen_port_edit = QLineEdit(str(self._config.applied.listen_port))
-        self._listen_port_edit.setMaximumWidth(_PORT_FIELD_MAX_WIDTH)
-        listen_port_row.addWidget(self._listen_port_edit)
-        listen_port_row.addStretch(1)
-        layout.addLayout(listen_port_row)
-
-        layout.addStretch(1)
-        return group
+    def _on_settings_clicked(self) -> None:
+        """@spec UI-SETTINGS-001: opened modally, same `exec()` pattern as the
+        Configuration Dialog - the UI tick timer keeps running during it."""
+        self._settings_dialog.exec()
 
     def _on_midi_connection_change(self, connected: bool, device_name: str | None) -> None:
         self._midi_connected = connected
@@ -358,38 +368,62 @@ class DragonMidiWindow(QMainWindow):
         self._configuration_dialog.exec()
 
     def _on_profile_changed(self, index: int) -> None:
-        """Applies immediately, no Apply step (@spec UI-PROFILE-002): resets the
-        Mapping Engine to the newly-selected profile's map right away, independent
-        of whether a matching device has yet been found, then tells the MIDI Input
-        Adapter to disconnect (if connected) and start matching the new pattern
+        """Applies immediately, no Apply step (@spec UI-PROFILE-002). A static
+        (YAML) profile installs right away, independent of whether a matching
+        device has yet been found, then tells the MIDI Input Adapter to
+        disconnect (if connected) and start matching the new pattern
         (@spec MIDI-PROFILE-005, MIDI-PROFILE-006).
+
+        "Intech Grid" is a distinct selection, not a `ControllerProfile` -
+        there is no static object to install yet. Selecting it only
+        disconnects whatever device the previous controller had and starts a
+        fresh CDC discovery/settle cycle; it becomes the active controller
+        later, from `_on_tick()`, the instant its `GridRuntimeController`
+        settles (@spec GRID-APP-002, GRID-APP-003).
         """
-        profile = self._controller_profiles[index]
-        self._mapping.set_profile(profile)
+        choice = self._controller_choices[index]
+        if isinstance(choice, GridChoice):
+            self._grid_coordinator.select_grid()
+            self._midi.disconnect()
+            return
+        self._grid_coordinator.select_static()  # no-op unless Grid was active; closes its CDC connection if so
+        self._install_active_controller(choice.profile)
+
+    def _install_active_controller(self, controller: ActiveController) -> None:
+        """Shared by the static-profile switch path above and the Grid-ready
+        transition in `_on_tick()`: installs `controller` as the active
+        Mapping Engine/MIDI Input Adapter target, loads its persisted (Bank,
+        Group) axis table under its stable name, and rebuilds - not merely
+        refreshes - the Mapping View and Configuration dialog for its actual
+        structure (@spec MAP-STORE-002, MAP-STORE-007, UI-PROFILE-003,
+        UI-CFGDLG-010, GRID-MAP-002).
+        """
+        self._mapping.set_profile(controller)
         # @spec MAP-STORE-002, MAP-STORE-007: loaded synchronously, in the same
-        # handler as set_profile() above and before the Mapping View refreshes -
-        # no caller can observe _group_axis_targets cleared-but-not-yet-reloaded.
-        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), profile.name, profile.bank_count))
-        self._midi.set_profile(profile)
-        self._profile_hint_label.setText(profile.setup_hint or "")
-        self._profile_hint_label.setVisible(show_setup_hint(profile.setup_hint))  # @spec UI-PROFILE-003
-        self._mapping_view.refresh()
+        # call as set_profile() above and before the Mapping View rebuilds - no
+        # caller can observe _group_axis_targets cleared-but-not-yet-reloaded.
+        self._mapping.load_group_axis_targets(load_group_axis_targets(_configurations_dir(), controller.name, controller.bank_count))
+        self._midi.set_profile(controller)
+        # `setup_hint` is a `ControllerProfile`-only field, not part of the
+        # `ActiveController` shape `GridRuntimeController` also satisfies -
+        # absent there, so the hint label is simply hidden for Grid.
+        setup_hint = getattr(controller, "setup_hint", None)
+        self._settings_dialog.set_profile_hint(setup_hint)  # @spec UI-PROFILE-003
+        self._mapping_view.rebuild()  # @spec GRID-MAP-002: structural rebuild, not refresh() - bank_count may differ
         self._configuration_dialog.rebuild_for_profile_change()  # @spec UI-CFGDLG-010
+        self._controller_view.rebuild()  # @spec UI-CTRLVIEW-004
+
+    def _on_discovery_tick(self) -> None:
+        """Skips the ordinary MIDI discovery poll while Grid is selected but
+        not yet settled (@spec GRID-APP-004) - there is no profile pattern to
+        match a port against yet, and polling would otherwise try to
+        reconnect against whichever static profile was previously active."""
+        if self._grid_coordinator.should_poll_midi_discovery():
+            self._midi.poll_discovery()
 
     def _save_group_axis_targets(self) -> None:
         """@spec MAP-STORE-004"""
         save_group_axis_targets(_configurations_dir(), self._mapping.profile.name, self._mapping.dump_group_axis_targets())
-
-    def _on_apply_clicked(self) -> None:
-        try:
-            self._config.edit(
-                host=self._host_edit.text().strip(),
-                dragonframe_port=int(self._df_port_edit.text()),
-                listen_port=int(self._listen_port_edit.text()),
-            )
-            self._config.apply()
-        except ValueError:
-            pass  # invalid input (bad int, or equal ports): edits stay pending, nothing applied
 
     def _on_config_applied(self, config: EndpointConfig, listen_port_changed: bool) -> None:
         self._osc_client.configure(config.host, config.dragonframe_port)
@@ -401,20 +435,46 @@ class DragonMidiWindow(QMainWindow):
         drain_queue(self._activity_queue, self._monitor.mark_activity)
         drain_queue(self._midi_queue, self._process_midi_event)
         self._axis_discovery.check_timeout()
+
+        # @spec GRID-APP-003: a no-op unless Grid is the active selection; returns
+        # the GridRuntimeController exactly once, on the tick it first settles.
+        ready_controller = self._grid_coordinator.poll()
+        if ready_controller is not None:
+            self._install_active_controller(ready_controller)
+
         self._mapping_view.refresh()
         self._configuration_dialog.refresh()
+        self._controller_view.refresh()  # @spec UI-CTRLVIEW-002, UI-CTRLVIEW-008
+        self._group_selector.sync()  # @spec UI-GROUPSEL-001
 
+        # @spec GRID-APP-005: while Grid is selected, its own pending/stale/
+        # unsupported/ambiguous text and error-dot state borrow the existing
+        # MIDI indicator's free-text slot and error flag - no new widget.
+        # Guarded by grid_active: MidiInputAdapter's own on_error callback
+        # (Native Mode handshake failure) remains the error-flag's authority
+        # whenever Grid isn't the active selection; only Grid ever touches it
+        # while it is.
+        if self._grid_coordinator.grid_active:
+            self._monitor.set_error("midi", self._grid_coordinator.is_error())
         snapshot = compute_status_snapshot(
             self._monitor,
             midi_connected=self._midi_connected,
             midi_device_name=self._midi_device_name,
             listen_port=self._config.applied.listen_port,
             midi_profile_name=self._midi.profile.name,
+            midi_status_override=self._grid_coordinator.status_override(),
         )
         self._midi_row.set_state(snapshot.midi.state, snapshot.midi.label)
         self._dragonframe_row.set_state(snapshot.dragonframe.state, snapshot.dragonframe.label)
+        self._dragonframe_footer_label.setText(f"Dragonframe: {snapshot.dragonframe.label}")  # @spec UI-SHELL-004
 
     def _process_midi_event(self, event: MidiEvent) -> None:
+        # @spec GRID-MAP-001: the one Grid-specific branch in the MIDI dispatch
+        # path, kept out of every output path below - pass-through unchanged
+        # when Grid isn't active, dropped when pending/stale/unresolvable.
+        event = self._grid_coordinator.route_event(event)
+        if event is None:
+            return
         now = time.monotonic()
         axis_positions = self._axis_discovery.axes
         message = self._mapping.process(event, now=now, axis_positions=axis_positions)
@@ -430,6 +490,7 @@ class DragonMidiWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         run_shutdown_sequence(
             [
+                self._grid_coordinator.select_static,  # closes Grid's CDC connection if it was active
                 self._midi.disconnect,
                 self._osc_listener.stop,
                 self._osc_client.close,

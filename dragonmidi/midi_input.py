@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from .controller_profile import ControllerProfile
+from .active_controller import ActiveController
 from .events import MidiEvent
 
 
@@ -198,7 +198,7 @@ class MidiInputAdapter:
         on_connection_change: Callable[[bool, str | None], None],
         on_error: Callable[[bool], None],
         on_reset_mapping: Callable[[], None],
-        profile: ControllerProfile,
+        profile: ActiveController,
     ) -> None:
         self._backend = backend
         self._on_activity = on_activity
@@ -216,10 +216,10 @@ class MidiInputAdapter:
         self.device_name: str | None = None
 
     @property
-    def profile(self) -> ControllerProfile:
+    def profile(self) -> ActiveController:
         return self._profile
 
-    def set_profile(self, profile: ControllerProfile) -> None:
+    def set_profile(self, profile: ActiveController) -> None:
         """Switch the active Controller Profile: disconnect the current device
         (if any, releasing Native Mode first when the outgoing profile had it),
         then start matching future discovery polls against the new profile's

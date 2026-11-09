@@ -15,6 +15,7 @@ dependencies = [
   "pynput==1.8.2",
   "websockets==16.1.1",
   "PyYAML==6.0.3",
+  "pyserial==3.5",
 ]
 
 [project.optional-dependencies]
@@ -45,8 +46,8 @@ line-length = 150
 extend-exclude = ["docs/**/*.md"]
 
 [tool.ruff.lint]
-# Explicit allowlist, not ruff's built-in default - matching the sibling
-# Stagehand project's pattern, so a ruff upgrade can't silently expand what's
-# linted (ruff 0.16.0 raised its unconfigured-default rule count from ~61 to
-# ~415, which is what motivated pinning this down explicitly).
+# Explicit allowlist, not ruff's built-in default, so a ruff upgrade can't
+# silently expand what's linted (ruff 0.16.0 raised its unconfigured-default
+# rule count from ~61 to ~415, which is what motivated pinning this down
+# explicitly).
 select = ["E", "F", "W"]

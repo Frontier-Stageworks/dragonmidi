@@ -1,0 +1,429 @@
+"""The Controller View page's Qt widgets (`docs/llds/app-ui.md § Controller
+View body`) and the shared header's Group selector row - defined here even
+though `app.py` composes the header itself (`docs/llds/app-ui.md § Main
+Window Shell`).
+
+@spec UI-CTRLVIEW-001, UI-CTRLVIEW-002, UI-CTRLVIEW-003, UI-CTRLVIEW-004,
+UI-CTRLVIEW-005, UI-CTRLVIEW-006, UI-CTRLVIEW-007, UI-CTRLVIEW-008, UI-CTRLVIEW-009
+@spec UI-GROUPSEL-001, UI-GROUPSEL-002
+@spec UI-CTRLTREE-001 through UI-CTRLTREE-006, UI-CTRLSEARCH-001 through UI-CTRLSEARCH-005
+"""
+
+from __future__ import annotations
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+
+from .control_descriptor import ControlDescriptor, build_control_descriptors
+from .control_grouping import ControlGroup, build_control_groups
+from .inspector_registry import has_editor
+from .mapping import MappingEngine
+from .mapping_view_model import (
+    ACTIVE_GROUP_COLOR,
+    GROUP_LETTERS,
+    INACTIVE_GROUP_COLOR,
+    KNOB_ROW_KEY,
+    MUTE_ROW_KEY,
+    build_configuration_rows,
+    build_fader_rows,
+    group_axis_picker_states,
+    group_step_plan,
+)
+from .mapping_widgets import _SingleAxisTargetField
+from .osc_io import AxisDiscovery
+
+_ACTIVE_GROUP_BUTTON_STYLE = f"background-color: {ACTIVE_GROUP_COLOR}; color: white; font-weight: 600;"
+_INACTIVE_GROUP_BUTTON_STYLE = f"background-color: #e5e5e5; color: {INACTIVE_GROUP_COLOR}; font-weight: 600;"
+
+_SUMMARY_SEPARATOR = "    "
+_NO_SETTINGS_TEXT = "No settings available for this control yet."
+_PLACEHOLDER_TEXT = "Select a control to edit its settings."
+_SEARCH_PLACEHOLDER = "Search controls..."
+_NO_MATCHES_TEXT = "No matching controls."
+
+# `QTreeWidgetItem.data(0, _ITEM_KIND_ROLE)` is `"group"` or `"control"` -
+# how `_on_item_clicked`/`_on_current_item_changed` tell a channel/group
+# header apart from a selectable physical-control leaf, without relying on
+# `parent() is None` alone (the synthetic "no matches" item is also a
+# top-level item with no parent, but isn't a group either).
+_ITEM_KIND_ROLE = Qt.ItemDataRole.UserRole
+_ITEM_PAYLOAD_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+class _ControlTreeWidget(QTreeWidget):
+    """Plain `QTreeWidget`, except for one override: Qt's base
+    `focusInEvent` can still promote `currentItem()` to index (0, 0) the
+    first time the widget actually receives keyboard focus, even when that
+    item is non-selectable (a group header) - "current" and "selected" are
+    distinct concepts in Qt's model, so removing `ItemIsSelectable` alone
+    doesn't prevent this. Harmless functionally (`_on_current_item_changed`
+    already ignores anything that isn't a `"control"` leaf), but it would
+    leave a lingering focus-rectangle on a group header the user never
+    interacted with - clearing it back to no-current keeps that from
+    happening (found while writing this class's own test, not by running
+    the real app - this one caught in headless testing)."""
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        current = self.currentItem()
+        if current is not None and current.data(0, _ITEM_KIND_ROLE) != "control":
+            self.setCurrentItem(None)
+
+
+class GroupSelectorRow(QWidget):
+    """A-E Group selector, steppable via `MappingEngine.step_active_group`
+    (`MAP-GROUP-013`) - the same Group dimension `_GroupIndicatorRow`
+    (`mapping_widgets.py`) already shows inside Table View's fader grid, now
+    also surfaced in the shared header (`docs/llds/app-ui.md § Main Window
+    Shell`). No new Group state is introduced.
+
+    @spec UI-GROUPSEL-001, UI-GROUPSEL-002
+    """
+
+    def __init__(self, mapping_engine: MappingEngine) -> None:
+        super().__init__()
+        self._engine = mapping_engine
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._buttons: list[QPushButton] = []
+        for index, letter in enumerate(GROUP_LETTERS, start=1):
+            button = QPushButton(letter)
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, target=index: self._on_clicked(target))
+            layout.addWidget(button)
+            self._buttons.append(button)
+        self.sync()
+
+    def _on_clicked(self, target_group: int) -> None:
+        """@spec UI-GROUPSEL-002: fewest `step_active_group` calls needed,
+        taking the wraparound direction when it's shorter; zero calls when
+        `target_group` is already active."""
+        direction, count = group_step_plan(self._engine.active_group, target_group)
+        for _ in range(count):
+            self._engine.step_active_group(direction)
+        self.sync()
+
+    def sync(self) -> None:
+        """@spec UI-GROUPSEL-001: recomputed every UI tick, same cadence as
+        `_GroupIndicatorRow`. Active/inactive coloring is set explicitly here,
+        not left to a QPushButton's native `:checked` look - this app's
+        global stylesheet doesn't define `:checked`, so that look rendered
+        inconsistently depending on window-focus state (found by running the
+        real app and looking at it, not caught by any headless test). Explicit
+        styling, matching `_GroupIndicatorRow`'s own blue/grey exactly, is
+        reliable regardless of platform/focus state."""
+        active = self._engine.active_group
+        for index, button in enumerate(self._buttons, start=1):
+            checked = index == active
+            if button.isChecked() != checked:
+                # `setChecked` does not emit `clicked` (only `toggled`), so this
+                # never re-enters `_on_clicked` - no signal-blocking needed.
+                button.setChecked(checked)
+            button.setStyleSheet(_ACTIVE_GROUP_BUTTON_STYLE if checked else _INACTIVE_GROUP_BUTTON_STYLE)
+
+
+class ControllerView(QWidget):
+    """The Controller View body page: an expandable, hardware-aware control
+    hierarchy on the left (Phase 1.1 - channel groups replacing the flat
+    per-control list), a contextual Inspector on the right. Reads and writes
+    the same `MappingEngine` Table View already does, through the same
+    existing methods/functions - no second mapping state.
+
+    @spec UI-CTRLVIEW-001 through UI-CTRLVIEW-009
+    @spec UI-CTRLTREE-001 through UI-CTRLTREE-006, UI-CTRLSEARCH-001 through UI-CTRLSEARCH-005
+    """
+
+    def __init__(self, mapping_engine: MappingEngine, axis_discovery: AxisDiscovery, on_group_axis_changed=None) -> None:
+        super().__init__()
+        self._engine = mapping_engine
+        self._axis_discovery = axis_discovery
+        self._on_group_axis_changed = on_group_axis_changed
+        self._descriptors: list[ControlDescriptor] = []
+        self._descriptor_by_key: dict = {}
+        self._item_by_key: dict = {}
+        self._group_items: list[QTreeWidgetItem] = []
+        self._no_matches_item: QTreeWidgetItem | None = None
+        self._selected_key = None
+        self._inspector_field: _SingleAxisTargetField | None = None
+        # Captured the first time a search becomes non-empty, restored when
+        # it's cleared - `None` means "not currently filtering" (@spec
+        # UI-CTRLSEARCH-004).
+        self._expanded_group_ids_before_filter: set[str] | None = None
+
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText(_SEARCH_PLACEHOLDER)
+        self._search_edit.textChanged.connect(self._on_search_changed)
+
+        self._tree = _ControlTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.setColumnCount(1)
+        self._tree.itemClicked.connect(self._on_item_clicked)
+        self._tree.currentItemChanged.connect(self._on_current_item_changed)
+
+        left_column = QVBoxLayout()
+        left_column.addWidget(self._search_edit)
+        left_column.addWidget(self._tree, 1)
+        left_container = QWidget()
+        left_container.setLayout(left_column)
+
+        self._inspector_container = QWidget()
+        self._inspector_layout = QVBoxLayout(self._inspector_container)
+
+        layout = QHBoxLayout(self)
+        layout.addWidget(left_container, 1)
+        layout.addWidget(self._inspector_container, 1)
+
+        self._rebuild_rows()
+
+    def rebuild(self) -> None:
+        """Rebuilds the control hierarchy from the engine's current profile
+        and clears the selection - the Controller View's counterpart to
+        `MappingView.rebuild()`/`ConfigurationDialog.rebuild_for_profile_change()`,
+        called from the same Controller Profile switch handler.
+
+        @spec UI-CTRLVIEW-004
+        """
+        self._rebuild_rows()
+
+    def _rebuild_rows(self) -> None:
+        self._descriptors = build_control_descriptors(
+            build_fader_rows(self._engine), build_configuration_rows(self._engine), self._engine.profile
+        )
+        self._descriptor_by_key = {d.key: d for d in self._descriptors}
+        groups = build_control_groups(self._descriptors, self._engine.profile)
+
+        self._tree.blockSignals(True)
+        self._tree.clear()
+        self._item_by_key = {}
+        self._group_items = []
+        self._no_matches_item = None
+        for group in groups:
+            self._group_items.append(self._build_group_item(group))
+        self._tree.blockSignals(False)
+
+        self._search_edit.blockSignals(True)
+        self._search_edit.clear()
+        self._search_edit.blockSignals(False)
+        self._expanded_group_ids_before_filter = None
+
+        self._selected_key = None
+        self._show_inspector_placeholder()
+        self.refresh()
+
+    def _build_group_item(self, group: ControlGroup) -> QTreeWidgetItem:
+        """@spec UI-CTRLTREE-001, UI-CTRLTREE-002: a group header is a
+        top-level item with no `ItemIsSelectable` flag - clicking it can
+        never make it `currentItem()`, which is what lets a previously
+        selected control's highlight survive a header click elsewhere
+        (`UI-CTRLTREE-003`)."""
+        group_item = QTreeWidgetItem([group.label])
+        group_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        group_item.setData(0, _ITEM_KIND_ROLE, "group")
+        group_item.setData(0, _ITEM_PAYLOAD_ROLE, group.id)
+        self._tree.addTopLevelItem(group_item)
+        for descriptor in group.controls:
+            leaf = QTreeWidgetItem([descriptor.label])
+            leaf.setData(0, _ITEM_KIND_ROLE, "control")
+            leaf.setData(0, _ITEM_PAYLOAD_ROLE, descriptor.key)
+            group_item.addChild(leaf)
+            self._item_by_key[descriptor.key] = leaf
+        return group_item
+
+    def _on_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        """@spec UI-CTRLTREE-002: clicking a group header toggles
+        expand/collapse and nothing else - it must not select a mapping or
+        touch the Inspector. Leaf clicks are handled by
+        `_on_current_item_changed` instead (Qt already makes a clicked
+        selectable leaf the new `currentItem()` on its own)."""
+        if item.data(0, _ITEM_KIND_ROLE) == "group":
+            item.setExpanded(not item.isExpanded())
+
+    def _on_current_item_changed(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None) -> None:
+        """@spec UI-CTRLVIEW-003, UI-CTRLTREE-003: only a `"control"` leaf
+        changes the selection/Inspector. `current` is never a group header
+        in practice (non-selectable items can't become `currentItem()` via
+        a click), but the explicit check keeps this correct even if Qt's
+        keyboard navigation ever surfaces one."""
+        if current is None or current.data(0, _ITEM_KIND_ROLE) != "control":
+            return
+        key = current.data(0, _ITEM_PAYLOAD_ROLE)
+        descriptor = self._descriptor_by_key.get(key)
+        if descriptor is None:
+            return
+        self._selected_key = descriptor.key
+        self._show_inspector_for(descriptor)
+
+    # --- Search / filter (@spec UI-CTRLSEARCH-001 through UI-CTRLSEARCH-005) ---
+
+    def _on_search_changed(self, text: str) -> None:
+        query = text.strip().lower()
+        if query and self._expanded_group_ids_before_filter is None:
+            # First keystroke of a new search - remember what was expanded
+            # so clearing the search can restore it (UI-CTRLSEARCH-004).
+            self._expanded_group_ids_before_filter = {
+                item.data(0, _ITEM_PAYLOAD_ROLE) for item in self._group_items if item.isExpanded()
+            }
+        self._apply_filter(query)
+        if not query:
+            self._expanded_group_ids_before_filter = None
+
+    def _apply_filter(self, query: str) -> None:
+        """Matches against each leaf's already-rendered text (label +
+        summary, set by `refresh()`) plus its group's label - cheap string
+        containment checks over text already computed for display, not a
+        new recomputation path (@spec UI-CTRLSEARCH-005). Does not touch
+        `_selected_key` or the Inspector either way (@spec UI-CTRLSEARCH-003)."""
+        any_match = False
+        for group_item in self._group_items:
+            if not query:
+                group_item.setHidden(False)
+                restore = self._expanded_group_ids_before_filter
+                if restore is not None:
+                    group_item.setExpanded(group_item.data(0, _ITEM_PAYLOAD_ROLE) in restore)
+                continue
+            group_matches = query in group_item.text(0).lower()
+            child_match_found = False
+            for child_index in range(group_item.childCount()):
+                child = group_item.child(child_index)
+                child_matches = group_matches or query in child.text(0).lower()
+                child.setHidden(not child_matches)
+                child_match_found = child_match_found or child_matches
+            group_visible = group_matches or child_match_found
+            group_item.setHidden(not group_visible)
+            if group_visible:
+                group_item.setExpanded(True)
+                any_match = True
+        self._update_no_matches_item(show=bool(query) and not any_match)
+
+    def _update_no_matches_item(self, show: bool) -> None:
+        """@spec UI-CTRLSEARCH-005: a simple empty state, not a dead list."""
+        if show and self._no_matches_item is None:
+            item = QTreeWidgetItem([_NO_MATCHES_TEXT])
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            item.setData(0, _ITEM_KIND_ROLE, "empty_state")
+            self._tree.addTopLevelItem(item)
+            self._no_matches_item = item
+        elif not show and self._no_matches_item is not None:
+            index = self._tree.indexOfTopLevelItem(self._no_matches_item)
+            if index != -1:
+                self._tree.takeTopLevelItem(index)
+            self._no_matches_item = None
+
+    def _clear_inspector_layout(self) -> None:
+        """Explicitly `hide()` before detaching - relying on `setParent(None)`
+        alone to hide a removed widget is not reliable once that widget has
+        actually been shown as part of a real, OS-focused window (observed
+        only by running the real app: a detached `_SingleAxisTargetField`
+        could be left `isVisible() == True` as an orphaned top-level window,
+        floating over the main window, even though the identical detach call
+        correctly hides an unfocused widget in isolation). `hide()` is
+        Qt's own explicit, unconditional visibility API - it does not depend
+        on reparenting's side effects."""
+        while self._inspector_layout.count():
+            item = self._inspector_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+
+    def _show_inspector_placeholder(self) -> None:
+        """@spec UI-CTRLVIEW-005"""
+        self._clear_inspector_layout()
+        self._inspector_field = None
+        self._inspector_layout.addWidget(QLabel(_PLACEHOLDER_TEXT))
+
+    def _show_inspector_for(self, descriptor: ControlDescriptor) -> None:
+        self._clear_inspector_layout()
+        if has_editor(descriptor.control_type):
+            # @spec UI-CTRLVIEW-006: one field for the active Group only, not
+            # the 5-Group grid `_AxisTargetEditor` renders in Table View.
+            field = _SingleAxisTargetField(
+                on_change=lambda name, mn, mx, k=descriptor.key: self._on_axis_change(k, name, mn, mx),
+                on_clear=lambda k=descriptor.key: self._on_axis_clear(k),
+            )
+            self._inspector_field = field
+            self._inspector_layout.addWidget(QLabel(descriptor.label))
+            self._inspector_layout.addWidget(field)
+            self._sync_inspector_field()
+        else:
+            # @spec UI-CTRLVIEW-007
+            self._inspector_field = None
+            configuration_rows = {row.key: row for row in build_configuration_rows(self._engine)}
+            self._inspector_layout.addWidget(QLabel(descriptor.label))
+            self._inspector_layout.addWidget(QLabel(_NO_SETTINGS_TEXT))
+            self._inspector_layout.addWidget(QLabel(self._summary_text(descriptor, configuration_rows)))
+
+    def _on_axis_change(self, key, name: str, min_value: float, max_value: float) -> None:
+        # Reads `self._engine.active_group` at call time, not at closure-creation
+        # time - this is what makes a Group switch (UI-GROUPSEL-002) rebind this
+        # same field to the new Group with no extra wiring (@spec UI-CTRLVIEW-008).
+        self._engine.set_axis_target(key, self._engine.active_group, name, min_value, max_value)
+        self._notify_group_axis_changed()
+
+    def _on_axis_clear(self, key) -> None:
+        self._engine.clear_group_axis_target(key, self._engine.active_group)
+        self._notify_group_axis_changed()
+
+    def _notify_group_axis_changed(self) -> None:
+        if self._on_group_axis_changed is not None:
+            self._on_group_axis_changed()
+
+    def _summary_text(self, descriptor: ControlDescriptor, configuration_rows: dict) -> str:
+        """@spec UI-CTRLVIEW-002. Knob/Mute (now per-bank descriptors, not
+        the collapsed summary row - `UI-CTRLDESC-004`) reuse the existing
+        generic rule text `build_configuration_rows()` already computes for
+        `KNOB_ROW_KEY`/`MUTE_ROW_KEY` - the same text for every bank, since
+        the *rule* ("follows the fader's axis") is genuinely bank-independent
+        and nothing bank-specific is actually known to summarize safely.
+        Solo gets a real, bank-specific computed value instead of reusing
+        text at all: it's never actually "unassigned" (its target is a fixed
+        formula, `MAP-WS-002`), so showing "Unassigned" for it would be
+        wrong, not just uninformative - caught re-reading this function
+        against the Phase 1.1 spec's own worked example ("Solo - Select
+        AX1"), not by a failing test. The final fallback ("Unassigned" for a
+        descriptor with no matching `RowView` at all) covers a control with a
+        `control_names` label but no `opinionated_map` entry yet - e.g. a
+        VSN1 button, per `control_descriptor.py`'s three-source union."""
+        if descriptor.control_type == "fader":
+            active_group = self._engine.active_group
+            state = group_axis_picker_states(self._engine, descriptor.key, self._axis_discovery.axes)[active_group - 1]
+            return f"{state.current} · Axis" if state.current else "Unassigned"
+        profile = self._engine.profile
+        if descriptor.key in profile.knob_to_fader:
+            row = configuration_rows.get(KNOB_ROW_KEY)
+            return row.target if row is not None else "Unassigned"
+        if descriptor.key in profile.mute_to_fader:
+            row = configuration_rows.get(MUTE_ROW_KEY)
+            return row.target if row is not None else "Unassigned"
+        ws_keys = profile.websocket_keys
+        if ws_keys is not None and descriptor.key in ws_keys.solos:
+            bank_number = ws_keys.solos.index(descriptor.key) + 1
+            active_group = self._engine.active_group
+            axis_number = bank_number + profile.bank_count * (active_group - 1)
+            return f"select-AX{axis_number}"
+        row = configuration_rows.get(descriptor.key)
+        return row.target if row is not None else "Unassigned"
+
+    def _sync_inspector_field(self) -> None:
+        if self._inspector_field is None or self._selected_key is None:
+            return
+        active_group = self._engine.active_group
+        axis_target = self._engine.axis_target(self._selected_key, active_group)
+        current_min, current_max = (axis_target.min_value, axis_target.max_value) if axis_target is not None else (0.0, 100.0)
+        state = group_axis_picker_states(self._engine, self._selected_key, self._axis_discovery.axes)[active_group - 1]
+        self._inspector_field.sync(state, current_min, current_max)
+
+    def refresh(self) -> None:
+        """Recomputes every row's summary text and the Inspector's live
+        content, if a fader is selected. Runs every UI tick, same cadence as
+        `MappingView.refresh()`/`ConfigurationDialog.refresh()`.
+
+        @spec UI-CTRLVIEW-002, UI-CTRLVIEW-008, UI-CTRLVIEW-009
+        """
+        configuration_rows = {row.key: row for row in build_configuration_rows(self._engine)}
+        for descriptor in self._descriptors:
+            text = f"{descriptor.label}{_SUMMARY_SEPARATOR}{self._summary_text(descriptor, configuration_rows)}"
+            item = self._item_by_key.get(descriptor.key)
+            if item is not None and item.text(0) != text:
+                item.setText(0, text)
+        self._sync_inspector_field()

@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
 
 from .mapping import MappingEngine
 from .mapping_view_model import (
+    ACTIVE_GROUP_COLOR,
+    GROUP_LETTERS,
+    INACTIVE_GROUP_COLOR,
     SOLO_ROW_KEY,
     AxisPickerState,
     active_group_lights,
@@ -65,75 +68,56 @@ def _vline() -> QFrame:
     return line
 
 
-class _AxisTargetEditor(QWidget):
-    """The fader Target-column widget: 5 per-Group blocks (leftmost = Group 1),
-    each two rows tall - the axis-name picker on top, its min ("m")/max ("M")
-    fields side by side below it. Makes every fader row double-height compared
-    to the table's other rows (2026-07-23, user's explicit layout request).
-    Always shows the picker grid regardless of the engine-wide fader mode
-    (`MappingEngine.is_axis_mode()`, `docs/llds/static-mapping.md § Fader Axis
-    Mode`) - that mode is controlled from the Configuration Dialog's Fader row
-    (`_FaderModeRow` below), not from here; this row's own content doesn't
-    change based on it (@spec UI-MAP-018).
+class _SingleAxisTargetField(QWidget):
+    """One Group's axis-name picker plus its min ("m")/max ("M") fields -
+    extracted (Phase 8) from what was previously `_AxisTargetEditor`'s inline
+    per-Group block, so the Controller View's Inspector can embed exactly one
+    of these (bound to the selected fader's active Group) without duplicating
+    this wiring, while `_AxisTargetEditor` below still composes 5 of them for
+    Table View. Pure extraction - no behavior change from the pre-Phase-8
+    per-Group block this replaces.
 
-    @spec UI-MAP-006, UI-MAP-007, UI-MAP-014, UI-MAP-017
+    @spec UI-MAP-006, UI-MAP-007, UI-CTRLVIEW-006
     """
 
-    def __init__(self, on_axis_change: Callable[[int, str, float, float], None], on_axis_clear: Callable[[int], None]) -> None:
+    def __init__(self, on_change: Callable[[str, float, float], None], on_clear: Callable[[], None]) -> None:
         super().__init__()
-        self._on_axis_change = on_axis_change
-        self._on_axis_clear = on_axis_clear
+        self._on_change = on_change
+        self._on_clear = on_clear
 
-        axis_layout = QHBoxLayout(self)
-        axis_layout.setContentsMargins(0, 0, 0, 0)
-        self._group_combos: list[QComboBox] = []
-        self._group_min_edits: list[QLineEdit] = []
-        self._group_max_edits: list[QLineEdit] = []
-        for group_index in range(1, _GROUP_COUNT + 1):
-            if group_index > 1:
-                axis_layout.addWidget(_vline())
-            group_block = QWidget()
-            group_layout = QVBoxLayout(group_block)
-            group_layout.setContentsMargins(0, 0, 0, 0)
-            group_layout.setSpacing(2)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
 
-            combo = QComboBox()
-            combo.currentTextChanged.connect(lambda _text, g=group_index: self._emit_change(g))
-            group_layout.addWidget(combo)
+        self._combo = QComboBox()
+        self._combo.currentTextChanged.connect(lambda _text: self._emit_change())
+        layout.addWidget(self._combo)
 
-            bounds_row = QWidget()
-            bounds_layout = QHBoxLayout(bounds_row)
-            bounds_layout.setContentsMargins(0, 0, 0, 0)
-            min_edit = QLineEdit("0")
-            max_edit = QLineEdit("100")
-            min_edit.setFixedWidth(40)
-            max_edit.setFixedWidth(40)
-            min_edit.textChanged.connect(lambda _text, g=group_index: self._emit_change(g))
-            max_edit.textChanged.connect(lambda _text, g=group_index: self._emit_change(g))
-            bounds_layout.addWidget(QLabel("m"))
-            bounds_layout.addWidget(min_edit)
-            bounds_layout.addWidget(QLabel("M"))
-            bounds_layout.addWidget(max_edit)
-            bounds_layout.addStretch(1)
-            group_layout.addWidget(bounds_row)
+        bounds_row = QWidget()
+        bounds_layout = QHBoxLayout(bounds_row)
+        bounds_layout.setContentsMargins(0, 0, 0, 0)
+        self._min_edit = QLineEdit("0")
+        self._max_edit = QLineEdit("100")
+        self._min_edit.setFixedWidth(40)
+        self._max_edit.setFixedWidth(40)
+        self._min_edit.textChanged.connect(lambda _text: self._emit_change())
+        self._max_edit.textChanged.connect(lambda _text: self._emit_change())
+        bounds_layout.addWidget(QLabel("m"))
+        bounds_layout.addWidget(self._min_edit)
+        bounds_layout.addWidget(QLabel("M"))
+        bounds_layout.addWidget(self._max_edit)
+        bounds_layout.addStretch(1)
+        layout.addWidget(bounds_row)
 
-            axis_layout.addWidget(group_block, 1)
-            self._group_combos.append(combo)
-            self._group_min_edits.append(min_edit)
-            self._group_max_edits.append(max_edit)
-
-    def sync_picker(self, group_index: int, state: AxisPickerState, current_min: float, current_max: float) -> None:
-        """Repopulate one Group's axis combo from the current discovery state
-        while preserving the user's in-progress selection (UI-MAP-004/UI-MAP-008),
-        independent of every other Group's picker on this row.
+    def sync(self, state: AxisPickerState, current_min: float, current_max: float) -> None:
+        """Repopulate this picker from the current discovery state while
+        preserving the user's in-progress selection (UI-MAP-004/UI-MAP-008).
 
         Called every UI tick, so this must be a no-op when nothing has actually
         changed, and must never touch the combo while its popup is open -
         otherwise a user mid-click has the list torn down under them (~33x/sec).
         """
-        combo = self._group_combos[group_index - 1]
-        min_edit = self._group_min_edits[group_index - 1]
-        max_edit = self._group_max_edits[group_index - 1]
+        combo, min_edit, max_edit = self._combo, self._min_edit, self._max_edit
 
         if combo.view().isVisible():
             return  # don't disturb an open dropdown
@@ -176,22 +160,54 @@ class _AxisTargetEditor(QWidget):
                 with _signals_blocked(max_edit):
                     max_edit.setText(text)
 
-    def _emit_change(self, group_index: int) -> None:
-        combo = self._group_combos[group_index - 1]
-        min_edit = self._group_min_edits[group_index - 1]
-        max_edit = self._group_max_edits[group_index - 1]
-        name = combo.currentText().split(" (not found)")[0]
+    def _emit_change(self) -> None:
+        name = self._combo.currentText().split(" (not found)")[0]
         if not name:
-            self._on_axis_clear(group_index)  # @spec UI-MAP-017: clear_group_axis_target, not the row toggle
+            self._on_clear()  # @spec UI-MAP-017: clear_group_axis_target, not the row toggle
             return
-        min_value = parse_axis_field(min_edit.text())
-        max_value = parse_axis_field(max_edit.text())
+        min_value = parse_axis_field(self._min_edit.text())
+        max_value = parse_axis_field(self._max_edit.text())
         if min_value is None or max_value is None:
             return
-        self._on_axis_change(group_index, name, min_value, max_value)
+        self._on_change(name, min_value, max_value)
 
 
-_GROUP_LETTERS = "ABCDE"
+class _AxisTargetEditor(QWidget):
+    """The fader Target-column widget: 5 per-Group `_SingleAxisTargetField`s
+    (leftmost = Group 1), each two rows tall - the axis-name picker on top, its
+    min/max fields below it. Makes every fader row double-height compared to
+    the table's other rows (2026-07-23, user's explicit layout request).
+    Always shows the picker grid regardless of the engine-wide fader mode
+    (`MappingEngine.is_axis_mode()`, `docs/llds/static-mapping.md § Fader Axis
+    Mode`) - that mode is controlled from the Configuration Dialog's Fader row
+    (`_FaderModeRow` below), not from here; this row's own content doesn't
+    change based on it (@spec UI-MAP-018).
+
+    @spec UI-MAP-006, UI-MAP-007, UI-MAP-014, UI-MAP-017
+    """
+
+    def __init__(self, on_axis_change: Callable[[int, str, float, float], None], on_axis_clear: Callable[[int], None]) -> None:
+        super().__init__()
+
+        axis_layout = QHBoxLayout(self)
+        axis_layout.setContentsMargins(0, 0, 0, 0)
+        self._fields: list[_SingleAxisTargetField] = []
+        for group_index in range(1, _GROUP_COUNT + 1):
+            if group_index > 1:
+                axis_layout.addWidget(_vline())
+            field = _SingleAxisTargetField(
+                on_change=lambda name, mn, mx, g=group_index: on_axis_change(g, name, mn, mx),
+                on_clear=lambda g=group_index: on_axis_clear(g),
+            )
+            axis_layout.addWidget(field, 1)
+            self._fields.append(field)
+
+    def sync_picker(self, group_index: int, state: AxisPickerState, current_min: float, current_max: float) -> None:
+        """Delegates to the named Group's field - independent of every other
+        Group's field on this row. Called every UI tick, same as before."""
+        self._fields[group_index - 1].sync(state, current_min, current_max)
+
+
 # 14px (unstyled default) -> 21px (2026-07-23, first pass) -> 32px (2026-07-23,
 # a further 50% on top of that): each round was the user's explicit request.
 _DOT_FONT_SIZE_PX = 32
@@ -214,7 +230,7 @@ class _GroupIndicatorRow(QWidget):
         layout.addStretch(1)
         layout.addWidget(QLabel("Group:"))
         self._dots: list[QLabel] = []
-        for letter in _GROUP_LETTERS:
+        for letter in GROUP_LETTERS:
             column = QWidget()
             column_layout = QVBoxLayout(column)
             column_layout.setContentsMargins(0, 0, 0, 0)
@@ -233,7 +249,7 @@ class _GroupIndicatorRow(QWidget):
 
     def sync(self, lights: tuple) -> None:
         for dot, lit in zip(self._dots, lights):
-            color = "#2f6fed" if lit else "#888888"
+            color = ACTIVE_GROUP_COLOR if lit else INACTIVE_GROUP_COLOR
             dot.setStyleSheet(f"color: {color}; font-size: {_DOT_FONT_SIZE_PX}px;")
 
 
@@ -252,7 +268,7 @@ class _GroupHeaderRow(QWidget):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        for index, letter in enumerate(_GROUP_LETTERS):
+        for index, letter in enumerate(GROUP_LETTERS):
             if index > 0:
                 layout.addWidget(_vline())
             label = QLabel(letter)
@@ -287,27 +303,10 @@ class MappingView(QWidget):
 
         self._group_indicator = _GroupIndicatorRow()
 
-        rows = build_fader_rows(self._engine)
-        # +1 for the A-E Group-letter header row (row 0), a real table row so its
-        # column boundaries are guaranteed to match every fader row's below it.
-        self._table = QTableWidget(len(rows) + 1, len(self._COLUMNS))
+        self._table = QTableWidget(0, len(self._COLUMNS))
         self._table.setHorizontalHeaderLabels(self._COLUMNS)
         self._editors: dict = {}
-
-        for column in range(2):
-            self._table.setItem(0, column, QTableWidgetItem(""))
-        self._table.setCellWidget(0, 2, _GroupHeaderRow())
-
-        for offset, row in enumerate(rows):
-            row_index = offset + 1
-            self._table.setItem(row_index, 0, QTableWidgetItem(row.name))
-            self._table.setItem(row_index, 1, QTableWidgetItem(row.midi_source))
-            editor = _AxisTargetEditor(
-                on_axis_change=lambda g, name, mn, mx, k=row.key: self._on_axis_change(k, g, name, mn, mx),
-                on_axis_clear=lambda g, k=row.key: self._on_axis_clear(k, g),
-            )
-            self._table.setCellWidget(row_index, 2, editor)
-            self._editors[row.key] = editor
+        self._rebuild_rows()
 
         rescan_button = QPushButton("Rescan axes")
         rescan_button.clicked.connect(on_rescan)
@@ -324,13 +323,56 @@ class MappingView(QWidget):
 
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
+
+        self.refresh()
+
+    def _rebuild_rows(self) -> None:
+        """(Re)constructs the table's row set from the engine's *current*
+        profile. Called at construction and again whenever the active
+        controller's structural control set changes (`rebuild()` below) -
+        unlike `refresh()`, which only updates already-existing rows' live
+        content and cannot add or remove rows. Closes a known pre-Grid gap
+        (`docs/llds/app-ui.md`'s Open Questions: a profile switch to a
+        structurally different control set wasn't previously reflected
+        correctly) that Intech Grid's variable `bank_count` makes load-bearing
+        rather than a latent, never-exercised case."""
+        self._editors.clear()
+        rows = build_fader_rows(self._engine)
+        # +1 for the A-E Group-letter header row (row 0), a real table row so its
+        # column boundaries are guaranteed to match every fader row's below it.
+        self._table.setRowCount(len(rows) + 1)
+
+        for column in range(2):
+            self._table.setItem(0, column, QTableWidgetItem(""))
+        self._table.setCellWidget(0, 2, _GroupHeaderRow())
+
+        for offset, row in enumerate(rows):
+            row_index = offset + 1
+            self._table.setItem(row_index, 0, QTableWidgetItem(row.name))
+            self._table.setItem(row_index, 1, QTableWidgetItem(row.midi_source))
+            editor = _AxisTargetEditor(
+                on_axis_change=lambda g, name, mn, mx, k=row.key: self._on_axis_change(k, g, name, mn, mx),
+                on_axis_clear=lambda g, k=row.key: self._on_axis_clear(k, g),
+            )
+            self._table.setCellWidget(row_index, 2, editor)
+            self._editors[row.key] = editor
+
         self._table.resizeColumnsToContents()
-        # Fader rows are now double-height (picker + m/M bounds stacked per
-        # Group, user's explicit layout request, 2026-07-23) - every other row
-        # stays its normal single-line height, since only cellWidgets (not plain
+        # Fader rows are double-height (picker + m/M bounds stacked per Group,
+        # user's explicit layout request, 2026-07-23) - every other row stays
+        # its normal single-line height, since only cellWidgets (not plain
         # QTableWidgetItem rows) actually need the extra vertical space.
         self._table.resizeRowsToContents()
 
+    def rebuild(self) -> None:
+        """Rebuilds the row/editor set for the engine's current profile, then
+        refreshes it - the counterpart to `ConfigurationDialog.
+        rebuild_for_profile_change()`, called from the same Controller Profile
+        switch handler. Required whenever the new profile's `bank_fader_keys`
+        differ in count or identity from the previous one's (always true for
+        Intech Grid, whose `bank_count` is only known once its topology
+        settles and can differ between settles)."""
+        self._rebuild_rows()
         self.refresh()
 
     def table_width_hint(self) -> int:

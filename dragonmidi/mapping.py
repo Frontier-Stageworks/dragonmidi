@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from .active_controller import ActiveController
 from .controller_profile import ControllerProfile
 from .events import KeyCombo, MidiEvent, OscMessage, WebSocketCommand
 
@@ -117,8 +118,13 @@ _TRANSPORT_DISPLAY_NAMES: dict[str, str] = {
 }
 
 
-def _fader_entries(ccs: Sequence[int]) -> dict[_Key, _MapEntry]:
-    return {("cc", cc): _MapEntry("absolute", f"/dragonframe/encoder/{i + 1}") for i, cc in enumerate(ccs)}
+def _fader_entries(ccs: Sequence[int], key_type: str = "cc") -> dict[_Key, _MapEntry]:
+    """`key_type` defaults to "cc" (every existing Korg call site, unchanged) -
+    a Grid fader's "CC number" is actually a stable logical index and its key
+    tag is "grid_fader", not "cc" (docs/llds/intech-grid.md § Active Grid
+    Controller); the formula itself (the encoder-channel offset) is identical
+    either way, so this is a parameterization, not a fork."""
+    return {(key_type, cc): _MapEntry("absolute", f"/dragonframe/encoder/{i + 1}") for i, cc in enumerate(ccs)}
 
 
 def _knob_entries(ccs: Sequence[int], bank_count: int) -> dict[_Key, _MapEntry]:
@@ -190,18 +196,24 @@ def build_websocket_keys(controls: ControlsConfig) -> WebSocketKeys:
     )
 
 
-def build_bank_membership(controls: ControlsConfig) -> dict[str, object]:
+def build_bank_membership(controls: ControlsConfig, key_type: str = "cc") -> dict[str, object]:
     """Positional (not CC-arithmetic) Fader<->Knob/Mute pairing: Bank N = index N-1
     in each of `faders`/`knobs`/`mutes`. Returns the five pieces `ControllerProfile`
     stores directly (`fader_keys`, `knob_to_fader`, `mute_to_fader`, `fader_to_knob`,
-    `bank_fader_keys`)."""
-    fader_keys = frozenset(("cc", cc) for cc in controls.faders)
-    knob_to_fader = {("cc", knob_cc): ("cc", fader_cc) for fader_cc, knob_cc in zip(controls.faders, controls.knobs)}
-    mute_to_fader = {("cc", mute_cc): ("cc", fader_cc) for fader_cc, mute_cc in zip(controls.faders, controls.mutes)}
+    `bank_fader_keys`).
+
+    `key_type` defaults to "cc" (every existing Korg call site, unchanged) - Grid
+    reuses this exact positional-pairing logic with `key_type="grid_fader"` and
+    empty `knobs`/`mutes` (no Bank-derived companions exist for Grid in Phase 1),
+    which this already handles correctly via the existing empty-capability path
+    (docs/llds/intech-grid.md § Active Grid Controller)."""
+    fader_keys = frozenset((key_type, cc) for cc in controls.faders)
+    knob_to_fader = {(key_type, knob_cc): (key_type, fader_cc) for fader_cc, knob_cc in zip(controls.faders, controls.knobs)}
+    mute_to_fader = {(key_type, mute_cc): (key_type, fader_cc) for fader_cc, mute_cc in zip(controls.faders, controls.mutes)}
     fader_to_knob = {fader_key: knob_key for knob_key, fader_key in knob_to_fader.items()}
     # Ordered (index 0 = Bank 1), unlike fader_keys' frozenset - needed by the Preset
     # Store to translate a persisted Bank index back to a fader key (@spec MAP-STORE-001).
-    bank_fader_keys = tuple(("cc", cc) for cc in controls.faders)
+    bank_fader_keys = tuple((key_type, cc) for cc in controls.faders)
     return {
         "fader_keys": fader_keys,
         "knob_to_fader": knob_to_fader,
@@ -361,7 +373,7 @@ class MappingEngine:
     @spec MAP-STORE-002
     """
 
-    def __init__(self, profile: ControllerProfile = STUDIO_PROFILE) -> None:
+    def __init__(self, profile: ActiveController = STUDIO_PROFILE) -> None:
         self._profile = profile
         self._previous_value: dict[_Key, float] = {}
         self._pressed_state: dict[_Key, bool] = {}
@@ -404,16 +416,20 @@ class MappingEngine:
         # (@spec MAP-GROUP-007, see set_profile below).
 
     @property
-    def profile(self) -> ControllerProfile:
+    def profile(self) -> ActiveController:
         return self._profile
 
-    def set_profile(self, profile: ControllerProfile) -> None:
-        """Switch the active Controller Profile: swaps the opinionated map and
-        clears every piece of tracked state, including axis assignments and
-        encoder-mode overrides - broader than `reset()`, since the previous
-        profile's per-control configuration is meaningless against a different
-        control set and channel. Independent of whether a matching device has
-        yet been found under the new profile (`MIDI-PROFILE-005`).
+    def set_profile(self, profile: ActiveController) -> None:
+        """Switch the active controller - a static `ControllerProfile` for a
+        Korg device, or a runtime `GridRuntimeController` for Intech Grid
+        (docs/llds/intech-grid.md § Active Grid Controller); both satisfy the
+        same `ActiveController` shape, so this method has no Grid-specific
+        branch. Swaps the opinionated map and clears every piece of tracked
+        state, including axis assignments and encoder-mode overrides -
+        broader than `reset()`, since the previous profile's per-control
+        configuration is meaningless against a different control set and
+        channel. Independent of whether a matching device has yet been found
+        under the new profile (`MIDI-PROFILE-005`).
 
         @spec MAP-PROFILE-004
         """
@@ -437,11 +453,18 @@ class MappingEngine:
         if knob_key is not None:
             self._previous_value.pop(knob_key, None)
 
-    def _step_active_group(self, direction: int) -> None:
+    def step_active_group(self, direction: int) -> None:
         """Steps `_active_group` by `direction` (+1/-1), wrapping at the 1-5
         boundary rather than clamping, and discards dedup/position state for every
         Bank if the engine-wide mode is currently OSC axis (direct) - a no-op under
         OSC encoder mode, since no Bank's target depends on Group there.
+
+        Public as of Phase 8 (@spec MAP-GROUP-013): a second legitimate caller, the
+        Controller view's Group selector (`docs/llds/app-ui.md`), steps this directly
+        rather than through a synthesized Track press - same wrap/cleanup semantics
+        either way, since this method is the one thing both callers share. There is
+        still no way to jump to an arbitrary Group in one call; a caller wanting
+        Group 4 from Group 1 calls this 3 times, same as 3 real Track presses would.
 
         @spec MAP-GROUP-004, MAP-GROUP-011
         """
@@ -574,11 +597,11 @@ class MappingEngine:
             if group_keys is not None:
                 if key == group_keys.previous:
                     if self._press_edge(key, event, now):
-                        self._step_active_group(-1)
+                        self.step_active_group(-1)
                     return None
                 if key == group_keys.next:
                     if self._press_edge(key, event, now):
-                        self._step_active_group(1)
+                        self.step_active_group(1)
                     return None
 
             if self._profile.has_jog_wheel and key == _JOG_WHEEL_KEY:

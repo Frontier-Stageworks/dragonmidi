@@ -17,14 +17,29 @@ class StatusSnapshot:
     dragonframe: IndicatorViewModel
 
 
-def midi_indicator(state: ChannelState, connected: bool, device_name: str | None, profile_name: str) -> IndicatorViewModel:
+def midi_indicator(
+    state: ChannelState,
+    connected: bool,
+    device_name: str | None,
+    profile_name: str,
+    status_override: str | None = None,
+) -> IndicatorViewModel:
     """`profile_name` is the currently-selected Controller Profile's display name
     (e.g. "nanoKONTROL Studio", "nanoKONTROL2"), used only for the not-yet-connected
     waiting text - once connected, the label always shows the actual device name.
 
+    `status_override`, when given, wins over both of those - the seam Intech
+    Grid's pending/stale/unsupported/ambiguous states use to show their own
+    text through this same free-text slot (docs/llds/intech-grid.md § UI
+    Implications), without a new indicator widget. Every existing caller omits
+    it and is unaffected (default `None`).
+
     @spec UI-STATUS-002, UI-STATUS-004
     """
-    label = device_name if connected and device_name else f"Waiting for {profile_name}…"
+    if status_override is not None:
+        label = status_override
+    else:
+        label = device_name if connected and device_name else f"Waiting for {profile_name}…"
     return IndicatorViewModel(state=state, label=label)
 
 
@@ -63,14 +78,16 @@ def compute_status_snapshot(
     midi_device_name: str | None,
     listen_port: int,
     midi_profile_name: str,
+    midi_status_override: str | None = None,
 ) -> StatusSnapshot:
     """Reads each channel's Signal Monitor state exactly once per call.
+    `midi_status_override` passes through to `midi_indicator()` unchanged.
 
     @spec UI-STATUS-001
     """
     midi_state = monitor.state("midi")
     dragonframe_state = monitor.state("dragonframe")
     return StatusSnapshot(
-        midi=midi_indicator(midi_state, midi_connected, midi_device_name, midi_profile_name),
+        midi=midi_indicator(midi_state, midi_connected, midi_device_name, midi_profile_name, midi_status_override),
         dragonframe=dragonframe_indicator(dragonframe_state, listen_port),
     )

@@ -13,6 +13,20 @@ KNOB_ROW_KEY: _Key = ("knob_summary", None)
 MUTE_ROW_KEY: _Key = ("mute_summary", None)
 SOLO_ROW_KEY: _Key = ("solo_websocket", None)  # not a real MIDI key - one summary row for all of a profile's Solo CCs
 
+# Moved here from mapping_widgets.py (Phase 8): a pure-data constant, needed by
+# both that module's Qt widgets (`_GroupHeaderRow`/`_GroupIndicatorRow`) and
+# `controller_view_widgets.py`'s `GroupSelectorRow` - living in the Qt-free
+# module lets the latter import it without pulling in mapping_widgets.py.
+GROUP_LETTERS = "ABCDE"
+
+# The active/inactive Group-light colors `_GroupIndicatorRow` (mapping_widgets.py)
+# already used, promoted here (Phase 8) so `GroupSelectorRow`'s header buttons can
+# match them exactly rather than relying on a QPushButton's native `:checked` look,
+# which this app's custom stylesheet doesn't define and which rendered inconsistently
+# depending on window-focus state (found by running the real app and looking at it).
+ACTIVE_GROUP_COLOR = "#2f6fed"
+INACTIVE_GROUP_COLOR = "#888888"
+
 
 def midi_source_label(key: _Key, channel: int) -> str:
     """@spec UI-MAP-001, UI-CFGDLG-002"""
@@ -340,3 +354,21 @@ def parse_axis_field(text: str) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def group_step_plan(current: int, target: int) -> tuple[int, int]:
+    """How many `MappingEngine.step_active_group(direction)` calls, and in
+    which direction, reach `target` from `current` in the fewest steps -
+    taking the wraparound direction when it's shorter, matching
+    `step_active_group`'s own `% 5` wrap arithmetic. Returns `(direction, 0)`
+    when already on `target` - the direction value is then unused.
+
+    @spec UI-GROUPSEL-002
+    """
+    if current == target:
+        return (1, 0)
+    forward_steps = (target - current) % 5
+    backward_steps = (current - target) % 5
+    if forward_steps <= backward_steps:
+        return (1, forward_steps)
+    return (-1, backward_steps)

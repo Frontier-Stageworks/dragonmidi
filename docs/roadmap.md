@@ -193,10 +193,10 @@ A small operational/teach panel can surface selected axis, current mode, recent 
 - [ ] Add device capability descriptors for faders, absolute knobs, relative wheels, and buttons.
 - [ ] Normalize MIDI input events, including relative encoders and press/release pairs.
 - [ ] Define a mapping domain model separating **input**, **behavior**, **target**, **layer**, and per-control **options**.
-- [ ] Implement controller-aware control selection and a contextual inspector.
-- [ ] Implement the Mappings list/table as a dense alternate view.
+- [x] Implement controller-aware control selection and a contextual inspector. (Controller View + Inspector, Phase 8 of `docs/high-level-design.md`'s Delivery Phasing; today exposes only the existing axis-target assignment, per that phase's explicit scope.)
+- [x] Implement the Mappings list/table as a dense alternate view. (The prior Mapping View + Configuration Dialog, preserved verbatim as "Table View," reachable via a footer toggle from the Controller View.)
 - [ ] Expose live input activity for each control and MIDI learn/select-by-moving.
-- [ ] Maintain backward compatibility with existing mappings, A–E groups, and nanoKONTROL behavior.
+- [x] Maintain backward compatibility with existing mappings, A–E groups, and nanoKONTROL behavior. (Full existing test suite - 547 tests - passes unchanged; A-E Groups reused via the existing `step_active_group` mechanism, not replaced; Table View is the same widgets, same persistence format.)
 - [ ] Test device disconnect/reconnect and mapping identity stability.
 
 **Acceptance criteria**
