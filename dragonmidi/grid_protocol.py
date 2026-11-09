@@ -162,7 +162,7 @@ def _decode_packet(packet: bytes) -> GridHeartbeat | None:
     if None in (sx, sy, rotation, port_rotation):
         return None
 
-    class_blocks = _split_class_blocks(packet[_BRC_HEADER_LENGTH : -3])
+    class_blocks = _split_class_blocks(packet[_BRC_HEADER_LENGTH:-3])
     heartbeat_block = class_blocks.get(_HEARTBEAT_CLASS_CODE)
     if heartbeat_block is None:
         return None

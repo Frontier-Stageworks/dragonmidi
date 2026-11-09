@@ -106,9 +106,7 @@ def test_single_axis_target_field_emits_change_once_name_and_bounds_are_valid() 
     _qapp()
     changes: list[tuple[str, float, float]] = []
     clears = []
-    field = _SingleAxisTargetField(
-        on_change=lambda name, mn, mx: changes.append((name, mn, mx)), on_clear=lambda: clears.append(True)
-    )
+    field = _SingleAxisTargetField(on_change=lambda name, mn, mx: changes.append((name, mn, mx)), on_clear=lambda: clears.append(True))
 
     field.sync(AxisPickerState(enabled=True, placeholder=None, candidates=("PAN", "TILT"), current=None), 0.0, 100.0)
     field._combo.setCurrentText("PAN")
@@ -122,9 +120,7 @@ def test_single_axis_target_field_calls_on_clear_when_selection_cleared() -> Non
     _qapp()
     changes: list[tuple[str, float, float]] = []
     clears = []
-    field = _SingleAxisTargetField(
-        on_change=lambda name, mn, mx: changes.append((name, mn, mx)), on_clear=lambda: clears.append(True)
-    )
+    field = _SingleAxisTargetField(on_change=lambda name, mn, mx: changes.append((name, mn, mx)), on_clear=lambda: clears.append(True))
 
     field.sync(AxisPickerState(enabled=True, placeholder=None, candidates=("PAN",), current="PAN"), 0.0, 100.0)
     field._combo.setCurrentText("")

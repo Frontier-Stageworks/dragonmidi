@@ -211,9 +211,7 @@ class ControllerView(QWidget):
         self._rebuild_rows()
 
     def _rebuild_rows(self) -> None:
-        self._descriptors = build_control_descriptors(
-            build_fader_rows(self._engine), build_configuration_rows(self._engine), self._engine.profile
-        )
+        self._descriptors = build_control_descriptors(build_fader_rows(self._engine), build_configuration_rows(self._engine), self._engine.profile)
         self._descriptor_by_key = {d.key: d for d in self._descriptors}
         groups = build_control_groups(self._descriptors, self._engine.profile)
 
@@ -285,9 +283,7 @@ class ControllerView(QWidget):
         if query and self._expanded_group_ids_before_filter is None:
             # First keystroke of a new search - remember what was expanded
             # so clearing the search can restore it (UI-CTRLSEARCH-004).
-            self._expanded_group_ids_before_filter = {
-                item.data(0, _ITEM_PAYLOAD_ROLE) for item in self._group_items if item.isExpanded()
-            }
+            self._expanded_group_ids_before_filter = {item.data(0, _ITEM_PAYLOAD_ROLE) for item in self._group_items if item.isExpanded()}
         self._apply_filter(query)
         if not query:
             self._expanded_group_ids_before_filter = None

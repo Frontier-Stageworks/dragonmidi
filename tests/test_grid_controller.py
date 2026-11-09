@@ -239,8 +239,13 @@ def test_grid_bank_count_12_matches_a_synthetic_12_bank_korg_profiles_solo_formu
     outcome = build_grid_controller(_topology([_pbf4(x) for x in range(3)]))
     controls = ControlsConfig(faders=tuple(range(12)), knobs=(), mutes=(), solos=tuple(range(100, 112)), transport={}, jog_wheel=None)
     korg_profile = build_profile(
-        name="Synthetic 12-Bank", match_substring="synthetic12bank", has_native_mode=False,
-        default_channel=0, has_jog_wheel=False, has_scene_button=False, controls=controls,
+        name="Synthetic 12-Bank",
+        match_substring="synthetic12bank",
+        has_native_mode=False,
+        default_channel=0,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        controls=controls,
     )
     assert outcome.controller.bank_count == korg_profile.bank_count == 12
 

@@ -71,9 +71,7 @@ def _bank_index_for(key: "_Key", active_controller: "ActiveController") -> int |
     return None
 
 
-def build_control_groups(
-    descriptors: "list[ControlDescriptor]", active_controller: "ActiveController"
-) -> list[ControlGroup]:
+def build_control_groups(descriptors: "list[ControlDescriptor]", active_controller: "ActiveController") -> list[ControlGroup]:
     """Channel groups 1..bank_count first (each only created if it ends up
     with at least one member - a Bank with only a Fader and no Knob/Mute/
     Solo still gets a one-member Channel group), in Bank order; then any

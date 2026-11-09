@@ -281,9 +281,7 @@ class DragonMidiWindow(QMainWindow):
         self._profile_combo.addItems([choice.name for choice in self._controller_choices])
         self._profile_combo.setMaximumWidth(_CONTROLLER_COMBO_MAX_WIDTH)
         default_index = next(
-            i
-            for i, choice in enumerate(self._controller_choices)
-            if isinstance(choice, StaticChoice) and choice.profile is self._default_profile
+            i for i, choice in enumerate(self._controller_choices) if isinstance(choice, StaticChoice) and choice.profile is self._default_profile
         )
         # setCurrentIndex() before connecting the signal, so selecting the default
         # profile (which may not be index 0 - the dropdown lists user-local profiles

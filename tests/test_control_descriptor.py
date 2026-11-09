@@ -39,9 +39,7 @@ def test_fader_rows_come_first_in_their_own_order() -> None:
     engine = MappingEngine(profile=STUDIO_PROFILE)
     descriptors = _descriptors(engine)
     fader_rows = build_fader_rows(engine)
-    assert descriptors[: len(fader_rows)] == [
-        ControlDescriptor(key=row.key, label=row.name, control_type="fader") for row in fader_rows
-    ]
+    assert descriptors[: len(fader_rows)] == [ControlDescriptor(key=row.key, label=row.name, control_type="fader") for row in fader_rows]
 
 
 # @spec UI-CTRLDESC-002

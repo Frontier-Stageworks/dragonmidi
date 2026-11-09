@@ -13,8 +13,13 @@ from dragonmidi.controller_selection import GRID_CHOICE_NAME, GridChoice, Static
 
 def _profile(name: str) -> ControllerProfile:
     return ControllerProfile(
-        name=name, match_substring=name.lower(), has_native_mode=False, default_channel=0,
-        has_jog_wheel=False, has_scene_button=False, opinionated_map={},
+        name=name,
+        match_substring=name.lower(),
+        has_native_mode=False,
+        default_channel=0,
+        has_jog_wheel=False,
+        has_scene_button=False,
+        opinionated_map={},
     )
 
 

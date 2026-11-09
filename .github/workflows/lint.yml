@@ -23,8 +23,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install ruff
-        run: pip install ruff
+      # Installs the exact ruff version pyproject.toml pins (dev extras), not
+      # whatever is newest on PyPI - a bare `pip install ruff` previously let
+      # the Lint job silently drift from the version this repo is actually
+      # formatted against.
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
 
       - name: ruff — Python lint + format check
         run: ruff check . && ruff format --check .

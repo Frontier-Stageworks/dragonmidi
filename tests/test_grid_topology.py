@@ -33,14 +33,13 @@ def test_has_changed_since_is_true_immediately_on_a_new_module_no_settle_wait() 
     builder.observe(_hb(0, 64, x=1), now=0.3)  # a new module appears
     assert builder.has_changed_since(baseline=baseline, now=0.31) is True  # true right away, no settle window needed
 
+
 SETTLE = 0.5
 HEARTBEAT_INTERVAL = 0.2  # well under DISCONNECT_TIMEOUT_SECONDS, matching Grid's real ~250ms cadence
 
 
 def _hb(heartbeat_type, hwcfg, x, y=0, rotation=0, port_rotation=0, page=None):
-    return GridHeartbeat(
-        heartbeat_type=heartbeat_type, hwcfg=hwcfg, x=x, y=y, rotation=rotation, port_rotation=port_rotation, page=page
-    )
+    return GridHeartbeat(heartbeat_type=heartbeat_type, hwcfg=hwcfg, x=x, y=y, rotation=rotation, port_rotation=port_rotation, page=page)
 
 
 def _keep_alive(builder: GridTopologyBuilder, heartbeat: GridHeartbeat, start: float, end: float, interval: float = HEARTBEAT_INTERVAL) -> None:

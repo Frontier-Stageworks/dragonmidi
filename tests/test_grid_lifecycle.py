@@ -235,11 +235,7 @@ def test_grid_status_text_is_none_for_active_so_the_normal_device_name_logic_app
 
 
 def test_grid_status_text_is_distinct_and_non_none_for_every_other_state() -> None:
-    texts = {
-        status: grid_status_text(status, reason="modules span more than one row")
-        for status in GridStatus
-        if status is not GridStatus.ACTIVE
-    }
+    texts = {status: grid_status_text(status, reason="modules span more than one row") for status in GridStatus if status is not GridStatus.ACTIVE}
     assert all(text is not None for text in texts.values())
     assert len(set(texts.values())) == len(texts)  # every non-active state reads distinctly
 
