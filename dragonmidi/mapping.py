@@ -283,11 +283,22 @@ def build_profile(
     has_scene_button: bool,
     controls: ControlsConfig,
     setup_hint: str | None = None,
+    unconfirmed_channel_controls: tuple[str, ...] = (),
+    unconfirmed_global_controls: tuple[str, ...] = (),
 ) -> ControllerProfile:
     """Assembles a `ControllerProfile` from a `ControlsConfig`, validating it first
     and deriving every controls-dependent field (opinionated map, WebSocket keys,
     bank membership, display names) the same way for a bundled/hardcoded profile
-    (below) or one loaded from a config file (`controller_profile_loader.py`)."""
+    (below) or one loaded from a config file (`controller_profile_loader.py`).
+
+    `unconfirmed_channel_controls`/`unconfirmed_global_controls` (Phase 1.5.1,
+    @spec MAP-CONFIG-009) name physically-present controls this profile has no
+    confirmed MIDI identity for yet - see `ControllerProfile`'s own docstring.
+    Neither is part of the Controller Profile config file schema
+    (`controller_profile_loader.py`) - a third-party config author is never
+    asked to declare a control they can't give a real CC/note number for; only
+    the two bundled Korg profiles below use this.
+    """
     validate_controls_config(controls, has_jog_wheel)
     bank = build_bank_membership(controls)
     return ControllerProfile(
@@ -302,6 +313,8 @@ def build_profile(
         group_keys=build_group_keys(controls),
         setup_hint=setup_hint,
         control_names=build_control_names(controls, has_scene_button),
+        unconfirmed_channel_controls=unconfirmed_channel_controls,
+        unconfirmed_global_controls=unconfirmed_global_controls,
         **bank,
     )
 
@@ -349,6 +362,15 @@ STUDIO_PROFILE = build_profile(
     has_jog_wheel=True,
     has_scene_button=True,
     controls=STUDIO_CONTROLS,
+    # Physically present, confirmed by `docs/llds/static-mapping.md`'s own
+    # pre-existing Opinionated Default Map table and `MAP-BANK-006`/
+    # `MAP-PROFILE-003` - but with no confirmed CC/note number ("various CCs"),
+    # so represented here rather than wired to a guessed MIDI identity
+    # (Phase 1.5.1). Record/Select are per-channel; Set Marker/Return to Zero
+    # are single global transport buttons, distinct from the already-wired
+    # Previous/Next Marker and Rewind.
+    unconfirmed_channel_controls=("Record", "Select"),
+    unconfirmed_global_controls=("Set Marker", "Return to Zero"),
 )
 
 # @spec MIDI-PROFILE-003
@@ -361,6 +383,10 @@ NANOKONTROL2_PROFILE = build_profile(
     has_scene_button=False,
     controls=NANOKONTROL2_CONTROLS,
     setup_hint="Hold SET MARKER + CYCLE while powering on for CC mode",
+    # Per `MAP-PROFILE-003`: the nanoKONTROL2's unmapped set is Record 1-8 and
+    # Set Marker only - no Select buttons, no Return to Zero control.
+    unconfirmed_channel_controls=("Record",),
+    unconfirmed_global_controls=("Set Marker",),
 )
 
 OPINIONATED_MAP_STUDIO: dict[_Key, _MapEntry] = STUDIO_PROFILE.opinionated_map

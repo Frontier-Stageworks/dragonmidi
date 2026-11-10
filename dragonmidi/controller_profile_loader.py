@@ -136,6 +136,13 @@ def _validate_top_level_fields(raw: dict, path: Path) -> None:
     if setup_hint is not None and not isinstance(setup_hint, str):
         raise ControlsConfigError(f"{path}: 'setup_hint' must be a string or omitted")
 
+    for field_name in ("unconfirmed_channel_controls", "unconfirmed_global_controls"):
+        value = raw.get(field_name)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ControlsConfigError(f"{path}: '{field_name}' must be a list of strings or omitted")
+
 
 def _parse_profile_file(path: Path) -> ControllerProfile:
     """@spec PROFILE-LOAD-002, PROFILE-LOAD-008, PROFILE-LOAD-009, PROFILE-LOAD-010"""
@@ -157,6 +164,8 @@ def _parse_profile_file(path: Path) -> ControllerProfile:
         has_scene_button=raw["has_scene_button"],
         controls=controls,
         setup_hint=raw.get("setup_hint"),
+        unconfirmed_channel_controls=tuple(raw.get("unconfirmed_channel_controls") or ()),
+        unconfirmed_global_controls=tuple(raw.get("unconfirmed_global_controls") or ()),
     )
 
 

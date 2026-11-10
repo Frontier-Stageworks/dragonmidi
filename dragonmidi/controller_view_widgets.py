@@ -14,7 +14,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
-from .control_descriptor import ControlDescriptor, build_control_descriptors
+from .control_descriptor import _UNCONFIRMED_CHANNEL_TAG, _UNCONFIRMED_GLOBAL_TAG, ControlDescriptor, build_control_descriptors
 from .control_grouping import ControlGroup, build_control_groups
 from .inspector_registry import has_editor
 from .mapping import (
@@ -31,6 +31,8 @@ from .mapping_view_model import (
     ACTIVE_GROUP_COLOR,
     GROUP_LETTERS,
     INACTIVE_GROUP_COLOR,
+    JOG_WHEEL_ARC_ROW_KEY,
+    JOG_WHEEL_ROW_KEY,
     build_configuration_rows,
     build_fader_rows,
     group_axis_picker_states,
@@ -54,6 +56,12 @@ _INACTIVE_GROUP_BUTTON_STYLE = f"background-color: #e5e5e5; color: {INACTIVE_GRO
 
 _SUMMARY_SEPARATOR = "    "
 _NO_SETTINGS_TEXT = "No additional settings for this control."
+# Phase 1.5.1: a physically-present control with no confirmed MIDI identity
+# (`_UNCONFIRMED_CHANNEL_TAG`/`_UNCONFIRMED_GLOBAL_TAG`) is never "Unassigned"
+# (which implies a real, assignable control simply hasn't been configured
+# yet) - it's not configurable at all, by construction, until its MIDI
+# identity is confirmed.
+_UNCONFIRMED_ASSIGNMENT_TEXT = "Not available - MIDI identity not yet confirmed"
 _PLACEHOLDER_TEXT = "Select a control to edit its settings."
 _SEARCH_PLACEHOLDER = "Search controls..."
 _NO_MATCHES_TEXT = "No matching controls."
@@ -220,6 +228,45 @@ class ControllerView(QWidget):
         layout.addWidget(self._inspector_container, 1)
 
         self._rebuild_rows()
+
+    def show_waiting(self, message: str) -> None:
+        """Clears the control hierarchy entirely and shows `message` in its
+        place, instead of silently leaving the *previously* active
+        controller's full tree on screen (@spec UI-CTRLVIEW-011) - found from
+        a real screenshot: selecting "Intech Grid" before a physical chain
+        has settled left the Controller View showing the prior nanoKONTROL
+        Studio tree (Fader/Knob/Mute/Solo), which looked like Grid's own
+        hardware inventory rather than stale, pre-switch state. Caller's
+        responsibility, not this method's: `app.py`'s `_on_profile_changed`
+        calls this only for the Grid selection, never for a static
+        (Korg/YAML) profile, whose shape is a fixed, known fact independent
+        of whether its physical device is actually connected
+        (`docs/llds/intech-grid.md`'s own "Grid is architecturally unlike
+        every existing Controller Profile" framing) - a static profile keeps
+        showing its tree immediately, connected or not, same as always.
+        `self._engine`'s own profile is untouched; the next real `rebuild()`
+        (from `_install_active_controller()`, once Grid settles or a
+        different profile is chosen) fully replaces this placeholder."""
+        self._tree.blockSignals(True)
+        self._tree.clear()
+        self._item_by_key = {}
+        self._group_items = []
+        self._no_matches_item = None
+        waiting_item = QTreeWidgetItem([message])
+        waiting_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        waiting_item.setData(0, _ITEM_KIND_ROLE, "empty_state")
+        self._tree.addTopLevelItem(waiting_item)
+        self._tree.blockSignals(False)
+
+        self._search_edit.blockSignals(True)
+        self._search_edit.clear()
+        self._search_edit.blockSignals(False)
+        self._expanded_group_ids_before_filter = None
+
+        self._descriptors = []
+        self._descriptor_by_key = {}
+        self._selected_key = None
+        self._show_inspector_placeholder()
 
     def rebuild(self) -> None:
         """Rebuilds the control hierarchy from the engine's current profile
@@ -528,6 +575,18 @@ class ControllerView(QWidget):
         descriptor with no matching `RowView` at all) covers a control with a
         `control_names` label but no `opinionated_map` entry yet - e.g. a
         VSN1 button, per `control_descriptor.py`'s three-source union."""
+        if descriptor.key[0].startswith((f"{_UNCONFIRMED_CHANNEL_TAG}_", f"{_UNCONFIRMED_GLOBAL_TAG}_")):
+            return _UNCONFIRMED_ASSIGNMENT_TEXT
+        if descriptor.key == JOG_WHEEL_ROW_KEY:
+            # One physical jog wheel, two independent outputs fired from the same
+            # MIDI event (`MappingEngine.process()`'s OSC step and
+            # `process_keystroke()`'s Arc Motion Control keystroke) - shown
+            # together since Phase 1.5.1 collapsed the Arc row out of its own
+            # descriptor (`control_descriptor.py`).
+            osc_row = configuration_rows.get(JOG_WHEEL_ROW_KEY)
+            arc_row = configuration_rows.get(JOG_WHEEL_ARC_ROW_KEY)
+            if osc_row is not None and arc_row is not None:
+                return f"{osc_row.target}  ·  {arc_row.target}"
         profile = self._engine.profile
         active_group = self._engine.active_group
         if descriptor.control_type == "fader":

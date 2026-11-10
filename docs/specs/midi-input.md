@@ -25,6 +25,7 @@ Traces to `docs/llds/midi-input.md`.
 - [x] **PROFILE-LOAD-009**: While the active Controller Profile's `setup_hint` field is present and non-empty, the system shall make that text available to the Status UI for display (`UI-PROFILE-003`, see `docs/specs/app-ui.md`); while it is absent or empty, no hint text shall be made available.
 - [x] **PROFILE-LOAD-010**: The system shall fail schema validation (`PROFILE-LOAD-005`) for a config file missing a required top-level field, a field of the wrong type (`name`/`match_substring` not a string; `has_native_mode`/`has_jog_wheel`/`has_scene_button` not a boolean; a CC number not an integer), or a `default_channel` value outside the 1–16 range.
 - [x] **PROFILE-LOAD-011**: The system shall make available to the Status UI a count of config files that failed to load in the most recent discovery scan (`PROFILE-LOAD-005`), together with each failed file's name or path, for display (`UI-PROFILE-004`, see `docs/specs/app-ui.md`).
+- [x] **PROFILE-LOAD-012** (Phase 1.5.1): A config file's top-level `unconfirmed_channel_controls`/`unconfirmed_global_controls` fields, when present, shall each be a list of strings — a file where either is present but not a list of strings shall fail schema validation (`PROFILE-LOAD-005`). When absent, both default to an empty tuple on the resulting `ControllerProfile` (`MAP-CONFIG-009`, see `docs/specs/static-mapping.md`).
 
 ## Device Discovery and Connection
 

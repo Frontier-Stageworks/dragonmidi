@@ -41,7 +41,7 @@ def test_studio_has_eight_channel_groups_in_order() -> None:
 
 
 # @spec UI-CTRLGROUP-001
-def test_channel_1_contains_fader_knob_mute_solo() -> None:
+def test_channel_1_contains_fader_knob_mute_solo_record_and_select() -> None:
     engine = MappingEngine(profile=STUDIO_PROFILE)
     groups = build_control_groups(_descriptors(engine), engine.profile)
     channel_1 = next(g for g in groups if g.label == "Channel 1")
@@ -50,11 +50,16 @@ def test_channel_1_contains_fader_knob_mute_solo() -> None:
     mute_key = next(k for k, f in STUDIO_PROFILE.mute_to_fader.items() if f == fader_key)
     solo_key = STUDIO_PROFILE.websocket_keys.solos[0]
     member_keys = {c.key for c in channel_1.controls}
+    member_labels = {c.label for c in channel_1.controls}
     assert fader_key in member_keys
     assert knob_key in member_keys
     assert mute_key in member_keys
     assert solo_key in member_keys
-    assert len(channel_1.controls) == 4
+    # Record/Select (Phase 1.5.1): physically present but MIDI-identity
+    # unconfirmed, so they have no real key to assert - the label is enough.
+    assert "Record" in member_labels
+    assert "Select" in member_labels
+    assert len(channel_1.controls) == 6
 
 
 # @spec UI-CTRLGROUP-002

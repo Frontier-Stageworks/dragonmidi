@@ -28,3 +28,11 @@ controls:
     previous_track: 58
     next_track: 59
   jog_wheel: 110
+
+# Physically present per manual inspection (Phase 1.5.1), but with no confirmed
+# CC/note number for either - see docs/specs/static-mapping.md's MAP-CONFIG-009
+# and MAP-BANK-006/MAP-PROFILE-003 ("various CCs... not mapped by default").
+# Record/Select are per-channel (one label per Bank); Set Marker/Return to Zero
+# are single global transport buttons.
+unconfirmed_channel_controls: ["Record", "Select"]
+unconfirmed_global_controls: ["Set Marker", "Return to Zero"]

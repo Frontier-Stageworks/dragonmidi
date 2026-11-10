@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .control_descriptor import _UNCONFIRMED_CHANNEL_TAG
+
 if TYPE_CHECKING:
     from .active_controller import ActiveController
     from .control_descriptor import ControlDescriptor
@@ -72,6 +74,12 @@ def _bank_index_for(key: "_Key", active_controller: "ActiveController") -> int |
         return ws_keys.solos.index(key) + 1
     kind, number = key
     if kind in _PBF4_CHANNEL_TAGS and isinstance(number, int) and 1 <= number <= active_controller.bank_count:
+        return number
+    # A physically-present, MIDI-identity-unconfirmed per-channel control
+    # (Phase 1.5.1, `control_descriptor.py`'s `_UNCONFIRMED_CHANNEL_TAG`) still
+    # belongs to its own Channel group, even though it has no real MIDI key to
+    # resolve via `bank_fader_key()` above.
+    if kind.startswith(_UNCONFIRMED_CHANNEL_TAG) and isinstance(number, int) and 1 <= number <= active_controller.bank_count:
         return number
     return None
 

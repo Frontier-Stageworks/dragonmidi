@@ -44,6 +44,15 @@ class ControllerProfile:
     fader_to_knob: Mapping[Any, Any] = None  # type: ignore[assignment]
     control_names: Mapping[Any, str] = None  # type: ignore[assignment]
     bank_fader_keys: tuple[Any, ...] = ()  # ordered, index 0 = Bank 1 (@spec MAP-STORE-001)
+    # Physically-present controls with no confirmed MIDI identity (Phase 1.5.1,
+    # @spec MAP-CONFIG-009): displayed so they're never missing from the
+    # Controller View, but never wired to a key/action - "represent the
+    # limitation explicitly rather than wire a guessed message" (per
+    # docs/llds/app-ui.md's Phase 1.5.1 audit). `unconfirmed_channel_controls`
+    # gets one synthetic descriptor per Bank per label (e.g. a per-channel
+    # Select button); `unconfirmed_global_controls` gets exactly one.
+    unconfirmed_channel_controls: tuple[str, ...] = ()
+    unconfirmed_global_controls: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Frozen dataclass - can't assign fields directly; enforce empty-dict
@@ -82,6 +91,8 @@ class ControllerProfile:
     def bank_fader_key(self, key: Any) -> Any:
         """Given a Knob/Mute key, return its bank's Fader key by positional index
         (Bank N = index N-1 in each of faders/knobs/mutes), not CC arithmetic -
-        `None` if `key` is not a bank member for this profile.
+        `None` if `key` is not a bank member for this profile. Deliberately never
+        consults Record/Select (`MAP-BANK-006`): those stay unmapped regardless
+        of bank state, by design - see `unconfirmed_channel_controls`.
         """
         return self.knob_to_fader.get(key) or self.mute_to_fader.get(key)

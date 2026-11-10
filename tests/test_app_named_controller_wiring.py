@@ -408,6 +408,109 @@ def test_save_load_buttons_disabled_while_grid_selected_but_not_yet_settled(wind
     assert window._load_button.isEnabled() is False
 
 
+# --- Controller View must not show a stale tree while Grid hasn't settled (@spec UI-CTRLVIEW-011) ---
+
+
+def test_selecting_intech_grid_before_it_settles_shows_no_tree(window) -> None:
+    """Regression guard for a real screenshot: selecting "Intech Grid" while
+    no physical chain has settled yet previously left the Controller View
+    silently showing whatever static Korg profile was active before -
+    Fader/Knob/Mute/Solo for nanoKONTROL Studio - which looked like Grid's
+    own hardware inventory instead of stale pre-switch state."""
+    tree = window._controller_view._tree
+    assert tree.topLevelItemCount() > 0  # the default profile's tree, present at launch
+
+    grid_index = next(i for i, c in enumerate(window._controller_choices) if c.name == "Intech Grid")
+    window._profile_combo.setCurrentIndex(grid_index)
+
+    assert tree.topLevelItemCount() == 1  # just the waiting placeholder
+    assert "Waiting" in tree.topLevelItem(0).text(0)
+    assert window._controller_view._descriptors == []
+
+
+def test_intech_grid_shows_its_real_tree_once_settled(window) -> None:
+    """The placeholder is replaced, not merely hidden, once a real
+    `GridRuntimeController` installs via the normal settle path."""
+    grid_index = next(i for i, c in enumerate(window._controller_choices) if c.name == "Intech Grid")
+    window._profile_combo.setCurrentIndex(grid_index)
+
+    controller = _grid_ready_controller(_pbf4(0))
+    window._resolve_and_install_grid_controller(controller)
+
+    tree = window._controller_view._tree
+    labels = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
+    assert labels == ["Channel 1", "Channel 2", "Channel 3", "Channel 4"]
+
+
+# --- "Intech Grid modules changed - refresh?" prompt (@spec GRID-APP-006) ---
+
+
+def test_stale_grid_topology_prompts_once_and_ok_refreshes(window, monkeypatch) -> None:
+    """A structural change (module added/removed/reordered) already marks
+    the controller STALE on its own (`GridLifecycle.poll()`, unchanged by
+    this feature) - the prompt only decides what happens next: OK forces
+    the same fresh discovery/settle cycle a dropdown reselect performs."""
+    controller = _grid_ready_controller(_pbf4(0))
+    window._resolve_and_install_grid_controller(controller)
+    window._grid_coordinator.grid_active = True
+    controller.mark_stale()
+    window._grid_coordinator.lifecycle._status = GridStatus.STALE
+    window._grid_coordinator.poll = lambda: None  # simulate STALE without the real poll() racing our setup
+
+    calls = []
+
+    def fake_question(*_args, **_kwargs):
+        calls.append(1)
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(appmod.QMessageBox, "question", fake_question)
+
+    window._on_tick()
+
+    assert calls == [1]
+    assert window._grid_coordinator.status == GridStatus.WAITING  # _refresh_grid_connection() re-ran discovery
+    assert window._controller_view._tree.topLevelItemCount() == 1  # the waiting placeholder, not a stale tree
+
+
+def test_stale_grid_topology_cancel_leaves_it_stale_and_does_not_reprompt(window, monkeypatch) -> None:
+    controller = _grid_ready_controller(_pbf4(0))
+    window._resolve_and_install_grid_controller(controller)
+    window._grid_coordinator.grid_active = True
+    controller.mark_stale()
+    window._grid_coordinator.lifecycle._status = GridStatus.STALE
+    window._grid_coordinator.poll = lambda: None
+
+    calls = []
+
+    def fake_question(*_args, **_kwargs):
+        calls.append(1)
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(appmod.QMessageBox, "question", fake_question)
+
+    window._on_tick()
+    window._on_tick()
+    window._on_tick()
+
+    assert calls == [1]  # shown exactly once despite staying STALE across three ticks
+    assert window._grid_coordinator.status == GridStatus.STALE  # unchanged - same as before this feature existed
+
+
+def test_selecting_a_korg_profile_shows_its_default_tree_immediately(window) -> None:
+    """Unlike Grid, a static (Korg/YAML) Controller Profile's shape is a fixed,
+    known fact independent of whether its physical device is actually
+    connected - its tree must appear right away, with every control
+    unassigned, not wait for a "device connected" signal that may never
+    come for a profile the user is just browsing/configuring in advance."""
+    nk2_index = next(i for i, c in enumerate(window._controller_choices) if c.name == "nanoKONTROL2")
+    window._profile_combo.setCurrentIndex(nk2_index)
+
+    tree = window._controller_view._tree
+    labels = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
+    assert labels == [f"Channel {i}" for i in range(1, 9)] + ["Transport & Global"]
+    assert len(window._controller_view._descriptors) > 0
+
+
 # --- Status text override (UI-NAMEDCTRL-001) ---
 
 

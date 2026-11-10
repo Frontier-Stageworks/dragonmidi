@@ -79,12 +79,15 @@ def test_studio_tree_has_eight_channel_groups_plus_global() -> None:
 
 
 # @spec UI-CTRLTREE-001
-def test_channel_1_group_has_four_children_fader_knob_mute_solo() -> None:
+def test_channel_1_group_has_six_children_fader_knob_mute_solo_record_select() -> None:
+    """Phase 1.5.1: Record and Select are real, confirmed-present per-channel
+    controls (just with unconfirmed MIDI identity), so they count as children
+    of Channel 1 too, alongside the original Fader/Knob/Mute/Solo."""
     _qapp()
     engine = MappingEngine(profile=STUDIO_PROFILE)
     view = ControllerView(engine, AxisDiscovery())
     channel_1 = _group_item(view, "Channel 1")
-    assert channel_1.childCount() == 4
+    assert channel_1.childCount() == 6
 
 
 # @spec UI-CTRLTREE-001
@@ -273,6 +276,39 @@ def test_selecting_a_transport_button_row_shows_no_editor() -> None:
     assert any("<b>Type:</b> Button" in text for text in texts)
     assert any("<b>Assignment:</b>" in text for text in texts)
     assert any("<b>MIDI source:</b>" in text for text in texts)
+
+
+# @spec UI-CTRLVIEW-007 (Phase 1.5.1)
+def test_selecting_a_jog_wheel_row_shows_both_of_its_outputs() -> None:
+    """One physical jog wheel, two independent outputs - the collapsed
+    descriptor's Assignment row must still surface both, not just the OSC
+    one `configuration_rows.get(descriptor.key)` would give on its own."""
+    _qapp()
+    engine = MappingEngine(profile=STUDIO_PROFILE)
+    view = ControllerView(engine, AxisDiscovery())
+    jog_key = next(d.key for d in view._descriptors if d.label == "Jog Wheel")
+    _select(view, jog_key)
+    texts = [view._inspector_layout.itemAt(i).widget().text() for i in range(view._inspector_layout.count())]
+    assignment = next(text for text in texts if "<b>Assignment:</b>" in text)
+    assert "stepForward" in assignment
+    assert "Option+Shift+Right" in assignment
+
+
+# @spec UI-CTRLVIEW-007 (Phase 1.5.1)
+def test_selecting_record_shows_unconfirmed_midi_identity_not_unassigned() -> None:
+    """Record is confirmed physically present but has no confirmed CC/note
+    number - its Assignment text must say so explicitly, not "Unassigned"
+    (which would wrongly imply it's a real, assignable control nobody has
+    configured yet)."""
+    _qapp()
+    engine = MappingEngine(profile=STUDIO_PROFILE)
+    view = ControllerView(engine, AxisDiscovery())
+    record_key = next(d.key for d in view._descriptors if d.label == "Record")
+    _select(view, record_key)
+    texts = [view._inspector_layout.itemAt(i).widget().text() for i in range(view._inspector_layout.count())]
+    assignment = next(text for text in texts if "<b>Assignment:</b>" in text)
+    assert "MIDI identity not yet confirmed" in assignment
+    assert not any("<b>MIDI source:</b>" in text for text in texts)  # none to show
 
 
 # @spec UI-CTRLVIEW-010, MAP-BTNACT-002, MAP-BTNACT-003

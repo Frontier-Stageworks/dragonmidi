@@ -86,24 +86,37 @@ def test_knob_mute_solo_labels_and_types() -> None:
 
 
 # @spec UI-CTRLDESC-002
-def test_jog_wheel_rows_classify_as_jog() -> None:
+def test_jog_wheel_row_classifies_as_jog() -> None:
     """Phase 1.2: the jog wheel's own physical shape, distinct from an
     ordinary button, even though it gets no Inspector editor yet."""
     engine = MappingEngine(profile=STUDIO_PROFILE)
     descriptors = {d.key: d for d in _descriptors(engine)}
     assert descriptors[JOG_WHEEL_ROW_KEY].control_type == "jog"
-    assert descriptors[JOG_WHEEL_ARC_ROW_KEY].control_type == "jog"
 
 
 # @spec UI-CTRLDESC-002
-def test_jog_wheel_rows_are_present_though_absent_from_control_names() -> None:
+def test_jog_wheel_arc_row_is_collapsed_into_the_same_jog_wheel_descriptor() -> None:
+    """Phase 1.5.1: there is only one physical jog wheel.
+    `JOG_WHEEL_ARC_ROW_KEY` is `process_keystroke()`'s independent *second
+    output* for the same incoming MIDI event `JOG_WHEEL_ROW_KEY`'s OSC output
+    already represents (docs/llds/app-ui.md's Phase 1.5.1 audit) - not a
+    second physical control. It must never get its own descriptor, even
+    though `build_configuration_rows()` (Table View's own, unaffected
+    row-builder) still produces a `RowView` for it."""
+    engine = MappingEngine(profile=STUDIO_PROFILE)
+    descriptor_keys = {d.key for d in _descriptors(engine)}
+    assert JOG_WHEEL_ARC_ROW_KEY not in descriptor_keys
+    assert any(row.key == JOG_WHEEL_ARC_ROW_KEY for row in build_configuration_rows(engine))
+
+
+# @spec UI-CTRLDESC-002
+def test_jog_wheel_row_is_present_though_absent_from_control_names() -> None:
     """Regression guard: a first draft built descriptors from
     `profile.control_names` directly, which silently omits the jog wheel
     entirely for a Korg profile."""
     engine = MappingEngine(profile=STUDIO_PROFILE)
     descriptor_keys = {d.key for d in _descriptors(engine)}
     assert JOG_WHEEL_ROW_KEY in descriptor_keys
-    assert JOG_WHEEL_ARC_ROW_KEY in descriptor_keys
     assert ("cc", 110) not in STUDIO_PROFILE.control_names  # the jog wheel's raw key
 
 

@@ -32,3 +32,8 @@ controls:
     next_marker: 62
     previous_track: 58
     next_track: 59
+
+# Per docs/specs/static-mapping.md's MAP-PROFILE-003: the nanoKONTROL2's
+# unmapped set is Record 1-8 and Set Marker only - no Select, no Return to Zero.
+unconfirmed_channel_controls: ["Record"]
+unconfirmed_global_controls: ["Set Marker"]

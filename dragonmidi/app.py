@@ -29,8 +29,8 @@ from .controller_profile_loader import load_controller_profiles
 from .controller_selection import ControllerChoice, GridChoice, StaticChoice, build_controller_choices
 from .controller_view_widgets import ControllerView, GroupSelectorRow
 from .events import MidiEvent
-from .grid_controller import GridRuntimeController
-from .grid_lifecycle import GridAppCoordinator, GridLifecycle
+from .grid_controller import GRID_PROFILE_NAME, GridRuntimeController
+from .grid_lifecycle import GridAppCoordinator, GridLifecycle, GridStatus
 from .grid_transport import SerialGridTransport
 from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
 from .mapping import MappingEngine
@@ -205,6 +205,12 @@ class DragonMidiWindow(QMainWindow):
         # ever set while the active Named Controller's is_builtin is True -
         # see _on_mapping_changed().
         self._dirty: bool = False
+        # @spec GRID-APP-006: whether the "Intech Grid modules changed -
+        # refresh?" prompt has already been shown for the *current* STALE
+        # episode - prevents re-showing it every tick while STALE persists
+        # unanswered. Reset to False by `_refresh_grid_connection()`, so a
+        # later structural change gets its own fresh prompt.
+        self._grid_stale_alert_shown: bool = False
         # @spec MAP-STORE-002: load the default profile's persisted (Bank, Group)
         # axis table before the Mapping View is built, so the initial render
         # (UI-MAP-011) already reflects it.
@@ -321,28 +327,39 @@ class DragonMidiWindow(QMainWindow):
         self._profile_combo.setCurrentIndex(default_index)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         controller_row.addWidget(self._profile_combo)
-        # @spec UI-SAVELOAD-001: answers "which configuration am I working
-        # with" - shown identically for static and Grid active controllers.
-        self._active_config_label = QLabel()
-        controller_row.addWidget(self._active_config_label)
+        controller_row.addStretch(1)
+        self._group_selector = GroupSelectorRow(self._mapping)  # @spec UI-GROUPSEL-001
+        controller_row.addWidget(self._group_selector)
+        header.addLayout(controller_row)
+
+        # Its own row below the Controller dropdown (2026-11-10, user's explicit
+        # choice) - previously crowded onto `controller_row` itself.
+        save_load_row = QHBoxLayout()
         # @spec UI-SAVELOAD-002: text-labeled, never icon-only; enabled
         # whenever a Named Controller is active - always true after
         # __init__ (the default profile's wrapper is created there) and
         # briefly false only while Grid is selected but not yet settled.
         self._save_button = QPushButton("Save")
         self._save_button.clicked.connect(self._on_save_clicked)
-        controller_row.addWidget(self._save_button)
+        save_load_row.addWidget(self._save_button)
         self._save_as_button = QPushButton("Save As…")
         self._save_as_button.clicked.connect(self._on_save_as_clicked)
-        controller_row.addWidget(self._save_as_button)
+        save_load_row.addWidget(self._save_as_button)
         self._load_button = QPushButton("Load…")
         self._load_button.clicked.connect(self._on_load_clicked)
-        controller_row.addWidget(self._load_button)
+        save_load_row.addWidget(self._load_button)
+        save_load_row.addStretch(1)
+        header.addLayout(save_load_row)
+
+        # Below the Save/Save As/Load row (2026-11-10, user's explicit choice).
+        # @spec UI-SAVELOAD-001: answers "which configuration am I working
+        # with" - shown identically for static and Grid active controllers.
+        config_row = QHBoxLayout()
+        self._active_config_label = QLabel()
+        config_row.addWidget(self._active_config_label)
+        config_row.addStretch(1)
         self._update_active_configuration_label()
-        controller_row.addStretch(1)
-        self._group_selector = GroupSelectorRow(self._mapping)  # @spec UI-GROUPSEL-001
-        controller_row.addWidget(self._group_selector)
-        header.addLayout(controller_row)
+        header.addLayout(config_row)
 
         load_failure_text = config_load_failure_label(len(self._load_result.failures))
         self._settings_dialog = SettingsDialog(self._config, load_failure_text)
@@ -442,13 +459,7 @@ class DragonMidiWindow(QMainWindow):
 
         choice = self._controller_choices[index]
         if isinstance(choice, GridChoice):
-            self._grid_coordinator.select_grid()
-            self._midi.disconnect()
-            # Disabled until a Named Controller resolves for whatever settles
-            # (`_resolve_and_install_grid_controller`) - the previously-active
-            # controller's Named Controller is still referenced by
-            # `self._active_named_controller` at this point.
-            self._set_save_load_buttons_enabled(False)
+            self._refresh_grid_connection()
             return
         self._grid_coordinator.select_static()  # no-op unless Grid was active; closes its CDC connection if so
         # @spec NAMEDCTRL-STATIC-001: a transparent 1:1 wrapper - id == profile.name
@@ -456,6 +467,31 @@ class DragonMidiWindow(QMainWindow):
         # Korg installation already used before this feature existed.
         named_controller = ensure_static_named_controller(_named_controllers_dir(), choice.profile.name)
         self._install_active_controller(choice.profile, named_controller)
+
+    def _refresh_grid_connection(self) -> None:
+        """Forces a fresh Grid discovery/settle cycle - the one supported way
+        to pick up a structural change (`docs/llds/intech-grid.md § Topology
+        Change Policy`). Shared by the dropdown's "Intech Grid" selection and
+        the "Intech Grid modules changed - refresh?" prompt's OK button
+        (`_prompt_grid_topology_changed`, @spec GRID-APP-006) - both need the
+        exact same reset, and the dropdown's own `currentIndexChanged` does
+        not re-fire for reselecting an already-selected entry, so the prompt
+        needs its own direct call to this, not a simulated dropdown click.
+        """
+        self._grid_coordinator.select_grid()
+        self._midi.disconnect()
+        # Disabled until a Named Controller resolves for whatever settles
+        # (`_resolve_and_install_grid_controller`) - the previously-active
+        # controller's Named Controller is still referenced by
+        # `self._active_named_controller` at this point.
+        self._set_save_load_buttons_enabled(False)
+        # @spec UI-CTRLVIEW-011: the Controller View must not keep showing
+        # the previously-active controller's tree while Grid hasn't settled
+        # yet - `self._mapping`'s profile itself is untouched here (unlike a
+        # static-profile switch, Grid installs nothing until
+        # `_resolve_and_install_grid_controller` runs later).
+        self._controller_view.show_waiting(f"Waiting for {GRID_PROFILE_NAME} to connect…")
+        self._grid_stale_alert_shown = False
 
     def _active_controller_choice(self) -> ControllerChoice:
         """The `ControllerChoice` matching `self._active_named_controller`'s
@@ -573,6 +609,32 @@ class DragonMidiWindow(QMainWindow):
             chosen = create_grid_named_controller(_named_controllers_dir(), ready_controller.module_shape, chosen)
         self._install_active_controller(ready_controller, chosen)
 
+    def _prompt_grid_topology_changed(self) -> None:
+        """@spec GRID-APP-006: shown exactly once per STALE episode (the
+        caller in `_on_tick()` sets `_grid_stale_alert_shown` first). A
+        structural change (a module added, removed, reordered, or an active
+        page change - `docs/llds/intech-grid.md § Topology Change Policy`'s
+        `§3`) already marked the controller `STALE` and stopped it resolving
+        Grid MIDI before this is ever called; this only asks whether to
+        immediately re-run discovery (OK) or leave it stopped, requiring a
+        later manual dropdown reselect, exactly as before this feature
+        existed (Cancel). The timer is stopped around the blocking dialog,
+        matching `_resolve_and_install_grid_controller`'s own Ambiguous-dialog
+        precedent - the same reasoning applies verbatim here."""
+        self._ui_timer.stop()
+        try:
+            choice = QMessageBox.question(
+                self,
+                "Intech Grid changed",
+                "The connected Intech Grid modules changed. Refresh now?",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Ok,
+            )
+        finally:
+            self._ui_timer.start(UI_TICK_MS)
+        if choice == QMessageBox.StandardButton.Ok:
+            self._refresh_grid_connection()
+
     def _on_save_clicked(self) -> None:
         """@spec UI-SAVELOAD-003, UI-SAVELOAD-004: a builtin always routes
         into Save As instead of writing to its protected file; a non-builtin
@@ -678,6 +740,12 @@ class DragonMidiWindow(QMainWindow):
         ready_controller = self._grid_coordinator.poll()
         if ready_controller is not None:
             self._resolve_and_install_grid_controller(ready_controller)
+        elif self._grid_coordinator.grid_active and self._grid_coordinator.status is GridStatus.STALE and not self._grid_stale_alert_shown:
+            # @spec GRID-APP-006: fires once per STALE episode - set True
+            # immediately (before the blocking dialog below), not after, so
+            # a `_on_tick()` re-entrancy during `exec()` can't show it twice.
+            self._grid_stale_alert_shown = True
+            self._prompt_grid_topology_changed()
 
         self._mapping_view.refresh()
         self._configuration_dialog.refresh()

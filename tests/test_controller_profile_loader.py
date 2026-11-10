@@ -184,6 +184,59 @@ def test_setup_hint_absent_is_none(bundled_dir: Path, user_dir: Path) -> None:
     assert result.profiles[0].setup_hint is None
 
 
+# --- MAP-CONFIG-009 / PROFILE-LOAD: unconfirmed_channel_controls/unconfirmed_global_controls (Phase 1.5.1) ---
+
+
+def test_unconfirmed_controls_present_are_carried_through(bundled_dir: Path, user_dir: Path) -> None:
+    """Regression guard for a real bug: the bundled nanoKONTROL Studio/2
+    YAML files (not `mapping.py`'s Python constants) are what the running
+    app actually loads its default profiles from - adding
+    `unconfirmed_channel_controls`/`unconfirmed_global_controls` only to the
+    Python constants left the real app showing no Record/Select/Set
+    Marker/Return to Zero at all."""
+    user_dir.mkdir(parents=True)
+    _write_profile(
+        bundled_dir,
+        "a.yaml",
+        name="A",
+        match_substring="a",
+        unconfirmed_channel_controls=["Record", "Select"],
+        unconfirmed_global_controls=["Set Marker", "Return to Zero"],
+    )
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=user_dir)
+    assert result.profiles[0].unconfirmed_channel_controls == ("Record", "Select")
+    assert result.profiles[0].unconfirmed_global_controls == ("Set Marker", "Return to Zero")
+
+
+def test_unconfirmed_controls_absent_default_to_empty(bundled_dir: Path, user_dir: Path) -> None:
+    user_dir.mkdir(parents=True)
+    _write_profile(bundled_dir, "a.yaml", name="A", match_substring="a")
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=user_dir)
+    assert result.profiles[0].unconfirmed_channel_controls == ()
+    assert result.profiles[0].unconfirmed_global_controls == ()
+
+
+def test_unconfirmed_controls_must_be_a_list_of_strings(bundled_dir: Path, user_dir: Path) -> None:
+    user_dir.mkdir(parents=True)
+    _write_profile(bundled_dir, "a.yaml", name="A", match_substring="a", unconfirmed_channel_controls="Record")
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=user_dir)
+    assert result.profiles == ()
+    assert len(result.failures) == 1
+
+
+def test_bundled_studio_and_nanokontrol2_yaml_declare_their_unconfirmed_controls(tmp_path: Path) -> None:
+    """The two shipped config files, loaded for real (not a synthetic
+    fixture) - confirms the fix actually reaches the running app's default
+    profile list, not just this test module's own fixtures."""
+    bundled_dir = Path(__file__).resolve().parent.parent / "dragonmidi" / "controllers"
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=tmp_path / "controllers")
+    by_name = {p.name: p for p in result.profiles}
+    assert by_name["nanoKONTROL Studio"].unconfirmed_channel_controls == ("Record", "Select")
+    assert by_name["nanoKONTROL Studio"].unconfirmed_global_controls == ("Set Marker", "Return to Zero")
+    assert by_name["nanoKONTROL2"].unconfirmed_channel_controls == ("Record",)
+    assert by_name["nanoKONTROL2"].unconfirmed_global_controls == ("Set Marker",)
+
+
 # --- PROFILE-LOAD-010: general field validation ---
 
 

@@ -40,7 +40,25 @@ from typing import TYPE_CHECKING
 
 from .mapping_view_model import JOG_WHEEL_ARC_ROW_KEY, JOG_WHEEL_ROW_KEY, KNOB_ROW_KEY, MUTE_ROW_KEY, SOLO_ROW_KEY
 
-_COLLAPSED_SUMMARY_ROW_KEYS = {KNOB_ROW_KEY, MUTE_ROW_KEY, SOLO_ROW_KEY}
+# JOG_WHEEL_ARC_ROW_KEY is deliberately included here too (Phase 1.5.1): it is
+# not a second physical control, just `process_keystroke()`'s independent
+# second output for the one physical jog wheel `JOG_WHEEL_ROW_KEY` already
+# represents (`MappingEngine.process()`/`process_keystroke()` both run against
+# the very same incoming MIDI event - docs/llds/app-ui.md's Phase 1.5.1 audit).
+# Table View's Configuration Dialog still shows both as separate rows
+# (`mapping_view_model.build_configuration_rows()`, unchanged) - that dense
+# table is a different presentation with its own, already-correct precedent
+# for one-row-per-output; only the Controller View's *physical inventory* is
+# wrong if it shows two jog wheels.
+_COLLAPSED_SUMMARY_ROW_KEYS = {KNOB_ROW_KEY, MUTE_ROW_KEY, SOLO_ROW_KEY, JOG_WHEEL_ARC_ROW_KEY}
+
+# Synthetic key tags for a physically-present, MIDI-identity-unconfirmed
+# control (Phase 1.5.1, @spec UI-CTRLDESC-005) - never a real MIDI type, never
+# looked up in any `opinionated_map`/`address_table`, so these can never be
+# interactive or light up on MIDI activity. See `ControllerProfile`'s
+# `unconfirmed_channel_controls`/`unconfirmed_global_controls` docstring.
+_UNCONFIRMED_CHANNEL_TAG = "unconfirmed_channel"
+_UNCONFIRMED_GLOBAL_TAG = "unconfirmed_global"
 
 # Physical hardware identity only - never the control's assigned function
 # (Phase 1.2). A jog wheel/VSN1 jog is its own physical shape, distinct from
@@ -114,4 +132,23 @@ def build_control_descriptors(
         else:
             control_type = "button"
         descriptors.append(ControlDescriptor(key=key, label=label, control_type=control_type))
+
+    # Physically-present, MIDI-identity-unconfirmed controls (Phase 1.5.1) -
+    # appended last, after every real-MIDI-backed control, so they read as an
+    # explicit addendum rather than being interleaved with confirmed controls.
+    # `getattr` defaults keep this a no-op for any `ActiveController` that
+    # doesn't declare either field (Grid's `GridRuntimeController`, and any
+    # third-party-config-loaded profile - see `build_profile()`'s docstring).
+    for label_index, label in enumerate(getattr(active_controller, "unconfirmed_global_controls", ())):
+        key = (f"{_UNCONFIRMED_GLOBAL_TAG}_{label_index}", None)
+        descriptors.append(ControlDescriptor(key=key, label=label, control_type="button"))
+    bank_count = getattr(active_controller, "bank_count", 0)
+    for label_index, label in enumerate(getattr(active_controller, "unconfirmed_channel_controls", ())):
+        for bank in range(1, bank_count + 1):
+            # `label_index` keeps keys unique across multiple unconfirmed labels
+            # (e.g. two different unconfirmed per-channel buttons); `bank` keeps
+            # them unique across channels - `_bank_index_for` (control_grouping.py)
+            # matches on the tag prefix, independent of `label_index`.
+            key = (f"{_UNCONFIRMED_CHANNEL_TAG}_{label_index}", bank)
+            descriptors.append(ControlDescriptor(key=key, label=label, control_type="button"))
     return descriptors
