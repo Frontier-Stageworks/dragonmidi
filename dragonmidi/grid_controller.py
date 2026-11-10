@@ -231,11 +231,7 @@ def build_grid_controller(topology: GridTopology) -> "Ready | UnsupportedTopolog
                 logical_key = (tag, index)
                 if tag == "grid_vsn1_button":
                     local_index = ((index - 1) % _VSN1_BUTTONS_PER_MODULE) + 1
-                    display = (
-                        f"VSN1 Button {local_index}"
-                        if recognized_vsn1_count == 1
-                        else f"VSN1 #{vsn1_ordinal} Button {local_index}"
-                    )
+                    display = f"VSN1 Button {local_index}" if recognized_vsn1_count == 1 else f"VSN1 #{vsn1_ordinal} Button {local_index}"
                 else:
                     display = {
                         "grid_fader": f"Grid Fader {index}",

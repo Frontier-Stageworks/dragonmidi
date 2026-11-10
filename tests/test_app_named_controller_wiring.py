@@ -51,12 +51,30 @@ def _pbf4(x: int) -> GridModule:
     return GridModule(heartbeat_type=0, hwcfg=64, module_type=ModuleType.PBF4, x=x, y=0, rotation=0)
 
 
+class _FakePynputBackend:
+    """Stands in for `dragonmidi.keystroke_output.PynputBackend` - the real
+    one eagerly imports and constructs `pynput.keyboard.Controller()`, which
+    refuses to initialize on a headless Linux CI runner with no X11 display
+    at all, regardless of Qt's own `QT_QPA_PLATFORM=offscreen` setting (a
+    separate concern). This module's tests only exercise `app.py`'s
+    composition/wiring, never actual keystroke output, so a real backend is
+    never needed - matching `test_keystroke_output.py`'s own
+    `FakeKeystrokeBackend` convention (@spec KEY-BACKEND-001)."""
+
+    def press(self, key: str) -> None:
+        pass
+
+    def release(self, key: str) -> None:
+        pass
+
+
 @pytest.fixture
 def window(tmp_path, monkeypatch):
     _qapp()
     monkeypatch.setattr(appmod, "_user_controllers_dir", lambda: tmp_path / "controllers")
     monkeypatch.setattr(appmod, "_configurations_dir", lambda: tmp_path / "configurations")
     monkeypatch.setattr(appmod, "_named_controllers_dir", lambda: tmp_path / "named_controllers")
+    monkeypatch.setattr(appmod, "PynputBackend", _FakePynputBackend)
     win = appmod.DragonMidiWindow()
     yield win
 
