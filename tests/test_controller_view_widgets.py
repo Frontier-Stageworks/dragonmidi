@@ -187,23 +187,30 @@ def test_selecting_a_fader_row_shows_an_editable_axis_field() -> None:
     assert view._selected_key == fader_key
 
 
-# @spec UI-CTRLVIEW-002
+# @spec UI-CTRLVIEW-002, UI-CTRLSEARCH-001
 def test_solo_summary_shows_its_real_bank_specific_target_not_unassigned() -> None:
     """Regression guard: Solo is never actually "unassigned" - its target
     is a fixed, bank-specific formula (MAP-WS-002), not a configurable
     assignment. An earlier draft fell through to the generic "no matching
     RowView -> Unassigned" fallback for it, which is simply wrong, not just
     uninformative - caught re-reading against the Phase 1.1 spec's own
-    worked example ("Solo - Select AX1"), not by a failing test."""
+    worked example ("Solo - Select AX1"), not by a failing test.
+
+    As of Phase 1.4 the computed summary is tracked as hidden search data
+    (`_SEARCH_TEXT_ROLE`), not the leaf's visible text (`UI-CTRLVIEW-002`)."""
     _qapp()
     engine = MappingEngine(profile=STUDIO_PROFILE)
     view = ControllerView(engine, AxisDiscovery())
     view.refresh()
     solo_key_bank_1 = STUDIO_PROFILE.websocket_keys.solos[0]
     solo_key_bank_3 = STUDIO_PROFILE.websocket_keys.solos[2]
-    assert "select-AX1" in view._item_by_key[solo_key_bank_1].text(0)
-    assert "select-AX3" in view._item_by_key[solo_key_bank_3].text(0)
-    assert "Unassigned" not in view._item_by_key[solo_key_bank_1].text(0)
+    search_text_1 = view._item_by_key[solo_key_bank_1].data(0, cvw._SEARCH_TEXT_ROLE)
+    search_text_3 = view._item_by_key[solo_key_bank_3].data(0, cvw._SEARCH_TEXT_ROLE)
+    assert "select-AX1" in search_text_1
+    assert "select-AX3" in search_text_3
+    assert "Unassigned" not in search_text_1
+    # The visible leaf text is label-only - the summary must not appear there.
+    assert view._item_by_key[solo_key_bank_1].text(0) == "Solo"
 
 
 # @spec UI-CTRLVIEW-002
@@ -216,7 +223,7 @@ def test_solo_summary_follows_the_active_group() -> None:
     engine.step_active_group(1)  # now Group 2: bank_count(8) * (2-1) + 1 = 9
     view.refresh()
 
-    assert "select-AX9" in view._item_by_key[solo_key_bank_1].text(0)
+    assert "select-AX9" in view._item_by_key[solo_key_bank_1].data(0, cvw._SEARCH_TEXT_ROLE)
 
 
 # @spec UI-CTRLVIEW-002 (Phase 1.2)
@@ -232,8 +239,8 @@ def test_knob_and_mute_summaries_show_the_real_per_channel_action_not_shared_tex
     knob_key = next(iter(STUDIO_PROFILE.knob_to_fader))
     mute_key = next(iter(STUDIO_PROFILE.mute_to_fader))
     # Default action, no axis assigned yet to either control's channel.
-    assert "Adjust" in view._item_by_key[knob_key].text(0)
-    assert "Mute" in view._item_by_key[mute_key].text(0)
+    assert "Adjust" in view._item_by_key[knob_key].data(0, cvw._SEARCH_TEXT_ROLE)
+    assert "Mute" in view._item_by_key[mute_key].data(0, cvw._SEARCH_TEXT_ROLE)
 
 
 # @spec UI-CTRLVIEW-010 (Phase 1.2)
@@ -250,10 +257,11 @@ def test_selecting_a_knob_row_shows_an_action_editor() -> None:
     assert view._inspector_kind == "rotary"
 
 
-# @spec UI-CTRLVIEW-007
+# @spec UI-CTRLVIEW-007 (revised Phase 1.4)
 def test_selecting_a_transport_button_row_shows_no_editor() -> None:
     """A non-bank-derived button (Play, a plain transport key) has no
-    configurable action - it keeps the pre-Phase-1.2 placeholder."""
+    configurable action - the Inspector shows its identity/assignment as
+    labeled rows instead of an editor or a single generic message."""
     _qapp()
     engine = MappingEngine(profile=STUDIO_PROFILE)
     view = ControllerView(engine, AxisDiscovery())
@@ -261,7 +269,10 @@ def test_selecting_a_transport_button_row_shows_no_editor() -> None:
     _select(view, play_key)
     assert view._inspector_field is None
     texts = [view._inspector_layout.itemAt(i).widget().text() for i in range(view._inspector_layout.count())]
-    assert any("No settings available" in text for text in texts)
+    assert any("No additional settings" in text for text in texts)
+    assert any("<b>Type:</b> Button" in text for text in texts)
+    assert any("<b>Assignment:</b>" in text for text in texts)
+    assert any("<b>MIDI source:</b>" in text for text in texts)
 
 
 # @spec UI-CTRLVIEW-010, MAP-BTNACT-002, MAP-BTNACT-003
@@ -484,7 +495,10 @@ def test_empty_state_disappears_once_a_match_exists_again() -> None:
 
 
 # @spec UI-CTRLSEARCH-001
-def test_search_matches_assignment_summary_text() -> None:
+def test_search_matches_assignment_summary_text_even_though_it_is_not_displayed() -> None:
+    """Phase 1.4: the tree no longer shows an assignment summary at all, but
+    search must still be able to find a control by it (`UI-CTRLSEARCH-001`'s
+    hidden-search-text rule, `UI-CTRLVIEW-002`)."""
     _qapp()
     engine = MappingEngine(profile=STUDIO_PROFILE)
     axes = AxisDiscovery()
@@ -494,10 +508,30 @@ def test_search_matches_assignment_summary_text() -> None:
     engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
     view.refresh()
 
+    # The leaf's visible text never shows "PAN" - only its label.
+    assert view._item_by_key[fader_key].text(0) == "Fader Channel 3"
+
     view._search_edit.setText("PAN")
 
     visible_groups = [item for item in view._group_items if not item.isHidden()]
     assert [g.text(0) for g in visible_groups] == ["Channel 3"]
+
+
+# @spec UI-CTRLVIEW-002 (Phase 1.4)
+def test_tree_leaves_display_only_their_label_never_an_assignment_summary() -> None:
+    """The left panel's job is purely physical-control navigation as of
+    Phase 1.4 - no leaf's visible text should ever contain the assignment
+    summary that used to be appended to it."""
+    _qapp()
+    engine = MappingEngine(profile=STUDIO_PROFILE)
+    view = ControllerView(engine, AxisDiscovery())
+    fader_key = STUDIO_PROFILE.bank_fader_keys[0]
+    engine.set_axis_target(fader_key, 1, "PAN", 0.0, 100.0)
+    view.refresh()
+
+    assert view._item_by_key[fader_key].text(0) == "Fader Channel 1"
+    assert "PAN" not in view._item_by_key[fader_key].text(0)
+    assert cvw._SUMMARY_SEPARATOR not in view._item_by_key[fader_key].text(0)
 
 
 # --- Group selector (unchanged from Phase 8, re-verified) ---

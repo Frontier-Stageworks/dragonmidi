@@ -53,10 +53,17 @@ _ACTIVE_GROUP_BUTTON_STYLE = f"background-color: {ACTIVE_GROUP_COLOR}; color: wh
 _INACTIVE_GROUP_BUTTON_STYLE = f"background-color: #e5e5e5; color: {INACTIVE_GROUP_COLOR}; font-weight: 600;"
 
 _SUMMARY_SEPARATOR = "    "
-_NO_SETTINGS_TEXT = "No settings available for this control yet."
+_NO_SETTINGS_TEXT = "No additional settings for this control."
 _PLACEHOLDER_TEXT = "Select a control to edit its settings."
 _SEARCH_PLACEHOLDER = "Search controls..."
 _NO_MATCHES_TEXT = "No matching controls."
+
+_CONTROL_TYPE_LABELS = {
+    "fader": "Fader",
+    "rotary": "Rotary",
+    "button": "Button",
+    "jog": "Jog control",
+}
 
 # `QTreeWidgetItem.data(0, _ITEM_KIND_ROLE)` is `"group"` or `"control"` -
 # how `_on_item_clicked`/`_on_current_item_changed` tell a channel/group
@@ -65,6 +72,20 @@ _NO_MATCHES_TEXT = "No matching controls."
 # top-level item with no parent, but isn't a group either).
 _ITEM_KIND_ROLE = Qt.ItemDataRole.UserRole
 _ITEM_PAYLOAD_ROLE = Qt.ItemDataRole.UserRole + 1
+# A leaf's hidden search text (label + live summary, Phase 1.4) - the tree's
+# *visible* text is label-only (`UI-CTRLVIEW-002`); search still matches
+# against this role's value (`UI-CTRLSEARCH-001`), not `item.text(0)`.
+_SEARCH_TEXT_ROLE = Qt.ItemDataRole.UserRole + 2
+
+
+def _info_row(label: str, value: str) -> QLabel:
+    """A labeled, read-only Inspector row (Phase 1.4) - `"<b>Label:</b> value"`
+    rich text, one `QLabel` per row rather than a two-column layout, matching
+    this Inspector's existing one-widget-per-line composition."""
+    widget = QLabel(f"<b>{label}:</b> {value}")
+    widget.setTextFormat(Qt.TextFormat.RichText)
+    widget.setWordWrap(True)
+    return widget
 
 
 class _ControlTreeWidget(QTreeWidget):
@@ -363,7 +384,11 @@ class ControllerView(QWidget):
             if child.data(0, _ITEM_KIND_ROLE) == "group":
                 child_visible = self._filter_item(child, query, inherited_match=own_match)
             else:
-                child_visible = own_match or query in child.text(0).lower()
+                # @spec UI-CTRLSEARCH-001 (revised Phase 1.4): match against the
+                # leaf's hidden search text (label + summary), not its
+                # label-only visible text.
+                search_text = child.data(0, _SEARCH_TEXT_ROLE) or child.text(0)
+                child_visible = own_match or query in search_text.lower()
                 child.setHidden(not child_visible)
             child_match_found = child_match_found or child_visible
         visible = own_match or child_match_found
@@ -422,12 +447,21 @@ class ControllerView(QWidget):
         profile = self._engine.profile
         bank_derived_button = descriptor.control_type == "button" and descriptor.key in profile.mute_to_fader
         if not has_editor(descriptor.control_type, bank_derived=bank_derived_button):
+            # @spec UI-CTRLVIEW-007 (revised Phase 1.4): labeled, readable rows
+            # instead of one generic "no settings available" message - this is
+            # the single place a fixed/non-editable control's identity and
+            # current assignment are shown, now that the control tree no
+            # longer renders a summary inline.
             self._inspector_field = None
             self._inspector_kind = None
             configuration_rows = {row.key: row for row in build_configuration_rows(self._engine)}
             self._inspector_layout.addWidget(QLabel(descriptor.label))
+            self._inspector_layout.addWidget(_info_row("Type", _CONTROL_TYPE_LABELS.get(descriptor.control_type, descriptor.control_type.title())))
+            self._inspector_layout.addWidget(_info_row("Assignment", self._summary_text(descriptor, configuration_rows)))
+            row = configuration_rows.get(descriptor.key)
+            if row is not None and row.midi_source:
+                self._inspector_layout.addWidget(_info_row("MIDI source", row.midi_source))
             self._inspector_layout.addWidget(QLabel(_NO_SETTINGS_TEXT))
-            self._inspector_layout.addWidget(QLabel(self._summary_text(descriptor, configuration_rows)))
             return
 
         if descriptor.control_type == "fader":
@@ -550,8 +584,13 @@ class ControllerView(QWidget):
         """
         configuration_rows = {row.key: row for row in build_configuration_rows(self._engine)}
         for descriptor in self._descriptors:
-            text = f"{descriptor.label}{_SUMMARY_SEPARATOR}{self._summary_text(descriptor, configuration_rows)}"
+            # @spec UI-CTRLVIEW-002 (revised Phase 1.4): the leaf's *visible*
+            # text is the label only, set once at build time and never
+            # touched here; the label+summary string that used to be the
+            # visible text is now tracked only as hidden search data
+            # (`UI-CTRLSEARCH-001`), recomputed every tick exactly as before.
+            search_text = f"{descriptor.label}{_SUMMARY_SEPARATOR}{self._summary_text(descriptor, configuration_rows)}"
             item = self._item_by_key.get(descriptor.key)
-            if item is not None and item.text(0) != text:
-                item.setText(0, text)
+            if item is not None:
+                item.setData(0, _SEARCH_TEXT_ROLE, search_text)
         self._sync_inspector_field()

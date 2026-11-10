@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -35,15 +36,18 @@ from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
 from .mapping import MappingEngine
 from .mapping_widgets import ConfigurationDialog, MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
-from .named_controller_dialog import NamedControllerAmbiguousDialog
+from .named_controller_dialog import ConfigurationLoadDialog, NamedControllerAmbiguousDialog
 from .named_controller_registry import (
     Activated,
     Ambiguous,
     NamedController,
+    configurations_for_grid,
+    configurations_for_profile,
     create_grid_named_controller,
+    create_static_named_controller,
     ensure_static_named_controller,
-    rename_named_controller,
     resolve_grid_named_controller,
+    shape_matches_connected_hardware,
 )
 from .osc_io import AxisDiscovery, OscClient, OscListener
 from .preset_store import load_bank_actions, load_group_axis_targets, save_group_axis_targets
@@ -197,6 +201,10 @@ class DragonMidiWindow(QMainWindow):
         # Preset Store key below is byte-identical to the bare name used
         # before this feature existed.
         self._active_named_controller: NamedController = ensure_static_named_controller(_named_controllers_dir(), self._default_profile.name)
+        # @spec UI-SAVELOAD-011, UI-SAVELOAD-012: unsaved-changes state, only
+        # ever set while the active Named Controller's is_builtin is True -
+        # see _on_mapping_changed().
+        self._dirty: bool = False
         # @spec MAP-STORE-002: load the default profile's persisted (Bank, Group)
         # axis table before the Mapping View is built, so the initial render
         # (UI-MAP-011) already reflects it.
@@ -257,7 +265,7 @@ class DragonMidiWindow(QMainWindow):
         self._controller_view = ControllerView(
             self._mapping,
             self._axis_discovery,
-            on_group_axis_changed=self._save_group_axis_targets,
+            on_group_axis_changed=self._on_mapping_changed,
         )
         self._body_stack.addWidget(self._controller_view)  # page 0, default (@spec UI-SHELL-005)
         self._body_stack.addWidget(self._build_table_view_page())  # page 1
@@ -313,16 +321,24 @@ class DragonMidiWindow(QMainWindow):
         self._profile_combo.setCurrentIndex(default_index)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         controller_row.addWidget(self._profile_combo)
-        # @spec UI-NAMEDCTRL-004: renames the active Named Controller's
-        # display_name only - enabled whenever one is active, which is
-        # always true after __init__ (the default profile's wrapper is
-        # created there) and briefly false only while Grid is selected but
-        # not yet settled.
-        self._rename_button = QPushButton("✎")
-        self._rename_button.setToolTip("Rename this controller configuration")
-        self._rename_button.setMaximumWidth(28)
-        self._rename_button.clicked.connect(self._on_rename_named_controller_clicked)
-        controller_row.addWidget(self._rename_button)
+        # @spec UI-SAVELOAD-001: answers "which configuration am I working
+        # with" - shown identically for static and Grid active controllers.
+        self._active_config_label = QLabel()
+        controller_row.addWidget(self._active_config_label)
+        # @spec UI-SAVELOAD-002: text-labeled, never icon-only; enabled
+        # whenever a Named Controller is active - always true after
+        # __init__ (the default profile's wrapper is created there) and
+        # briefly false only while Grid is selected but not yet settled.
+        self._save_button = QPushButton("Save")
+        self._save_button.clicked.connect(self._on_save_clicked)
+        controller_row.addWidget(self._save_button)
+        self._save_as_button = QPushButton("Save As…")
+        self._save_as_button.clicked.connect(self._on_save_as_clicked)
+        controller_row.addWidget(self._save_as_button)
+        self._load_button = QPushButton("Load…")
+        self._load_button.clicked.connect(self._on_load_clicked)
+        controller_row.addWidget(self._load_button)
+        self._update_active_configuration_label()
         controller_row.addStretch(1)
         self._group_selector = GroupSelectorRow(self._mapping)  # @spec UI-GROUPSEL-001
         controller_row.addWidget(self._group_selector)
@@ -350,7 +366,7 @@ class DragonMidiWindow(QMainWindow):
             self._mapping,
             self._axis_discovery,
             on_rescan=self._osc_listener.rescan,
-            on_group_axis_changed=self._save_group_axis_targets,
+            on_group_axis_changed=self._on_mapping_changed,
         )
         layout.addWidget(self._mapping_view, 1)
 
@@ -415,6 +431,15 @@ class DragonMidiWindow(QMainWindow):
         later, from `_on_tick()`, the instant its `GridRuntimeController`
         settles (@spec GRID-APP-002, GRID-APP-003).
         """
+        # @spec UI-SAVELOAD-010: runs before either branch below - selecting
+        # Grid while a builtin is dirty must be gated exactly like selecting
+        # a different Korg profile would be.
+        if not self._confirm_discard_if_dirty():
+            self._profile_combo.blockSignals(True)
+            self._profile_combo.setCurrentIndex(self._controller_choices.index(self._active_controller_choice()))
+            self._profile_combo.blockSignals(False)
+            return
+
         choice = self._controller_choices[index]
         if isinstance(choice, GridChoice):
             self._grid_coordinator.select_grid()
@@ -422,9 +447,8 @@ class DragonMidiWindow(QMainWindow):
             # Disabled until a Named Controller resolves for whatever settles
             # (`_resolve_and_install_grid_controller`) - the previously-active
             # controller's Named Controller is still referenced by
-            # `self._active_named_controller` at this point, and renaming it
-            # now would silently rename the wrong (outgoing) configuration.
-            self._rename_button.setEnabled(False)
+            # `self._active_named_controller` at this point.
+            self._set_save_load_buttons_enabled(False)
             return
         self._grid_coordinator.select_static()  # no-op unless Grid was active; closes its CDC connection if so
         # @spec NAMEDCTRL-STATIC-001: a transparent 1:1 wrapper - id == profile.name
@@ -432,6 +456,46 @@ class DragonMidiWindow(QMainWindow):
         # Korg installation already used before this feature existed.
         named_controller = ensure_static_named_controller(_named_controllers_dir(), choice.profile.name)
         self._install_active_controller(choice.profile, named_controller)
+
+    def _active_controller_choice(self) -> ControllerChoice:
+        """The `ControllerChoice` matching `self._active_named_controller`'s
+        hardware - used to restore the dropdown's prior selection when a
+        discard confirmation is declined (@spec UI-SAVELOAD-010)."""
+        if self._active_named_controller.kind == "grid":
+            return next(c for c in self._controller_choices if isinstance(c, GridChoice))
+        profile_name = self._active_named_controller.profile_name
+        return next(c for c in self._controller_choices if isinstance(c, StaticChoice) and c.profile.name == profile_name)
+
+    def _set_save_load_buttons_enabled(self, enabled: bool) -> None:
+        self._save_button.setEnabled(enabled)
+        self._save_as_button.setEnabled(enabled)
+        self._load_button.setEnabled(enabled)
+
+    def _update_active_configuration_label(self) -> None:
+        """@spec UI-SAVELOAD-001"""
+        text = f"Configuration: {self._active_named_controller.display_name}"
+        if self._active_named_controller.is_builtin:
+            text += " (built-in)"
+        if self._dirty:
+            text += " •"
+        self._active_config_label.setText(text)
+
+    def _confirm_discard_if_dirty(self) -> bool:
+        """@spec UI-SAVELOAD-010. Only ever has anything to confirm while a
+        builtin is active - a non-builtin's edits are already persisted
+        (`_on_mapping_changed`, @spec UI-SAVELOAD-011), so this is a no-op in
+        the overwhelmingly common case. Returns `True` to proceed, `False`
+        if the user cancelled."""
+        if not self._dirty:
+            return True
+        choice = QMessageBox.question(
+            self,
+            "Discard unsaved changes?",
+            "You have unsaved changes to the built-in default configuration. Discard them?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return choice == QMessageBox.StandardButton.Discard
 
     def _install_active_controller(self, controller: ActiveController, named_controller: NamedController) -> None:
         """Shared by the static-profile switch path above and the Grid-ready
@@ -444,7 +508,11 @@ class DragonMidiWindow(QMainWindow):
         UI-PROFILE-003, UI-CFGDLG-010, GRID-MAP-002).
         """
         self._active_named_controller = named_controller
-        self._rename_button.setEnabled(True)
+        self._set_save_load_buttons_enabled(True)
+        # @spec UI-SAVELOAD-012: a freshly-installed controller's state comes
+        # straight from the Preset Store below - nothing is pending yet.
+        self._dirty = False
+        self._update_active_configuration_label()
         self._mapping.set_profile(controller)
         # @spec MAP-STORE-002, MAP-STORE-007: loaded synchronously, in the same
         # call as set_profile() above and before the Mapping View rebuilds - no
@@ -505,14 +573,72 @@ class DragonMidiWindow(QMainWindow):
             chosen = create_grid_named_controller(_named_controllers_dir(), ready_controller.module_shape, chosen)
         self._install_active_controller(ready_controller, chosen)
 
-    def _on_rename_named_controller_clicked(self) -> None:
-        """@spec UI-NAMEDCTRL-004: renames only `display_name` - no
-        reconnect, no Mapping View rebuild, no Preset Store write. Enabled
-        only while a Named Controller is active (see `_build_header`)."""
-        name, ok = QInputDialog.getText(self, "Rename controller", "Name:", text=self._active_named_controller.display_name)
+    def _on_save_clicked(self) -> None:
+        """@spec UI-SAVELOAD-003, UI-SAVELOAD-004: a builtin always routes
+        into Save As instead of writing to its protected file; a non-builtin
+        re-dumps its already-live-written state (idempotent - there is
+        nothing actually stale to fix, but a Save button that visibly does
+        nothing when clicked would read as broken)."""
+        if self._active_named_controller.is_builtin:
+            self._on_save_as_clicked()
+            return
+        self._write_configuration(self._active_named_controller)
+        self._dirty = False
+        self._update_active_configuration_label()
+
+    def _on_save_as_clicked(self) -> None:
+        """@spec UI-SAVELOAD-005: creates a sibling under the same hardware
+        key as the currently active configuration, seeds it with the
+        engine's *current* in-memory state directly (not via
+        `_install_active_controller`, which would instead reload from disk
+        and discard that state), and switches to it. No reconnect, no
+        Mapping View/Controller View rebuild - the mapping the user was just
+        looking at is exactly what the new configuration now holds."""
+        default_name = f"{self._active_named_controller.display_name} copy"
+        name, ok = QInputDialog.getText(self, "Save As", "Name:", text=default_name)
         if not ok or not name.strip():
             return
-        self._active_named_controller = rename_named_controller(_named_controllers_dir(), self._active_named_controller.id, name.strip())
+        if self._active_named_controller.kind == "static":
+            created = create_static_named_controller(_named_controllers_dir(), self._active_named_controller.profile_name, name.strip())
+        else:
+            module_shape = getattr(self._mapping.profile, "module_shape", self._active_named_controller.module_shape)
+            created = create_grid_named_controller(_named_controllers_dir(), module_shape, name.strip())
+        self._write_configuration(created)
+        self._active_named_controller = created
+        self._dirty = False
+        self._update_active_configuration_label()
+
+    def _on_load_clicked(self) -> None:
+        """@spec UI-SAVELOAD-006 through UI-SAVELOAD-009."""
+        if not self._confirm_discard_if_dirty():
+            return
+        if self._active_named_controller.kind == "static":
+            candidates = configurations_for_profile(_named_controllers_dir(), self._active_named_controller.profile_name)
+            connected_shape = None
+        else:
+            candidates = configurations_for_grid(_named_controllers_dir())
+            connected_shape = getattr(self._mapping.profile, "module_shape", None)
+        dialog = ConfigurationLoadDialog(_named_controllers_dir(), candidates, connected_shape=connected_shape)
+        dialog.exec()
+        chosen = dialog.chosen_configuration()
+        if chosen is None:
+            return
+        if chosen.kind == "grid" and not shape_matches_connected_hardware(chosen, connected_shape):
+            # Defense in depth - the dialog already disabled this selection;
+            # unreachable in the ordinary click path (@spec UI-SAVELOAD-009).
+            return
+        self._install_active_controller(self._mapping.profile, chosen)
+
+    def _write_configuration(self, named_controller: NamedController) -> None:
+        """The Preset Store write primitive - always re-dumped fresh from the
+        engine, shared by the live-write path (`_on_mapping_changed`) and
+        the explicit Save/Save As actions."""
+        save_group_axis_targets(
+            _configurations_dir(),
+            named_controller.id,
+            self._mapping.dump_group_axis_targets(),
+            self._mapping.dump_bank_control_actions(),
+        )
 
     def _on_discovery_tick(self) -> None:
         """Skips the ordinary MIDI discovery poll while Grid is selected but
@@ -522,18 +648,19 @@ class DragonMidiWindow(QMainWindow):
         if self._grid_coordinator.should_poll_midi_discovery():
             self._midi.poll_discovery()
 
-    def _save_group_axis_targets(self) -> None:
-        """@spec MAP-STORE-004, MAP-BTNACT-005: saves both the (Bank, Group) axis
-        table and the per-Bank Rotary/Button action overrides together, always
-        re-dumped fresh from the engine - the one callback both `ControllerView`'s
-        axis-target edits and its Phase 1.2 Rotary/Button action edits invoke
-        (`on_group_axis_changed`), so neither piece is ever written stale."""
-        save_group_axis_targets(
-            _configurations_dir(),
-            self._active_named_controller.id,
-            self._mapping.dump_group_axis_targets(),
-            self._mapping.dump_bank_control_actions(),
-        )
+    def _on_mapping_changed(self) -> None:
+        """The one callback both `ControllerView`'s axis-target/Rotary/Button
+        action edits and Table View's equivalent edits invoke
+        (`on_group_axis_changed`). WHILE the active Named Controller is a
+        builtin, an edit is held in memory only - never written to the
+        builtin's protected file (@spec UI-SAVELOAD-012); otherwise it is
+        written immediately, exactly as before Phase 1.4 (@spec
+        UI-SAVELOAD-011, MAP-STORE-004, MAP-BTNACT-005)."""
+        if self._active_named_controller.is_builtin:
+            self._dirty = True
+            self._update_active_configuration_label()
+            return
+        self._write_configuration(self._active_named_controller)
 
     def _on_config_applied(self, config: EndpointConfig, listen_port_changed: bool) -> None:
         self._osc_client.configure(config.host, config.dragonframe_port)

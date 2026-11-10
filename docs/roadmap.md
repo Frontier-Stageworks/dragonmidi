@@ -231,7 +231,7 @@ A small operational/teach panel can surface selected axis, current mode, recent 
 
 ### P2 — Profiles, duplication, and presets
 
-- [ ] Add named DragonMIDI mapping profiles and editable layer names.
+- [ ] Add named DragonMIDI mapping profiles and editable layer names. (Partial, Phase 1.4: named, saveable/loadable mapping configurations shipped — `NamedController` (`docs/llds/named-controller.md`) generalized from "exactly one per hardware" to many per hardware key, with explicit Save/Save As/Load UI (`docs/llds/app-ui.md § Save/Save As/Load UI`), `is_builtin` protection for the nanoKONTROL2/nanoKONTROL Studio/Intech Grid defaults, and unsaved-change tracking scoped to an active builtin. Editable A–E layer *names* (as opposed to mapping configuration names) are not part of this; Groups are still only ever labeled A–E.)
 - [ ] Provide default presets listed above, using verified device capability descriptors.
 - [ ] Implement copy/paste/duplicate mapping settings across selected controls/axes.
 - [ ] Distinguish mapping copies from motor calibration copies in wording and behavior.

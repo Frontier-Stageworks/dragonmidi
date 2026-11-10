@@ -36,7 +36,7 @@ _LEGACY_GRID_PRESET_NAME = "Intech Grid"
 
 @dataclass(frozen=True)
 class NamedController:
-    """@spec NAMEDCTRL-DATA-001"""
+    """@spec NAMEDCTRL-DATA-001, NAMEDCTRL-DATA-005"""
 
     id: str
     display_name: str
@@ -44,6 +44,7 @@ class NamedController:
     profile_name: str | None = None
     module_shape: tuple[str, ...] | None = None
     created_at: str = ""
+    is_builtin: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ def _parse_named_controller(raw: object) -> NamedController | None:
             return None
         module_shape = tuple(raw_shape)
     created_at = raw.get("created_at")
+    is_builtin = raw.get("is_builtin")
     return NamedController(
         id=id_,
         display_name=display_name,
@@ -89,6 +91,7 @@ def _parse_named_controller(raw: object) -> NamedController | None:
         profile_name=profile_name,
         module_shape=module_shape,
         created_at=created_at if isinstance(created_at, str) else "",
+        is_builtin=is_builtin is True,
     )
 
 
@@ -129,6 +132,7 @@ def save_named_controller(named_controllers_dir: Path, controller: NamedControll
         "profile_name": controller.profile_name,
         "module_shape": list(controller.module_shape) if controller.module_shape is not None else None,
         "created_at": controller.created_at,
+        "is_builtin": controller.is_builtin,
     }
     try:
         named_controllers_dir.mkdir(parents=True, exist_ok=True)
@@ -144,10 +148,27 @@ def ensure_static_named_controller(named_controllers_dir: Path, profile_name: st
     used before this feature existed, so existing Korg configuration files
     load unchanged.
 
-    @spec NAMEDCTRL-STATIC-001, NAMEDCTRL-STATIC-002
+    @spec NAMEDCTRL-STATIC-001, NAMEDCTRL-STATIC-002, NAMEDCTRL-STATIC-003, NAMEDCTRL-DATA-005
     """
     for existing in load_registry(named_controllers_dir):
         if existing.id == profile_name and existing.kind == "static":
+            if not existing.is_builtin:
+                # Self-healing upgrade: a record in this exact shape (`id ==
+                # profile_name`, `kind == "static"`) can only ever have been
+                # created by this function - whether under a pre-Phase-1.4
+                # installation (no `is_builtin` key at all, parsed as False)
+                # or a 1.4+ one - so it is always "the builtin," retroactively
+                # corrected here rather than left permanently unprotected.
+                existing = NamedController(
+                    id=existing.id,
+                    display_name=existing.display_name,
+                    kind=existing.kind,
+                    profile_name=existing.profile_name,
+                    module_shape=existing.module_shape,
+                    created_at=existing.created_at,
+                    is_builtin=True,
+                )
+                save_named_controller(named_controllers_dir, existing)
             return existing
     controller = NamedController(
         id=profile_name,
@@ -155,9 +176,86 @@ def ensure_static_named_controller(named_controllers_dir: Path, profile_name: st
         kind="static",
         profile_name=profile_name,
         created_at=_now_iso(),
+        is_builtin=True,
     )
     save_named_controller(named_controllers_dir, controller)
     return controller
+
+
+_STATIC_SIBLING_ID_PATTERN = re.compile(r"^(.*) \((\d+)\)$")
+
+
+def configurations_for_profile(named_controllers_dir: Path, profile_name: str) -> tuple[NamedController, ...]:
+    """Every saved configuration for a static Controller Profile - the builtin
+    (`id == profile_name`) plus any Save-As-created siblings - ordered by
+    `created_at`. Safe to load any of them against the active hardware
+    unconditionally: a Korg profile's physical shape cannot vary, so there is
+    nothing to validate the way `shape_matches_connected_hardware` validates
+    a Grid candidate.
+
+    @spec NAMEDCTRL-CONFIG-002
+    """
+    matches = [c for c in load_registry(named_controllers_dir) if c.kind == "static" and c.profile_name == profile_name]
+    return tuple(sorted(matches, key=lambda c: c.created_at))
+
+
+def configurations_for_grid(named_controllers_dir: Path) -> tuple[NamedController, ...]:
+    """Every saved Grid configuration, regardless of `module_shape` -
+    deliberately unfiltered, so a saved rig stays listable (and renamable)
+    even while a different shape is connected. The caller is responsible for
+    checking `shape_matches_connected_hardware` per candidate.
+
+    @spec NAMEDCTRL-CONFIG-003
+    """
+    return tuple(sorted((c for c in load_registry(named_controllers_dir) if c.kind == "grid"), key=lambda c: c.created_at))
+
+
+def next_static_sibling_id(named_controllers_dir: Path, profile_name: str) -> str:
+    """`f"{profile_name} ({n})"`, `n` one greater than the highest existing
+    numeric suffix among ids matching that exact pattern for this
+    `profile_name` - the same "scan the highest suffix, not a count"
+    robustness `next_grid_id` already uses, so a deleted sibling's number is
+    never silently reissued. Starts at `2`, since the bare `profile_name`
+    (the builtin) is implicitly "configuration 1."
+
+    @spec NAMEDCTRL-CONFIG-005
+    """
+    highest = 1
+    for controller in load_registry(named_controllers_dir):
+        if controller.kind != "static":
+            continue
+        match = _STATIC_SIBLING_ID_PATTERN.match(controller.id)
+        if match and match.group(1) == profile_name:
+            highest = max(highest, int(match.group(2)))
+    return f"{profile_name} ({highest + 1})"
+
+
+def create_static_named_controller(named_controllers_dir: Path, profile_name: str, display_name: str) -> NamedController:
+    """Korg's Save-As counterpart to `create_grid_named_controller` - a fresh
+    sibling `id` under the same `profile_name`, `is_builtin = False`.
+
+    @spec NAMEDCTRL-CONFIG-004
+    """
+    created = NamedController(
+        id=next_static_sibling_id(named_controllers_dir, profile_name),
+        display_name=display_name,
+        kind="static",
+        profile_name=profile_name,
+        created_at=_now_iso(),
+        is_builtin=False,
+    )
+    save_named_controller(named_controllers_dir, created)
+    return created
+
+
+def shape_matches_connected_hardware(controller: NamedController, connected_shape: tuple[str, ...]) -> bool:
+    """A pure equality check, given its own name so the Load dialog and the
+    Load handler's defensive re-check (`docs/llds/app-ui.md § Save/Save As/
+    Load UI`) never drift into two slightly different comparisons.
+
+    @spec NAMEDCTRL-CONFIG-006
+    """
+    return controller.module_shape == connected_shape
 
 
 def default_display_name(module_shape: tuple[str, ...]) -> str:
@@ -223,6 +321,7 @@ def resolve_grid_named_controller(
             kind="grid",
             module_shape=module_shape,
             created_at=_now_iso(),
+            is_builtin=True,
         )
         save_named_controller(named_controllers_dir, migrated)
         return Activated(migrated)

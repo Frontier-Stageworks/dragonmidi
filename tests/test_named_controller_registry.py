@@ -18,13 +18,19 @@ import pytest
 from dragonmidi.named_controller_registry import (
     Activated,
     Ambiguous,
+    configurations_for_grid,
+    configurations_for_profile,
+    create_grid_named_controller,
+    create_static_named_controller,
     default_display_name,
     ensure_static_named_controller,
     load_registry,
     next_grid_id,
+    next_static_sibling_id,
     rename_named_controller,
     resolve_grid_named_controller,
     save_named_controller,
+    shape_matches_connected_hardware,
 )
 from dragonmidi.named_controller_registry import NamedController
 
@@ -174,3 +180,146 @@ def test_malformed_registry_file_is_skipped_not_raised(tmp_path) -> None:
 
     loaded = load_registry(tmp_path)
     assert [c.id for c in loaded] == ["grid-1"]
+
+
+# --- Named Configuration: many per hardware key (NAMEDCTRL-CONFIG-*, Phase 1.4) ---
+
+
+def test_ensure_static_named_controller_sets_is_builtin(tmp_path) -> None:
+    nc = ensure_static_named_controller(tmp_path, "nanoKONTROL2")
+    assert nc.is_builtin is True
+
+
+def test_create_static_named_controller_sets_is_builtin_false(tmp_path) -> None:
+    ensure_static_named_controller(tmp_path, "nanoKONTROL2")
+    sibling = create_static_named_controller(tmp_path, "nanoKONTROL2", "Studio Setup A")
+    assert sibling.is_builtin is False
+    assert sibling.kind == "static"
+    assert sibling.profile_name == "nanoKONTROL2"
+    assert sibling.display_name == "Studio Setup A"
+
+
+def test_configurations_for_profile_returns_only_matching_profile_name_in_created_at_order(tmp_path) -> None:
+    ensure_static_named_controller(tmp_path, "nanoKONTROL2")
+    create_static_named_controller(tmp_path, "nanoKONTROL2", "Studio Setup A")
+    ensure_static_named_controller(tmp_path, "nanoKONTROL Studio")  # different profile - excluded
+
+    results = configurations_for_profile(tmp_path, "nanoKONTROL2")
+    assert [c.display_name for c in results] == ["nanoKONTROL2", "Studio Setup A"]
+    assert all(c.profile_name == "nanoKONTROL2" for c in results)
+
+
+def test_next_static_sibling_id_starts_at_2_and_does_not_reissue_after_a_lower_deletion(tmp_path) -> None:
+    ensure_static_named_controller(tmp_path, "nanoKONTROL2")
+    assert next_static_sibling_id(tmp_path, "nanoKONTROL2") == "nanoKONTROL2 (2)"
+
+    create_static_named_controller(tmp_path, "nanoKONTROL2", "A")  # "nanoKONTROL2 (2)"
+    create_static_named_controller(tmp_path, "nanoKONTROL2", "B")  # "nanoKONTROL2 (3)"
+    sibling = create_static_named_controller(tmp_path, "nanoKONTROL2", "C")  # "nanoKONTROL2 (4)"
+    assert sibling.id == "nanoKONTROL2 (4)"
+
+    # Delete the lower-numbered "(2)" - a count-based scheme would now regenerate
+    # the already-taken "(4)"; scanning the highest surviving suffix must not.
+    (tmp_path / "nanoKONTROL2 (2).json").unlink()
+    assert next_static_sibling_id(tmp_path, "nanoKONTROL2") == "nanoKONTROL2 (5)"
+
+
+def test_create_static_named_controller_twice_produces_distinct_loadable_ids(tmp_path) -> None:
+    ensure_static_named_controller(tmp_path, "nanoKONTROL2")
+    first = create_static_named_controller(tmp_path, "nanoKONTROL2", "Setup A")
+    second = create_static_named_controller(tmp_path, "nanoKONTROL2", "Setup B")
+    assert first.id != second.id
+    ids = {c.id for c in configurations_for_profile(tmp_path, "nanoKONTROL2")}
+    assert {first.id, second.id} <= ids
+
+
+def test_configurations_for_grid_returns_every_shape_unfiltered(tmp_path) -> None:
+    configurations_dir = tmp_path / "configurations"
+    resolve_grid_named_controller(tmp_path, configurations_dir, ("PBF4",))
+    resolve_grid_named_controller(tmp_path, configurations_dir, ("PBF4", "VSN1", "PBF4"))
+
+    results = configurations_for_grid(tmp_path)
+    assert {c.module_shape for c in results} == {("PBF4",), ("PBF4", "VSN1", "PBF4")}
+
+
+def test_migrated_grid_record_is_builtin_zero_candidate_record_is_not(tmp_path) -> None:
+    configurations_dir = tmp_path / "configurations"
+    configurations_dir.mkdir(parents=True)
+    (configurations_dir / "Intech Grid.json").write_text(json.dumps({"bank_axes": {}}), encoding="utf-8")
+
+    migrated = resolve_grid_named_controller(tmp_path, configurations_dir, ("PBF4",))
+    assert isinstance(migrated, Activated)
+    assert migrated.controller.is_builtin is True
+
+    fresh_shape = resolve_grid_named_controller(tmp_path, configurations_dir, ("VSN1",))
+    assert isinstance(fresh_shape, Activated)
+    assert fresh_shape.controller.is_builtin is False
+
+
+def test_shape_matches_connected_hardware_is_exact_order_sensitive_equality() -> None:
+    nc = NamedController(id="grid-1", display_name="Rig", kind="grid", module_shape=("PBF4", "VSN1"))
+    assert shape_matches_connected_hardware(nc, ("PBF4", "VSN1")) is True
+    assert shape_matches_connected_hardware(nc, ("VSN1", "PBF4")) is False
+    assert shape_matches_connected_hardware(nc, ("PBF4",)) is False
+
+
+def test_pre_phase_1_4_registry_file_with_no_is_builtin_key_loads_as_false(tmp_path) -> None:
+    """Legacy compatibility: a `NamedController` file written before Phase
+    1.4 added `is_builtin` has no such key at all - it must still load
+    (NAMEDCTRL-DATA-003's "a stale file never blocks the rest" posture),
+    parsing as `is_builtin = False` rather than raising or guessing True."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    legacy_payload = {
+        "id": "nanoKONTROL2",
+        "display_name": "nanoKONTROL2",
+        "kind": "static",
+        "profile_name": "nanoKONTROL2",
+        "module_shape": None,
+        "created_at": "2026-07-01T00:00:00+00:00",
+    }
+    (tmp_path / "nanoKONTROL2.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    loaded = load_registry(tmp_path)
+    assert len(loaded) == 1
+    assert loaded[0].is_builtin is False
+
+
+def test_ensure_static_named_controller_self_heals_a_pre_phase_1_4_record_to_builtin(tmp_path) -> None:
+    """A record shaped `id == profile_name`, `kind == "static"` can only
+    ever have been created by `ensure_static_named_controller` itself - a
+    pre-Phase-1.4 installation's existing file (no `is_builtin` key) is
+    retroactively upgraded on next use, so an upgrading user's existing
+    default configuration gets the same protection a fresh install's does,
+    rather than staying permanently unprotected."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    legacy_payload = {
+        "id": "nanoKONTROL2",
+        "display_name": "nanoKONTROL2",
+        "kind": "static",
+        "profile_name": "nanoKONTROL2",
+        "module_shape": None,
+        "created_at": "2026-07-01T00:00:00+00:00",
+    }
+    (tmp_path / "nanoKONTROL2.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    healed = ensure_static_named_controller(tmp_path, "nanoKONTROL2")
+    assert healed.is_builtin is True
+    assert healed.display_name == "nanoKONTROL2"  # untouched otherwise
+    assert healed.created_at == "2026-07-01T00:00:00+00:00"  # untouched otherwise
+
+    reloaded = {c.id: c for c in load_registry(tmp_path)}
+    assert reloaded["nanoKONTROL2"].is_builtin is True  # persisted, not just in-memory
+    assert len(reloaded) == 1  # same file, not a new one
+
+
+def test_many_configurations_may_share_a_hardware_key_without_error(tmp_path) -> None:
+    configurations_dir = tmp_path / "configurations"
+    shape = ("PBF4", "VSN1")
+    create_grid_named_controller(tmp_path, shape, "Stewart Platform Controller")
+    create_grid_named_controller(tmp_path, shape, "Focus Puller Rig")
+    # Deliberately many saved configurations sharing one shape is not, on its
+    # own, an error - only resolve_grid_named_controller's connect-time
+    # auto-resolution treats 2+ matches as something to block on.
+    assert len(configurations_for_grid(tmp_path)) == 2
+    outcome = resolve_grid_named_controller(tmp_path, configurations_dir, shape)
+    assert isinstance(outcome, Ambiguous)
