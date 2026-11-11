@@ -88,3 +88,19 @@ def test_load_failure_text_shown_when_given() -> None:
     dialog = SettingsDialog(_config(), load_failure_text="2 controller config files failed to load")
     texts = [dialog.layout().itemAt(i).widget().text() for i in range(dialog.layout().count()) if dialog.layout().itemAt(i).widget() is not None]
     assert any("failed to load" in text for text in texts)
+
+
+# @spec MON-UI-001
+def test_monitor_button_invokes_the_injected_callback() -> None:
+    _qapp()
+    calls = []
+    dialog = SettingsDialog(_config(), load_failure_text=None, on_open_monitor=lambda: calls.append(1))
+    dialog._monitor_button.click()
+    assert calls == [1]
+
+
+# @spec MON-UI-001
+def test_monitor_button_defaults_to_a_harmless_no_op() -> None:
+    _qapp()
+    dialog = SettingsDialog(_config(), load_failure_text=None)
+    dialog._monitor_button.click()  # must not raise

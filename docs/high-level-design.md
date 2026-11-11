@@ -36,6 +36,7 @@ A single desktop app with one continuously-running pipeline:
 8. **Mapping view** — a table of every control's current MIDI source and target, editable in place, including picking a discovered axis name and its scaling range for direct axis targets. Preserved as Table View from Phase 8 onward (see Delivery Phasing), reachable from the Controller view described next.
 9. **Controller view** (Phase 8) — the default screen: a per-physical-control list (derived from the active controller via a Control Descriptor, uniform across all four supported controller families) and a contextual Inspector that edits the selected control's existing assignment, dispatched by control type through an Inspector Editor Registry. Edits here and in Table View (item 8) act on the same Mapping Engine state.
 10. **Intech Grid** — for Intech Studio Grid controllers (PBF4 + VSN1 modules), a Grid Topology Link opens Grid's USB-serial control channel to read each connected module's hardware type and X/Y position; a Grid Controller combines that topology with PBF4/VSN1 module definitions to normalize incoming raw Grid MIDI — received over the same MIDI backend/normalization as every other controller — into DragonMIDI's logical controls, using Grid's own position-derived default MIDI addressing formula in reverse. Grid-specific behavior ends at that normalization step: once an event resolves to a logical control, it flows through the same Mapping Engine/action/output pipeline a static Controller Profile's logical controls already do, not a separate direct-to-OSC path. Selected from the same Controller Profile dropdown as the nanoKONTROL profiles; its `bank_count` is determined at runtime from whatever modules are connected, rather than declared in a config file ahead of time — see the Intech Grid path, under System Design.
+11. **MIDI Input Monitor** — a passive diagnostic tap on `MIDIIN`'s output, reusing the existing MIDI connection and Grid resolution rather than opening a second one. Opened as a dialog from Settings (⚙), it lists every incoming event (source device/port, message type, channel, CC/note number, value, timestamp, and — once Intech Grid topology has settled — the owning module/control identity) without altering normal dispatch. Opening the dialog defaults **diagnostic mode** on: events still display, but are withheld from the Mapping Engine, Keystroke, and WebSocket output — nothing moves a motor or fires an action while identifying a control. Entering diagnostic mode also sends an immediate WebSocket `E-Stop`, since suppressing future messages cannot by itself halt motion Dragonframe is already executing from an earlier command. An in-dialog checkbox can switch diagnostic mode off to observe normal round-trip dispatch while the window stays open; closing the dialog always turns it back off, regardless of the checkbox's state at that moment, so normal processing resumes unconditionally.
 
 Liveness is recency-based, not connection-based: both indicators answer "was there traffic in the last N seconds," not "is a socket/port open," because UDP has no connection state and MIDI devices can go quiet between moves without being unplugged.
 
@@ -107,6 +108,7 @@ A secondary audience: contributors adding support for a new control surface by a
 - Deleting a saved configuration from the UI. Still out of scope, per `docs/llds/named-controller.md § 8` — unaffected by this phase's Save/Save As/Load additions.
 - Live hardware-mismatch recovery beyond the existing stale-and-reselect mechanism. A structural topology change mid-session still marks the active Grid controller `STALE` (`docs/llds/intech-grid.md § Topology Change Policy`) exactly as before; Named Controller matching only runs again at the next fresh settle — it does not add a second, independent live-reconciliation path.
 - USB VID/PID-based MIDI device identification. Investigated for this phase: neither of DragonMIDI's MIDI libraries exposes USB VID/PID for a MIDI endpoint on macOS or Windows without new, platform-specific code outside the existing dependency set; name-substring matching (already proven reliable for both Korg controllers) remains the sole identification mechanism, matching the same choice already made for Grid's own MIDI port (`docs/llds/intech-grid.md § Controller-Defined bank_count and MIDI-Port Discovery`).
+- MIDI Learn, automatic assignment, or any new mapping/output behavior from the MIDI Input Monitor. The Monitor is read-only with respect to the Mapping Engine — it never writes an assignment, calibrates a control, or teaches an endpoint; it only displays and, while diagnostic mode is on, suppresses existing dispatch. Distinct from the roadmap's still-open "MIDI learn/select-by-moving" backlog item (`docs/roadmap.md` P0), which remains unimplemented and out of scope here.
 
 ## Delivery Phasing
 
@@ -154,6 +156,7 @@ flowchart LR
         GRIDTOPO[Grid Topology Link\nUSB-serial, module X/Y/type]
         GRIDCTRL[Grid Controller\nmodule defs -> LogicalControl,\nraw MIDI -> logical control]
         NAMEDCTRL[Named Controller Registry\nmodule shape -> named id,\n~/Documents/DragonMIDI/named_controllers/]
+        MIDIMON[MIDI Input Monitor\n(Settings dialog: raw + resolved\nevent display, diagnostic gate)]
     end
 
     KORG -- MIDI (Native Mode) --> MIDIIN
@@ -177,6 +180,11 @@ flowchart LR
     MIDIIN -. last-seen timestamp .-> MON
     OSCIN -. last-seen timestamp .-> MON
     MON --> UI
+
+    MIDIIN -. raw MidiEvent, always .-> MIDIMON
+    GRIDCTRL -. resolved module/control, when settled .-> MIDIMON
+    MIDIMON -. diagnostic mode: suppress .-> MAP
+    MIDIMON -. diagnostic mode entry: E-Stop .-> WSOUT
 
     OSCIN -. discovered axis names .-> MAPUI
     OSCIN -. discovered axis names .-> CTRLUI
@@ -333,6 +341,9 @@ Once Group switching (Phase 6) lands, each of the 8 fader rows' single OSC axis 
 - **Grid's automatic connect-time zero/one/many resolution keeps its existing safety behavior unchanged.** Two or more saved configurations sharing a `module_shape` is now the ordinary outcome of deliberate Save As use, not only an accidental collision — but `resolve_grid_named_controller()` still blocks and asks on every such match at topology-settle time; nothing about when that automatic dialog fires, or its refusal to guess, changes. Save/Save As/Load are additional user-driven entry points into the same registry, not a replacement for the connect-time path.
 - **Unsaved-change tracking is a dirty comparison against the last loaded/saved snapshot, not a new undo mechanism.** The active configuration's in-memory (Bank, Group) axis table and bank actions are compared to the snapshot taken at the last successful Load or Save; a difference is "unsaved changes," prompting before a Controller-dropdown switch or a Load discards them. No history of intermediate states is kept.
 - **Load validates an Intech configuration's stored topology before applying it.** A `kind="grid"` configuration's `module_shape` (fixed at creation) is compared against the currently settled topology's shape; a mismatch refuses the load with a clear message rather than applying a (Bank, Group) axis table built for different physical hardware onto what's actually connected.
+- **The MIDI Input Monitor taps the existing dispatch choke point, not a second MIDI connection.** `_process_midi_event()` already receives every raw `MidiEvent` before Grid resolution and is where all three output paths (OSC, Keystroke, WebSocket) fan out; the Monitor is an added observer there, and diagnostic mode is one boolean checked before dispatch proceeds — not a parallel `MidiBackend.open_input()` call, which would miss or double-handle events already claimed by the primary connection. Raw CC/note is captured *before* `GridRuntimeController.address_table` resolution (which overwrites `type`/`number` with the logical control's own), so Grid hardware validation always sees the true wire-level identity, with the resolved module/control shown alongside it, never in place of it.
+- **Diagnostic mode defaults on at dialog-open and fires an immediate WebSocket `E-Stop`, rather than only gating future messages.** A button press used to identify a MIDI message must not move a motor — but suppressing only the *next* message leaves a fader's last `gotoPosition`, sent moments earlier, still potentially driving Dragonframe-side motion the Monitor can't observe. Firing `E-Stop` unconditionally on entry (silently dropped if no WebSocket connection exists, matching this output path's existing fail-silent precedent) closes that gap without a new status indicator or a dependency on knowing whether motion is actually in progress.
+- **The Monitor's event log is a bounded ring buffer, refreshed on the existing UI tick, not appended to a widget per MIDI event.** A jog wheel or Grid pot can emit MIDI faster than is human-readable; reusing the existing `_midi_queue`/`_on_tick()` (30 ms) drain pattern every other live-updating widget already uses avoids a widget update per raw event, and a fixed capacity (oldest dropped first) bounds memory under sustained high-frequency input.
 
 ## Success Metrics
 

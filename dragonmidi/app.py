@@ -28,7 +28,7 @@ from .controller_profile import ControllerProfile
 from .controller_profile_loader import load_controller_profiles
 from .controller_selection import ControllerChoice, GridChoice, StaticChoice, build_controller_choices
 from .controller_view_widgets import ControllerView, GroupSelectorRow
-from .events import MidiEvent
+from .events import MidiEvent, WebSocketCommand
 from .grid_controller import GRID_PROFILE_NAME, GridRuntimeController
 from .grid_lifecycle import GridAppCoordinator, GridLifecycle, GridStatus
 from .grid_transport import SerialGridTransport
@@ -36,6 +36,8 @@ from .keystroke_output import KeystrokeOutputAdapter, PynputBackend
 from .mapping import MappingEngine
 from .mapping_widgets import ConfigurationDialog, MappingView
 from .midi_input import MidiInputAdapter, MidoBackend
+from .midi_monitor import MidiMonitor
+from .midi_monitor_widgets import MidiMonitorDialog
 from .named_controller_dialog import ConfigurationLoadDialog, NamedControllerAmbiguousDialog
 from .named_controller_registry import (
     Activated,
@@ -223,6 +225,10 @@ class DragonMidiWindow(QMainWindow):
         )
         self._keystroke_output = KeystrokeOutputAdapter(PynputBackend())
         self._websocket_output = WebSocketOutputAdapter()
+        # @spec MON-CAPTURE-001: one shared instance for the app's lifetime,
+        # read by the MIDI dispatch path and rendered by the dialog built in
+        # _build_header() below (docs/llds/midi-monitor.md).
+        self._midi_monitor = MidiMonitor()
         self._monitor = SignalMonitor()
         self._config = ConfigController(EndpointConfig(), on_apply=self._on_config_applied)
 
@@ -361,8 +367,17 @@ class DragonMidiWindow(QMainWindow):
         self._update_active_configuration_label()
         header.addLayout(config_row)
 
+        # @spec MON-DIAG-004: entering diagnostic mode fires this regardless
+        # of whether a WebSocket connection exists - WebSocketOutputAdapter.send()
+        # already logs-and-drops silently in that case (docs/llds/midi-monitor.md
+        # § Diagnostic Mode).
+        self._midi_monitor_dialog = MidiMonitorDialog(
+            self._midi_monitor,
+            on_enter_diagnostic=lambda: self._websocket_output.send(WebSocketCommand("E-Stop")),
+        )
+
         load_failure_text = config_load_failure_label(len(self._load_result.failures))
-        self._settings_dialog = SettingsDialog(self._config, load_failure_text)
+        self._settings_dialog = SettingsDialog(self._config, load_failure_text, on_open_monitor=self._midi_monitor_dialog.exec)
         self._settings_dialog.set_profile_hint(self._default_profile.setup_hint)
 
         return header
@@ -751,6 +766,7 @@ class DragonMidiWindow(QMainWindow):
         self._configuration_dialog.refresh()
         self._controller_view.refresh()  # @spec UI-CTRLVIEW-002, UI-CTRLVIEW-008
         self._group_selector.sync()  # @spec UI-GROUPSEL-001
+        self._midi_monitor_dialog.refresh()  # @spec MON-UI-007, MON-UI-008
 
         # @spec GRID-APP-005: while Grid is selected, its own pending/stale/
         # unsupported/ambiguous text and error-dot state borrow the existing
@@ -786,11 +802,39 @@ class DragonMidiWindow(QMainWindow):
         self._dragonframe_row.set_state(snapshot.dragonframe.state, snapshot.dragonframe.label)
         self._dragonframe_footer_label.setText(f"Dragonframe: {snapshot.dragonframe.label}")  # @spec UI-SHELL-004
 
-    def _process_midi_event(self, event: MidiEvent) -> None:
+    def _process_midi_event(self, raw_event: MidiEvent) -> None:
         # @spec GRID-MAP-001: the one Grid-specific branch in the MIDI dispatch
         # path, kept out of every output path below - pass-through unchanged
         # when Grid isn't active, dropped when pending/stale/unresolvable.
-        event = self._grid_coordinator.route_event(event)
+        # Computed unconditionally (not only when diagnostic mode is off) -
+        # route_midi_event()/resolve_grid_event() are pure, so this has no
+        # effect on Grid's own state either way (docs/llds/midi-monitor.md
+        # § Capture Pipeline).
+        event = self._grid_coordinator.route_event(raw_event)
+
+        # @spec MON-CAPTURE-004, MON-CAPTURE-005: module/resolved identity is
+        # only ever populated while Grid is the active controller and
+        # resolution actually succeeded - never guessed.
+        resolved_key: tuple[str, int | None] | None = None
+        module = None
+        if self._grid_coordinator.grid_active and event is not None:
+            resolved_key = (event.type, event.number)
+            grid_controller = self._grid_coordinator.lifecycle.controller
+            if grid_controller is not None:
+                module = grid_controller.control_module.get(resolved_key)
+
+        # @spec MON-CAPTURE-002, MON-CAPTURE-003: every event reaching the app
+        # is recorded before diagnostic mode is evaluated, so the log reflects
+        # reality regardless of whether dispatch below is about to be suppressed.
+        self._midi_monitor.record(raw_event, device_name=self._midi_device_name, resolved=resolved_key, module=module)
+
+        # @spec MON-DIAG-002: withholds this event from every output path
+        # below - no OSC, no keystroke, no WebSocket - while diagnostic mode
+        # is on. @spec MON-DIAG-003: byte-identical to pre-existing behavior
+        # once this flag is false.
+        if self._midi_monitor.diagnostic_active:
+            return
+
         if event is None:
             return
         now = time.monotonic()

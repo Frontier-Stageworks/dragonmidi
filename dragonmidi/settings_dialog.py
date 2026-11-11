@@ -15,6 +15,8 @@ Configuration dialog throughout.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
 from .config import ConfigController
@@ -30,7 +32,7 @@ _NETWORK_LABEL_WIDTH = 90
 class SettingsDialog(QDialog):
     """@spec UI-SETTINGS-001, UI-SETTINGS-002"""
 
-    def __init__(self, config: ConfigController, load_failure_text: str | None) -> None:
+    def __init__(self, config: ConfigController, load_failure_text: str | None, on_open_monitor: Callable[[], None] = lambda: None) -> None:
         super().__init__()
         self.setWindowTitle("Settings")
         self._config = config
@@ -70,6 +72,16 @@ class SettingsDialog(QDialog):
         listen_port_row.addWidget(self._listen_port_edit)
         listen_port_row.addStretch(1)
         layout.addLayout(listen_port_row)
+
+        # Added Phase 1.6 (docs/llds/midi-monitor.md) - a hardware-diagnostic
+        # tool, not network configuration, but reachable from here per the
+        # task that introduced it rather than a second top-level header button.
+        monitor_row = QHBoxLayout()
+        self._monitor_button = QPushButton("MIDI Input Monitor…")
+        self._monitor_button.clicked.connect(on_open_monitor)
+        monitor_row.addWidget(self._monitor_button)
+        monitor_row.addStretch(1)
+        layout.addLayout(monitor_row)
 
         close_row = QHBoxLayout()
         close_row.addStretch(1)
