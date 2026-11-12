@@ -33,6 +33,8 @@ class MidiMonitor:
     diagnostic_active: bool    # plain attribute; False until a dialog turns
                                 # it on. Read directly by app.py's dispatch.
     capture_pending: bool      # plain attribute, set by request_capture_next()
+    on_record: Callable[[MonitorEvent], None] | None  # set by a running
+                                # Guided Capture session; None otherwise
 
     @property
     def events(self) -> Sequence[MonitorEvent]: ...   # oldest-first, bounded
@@ -69,6 +71,47 @@ def format_resolved(resolved: tuple[str, int | None] | None) -> str: ...  # "gri
 ```
 
 ```python
+# capture_session.py - Qt-free (added for Guided Capture, below)
+
+@dataclass(frozen=True)
+class CaptureStep:
+    label: str  # e.g. "Record 3", or "Set Marker" for a global control
+
+@dataclass(frozen=True)
+class CaptureResult:
+    label: str
+    skipped: bool
+    raw: MidiEvent | None       # None iff skipped
+    device_name: str | None
+
+def build_capture_steps(controller: ActiveController) -> list[CaptureStep]: ...
+    # Reads getattr(controller, "unconfirmed_channel_controls", ()) x bank_count,
+    # then getattr(controller, "unconfirmed_global_controls", ()) x1. Empty list
+    # for a controller with neither attribute (e.g. Intech Grid today).
+
+class GuidedCaptureSession:
+    def __init__(self, profile_name: str, steps: Sequence[CaptureStep]) -> None: ...
+    @property
+    def current_step(self) -> CaptureStep | None: ...   # None once finished
+    @property
+    def pending(self) -> MonitorEvent | None: ...        # this step's not-yet-confirmed candidate
+    @property
+    def results(self) -> Sequence[CaptureResult]: ...     # confirmed/skipped so far, in step order
+    @property
+    def finished(self) -> bool: ...
+    @property
+    def total_steps(self) -> int: ...  # len(steps) - display convenience for "Step N of M"
+
+    def offer(self, entry: MonitorEvent) -> None: ...  # sets/replaces `pending` for the current step
+    def confirm(self) -> None: ...                     # locks in `pending` (or a skip if none), advances
+    def skip(self) -> None: ...                        # records a skip regardless of `pending`, advances
+
+def save_capture_session(directory: Path, profile_name: str, results: Sequence[CaptureResult]) -> Path: ...
+    # Writes directory / f"{profile_name}-{timestamp}.json"; creates directory
+    # if needed. Returns the path written, for the dialog to display.
+```
+
+```python
 # midi_monitor_widgets.py - Qt
 
 class MidiMonitorDialog(QDialog):
@@ -76,6 +119,8 @@ class MidiMonitorDialog(QDialog):
         self,
         monitor: MidiMonitor,
         on_enter_diagnostic: Callable[[], None],
+        get_active_controller: Callable[[], ActiveController],
+        capture_sessions_dir: Path,
     ) -> None: ...
 
     def refresh(self) -> None: ...   # called every tick from app.py's
@@ -125,6 +170,24 @@ class SettingsDialog(QDialog):
 - **Diagnostic checkbox**: "Diagnostic mode (block Dragonframe output while open)", defaults checked on every open (see Diagnostic Mode, above).
 - No Settings/host/port fields, no controller selection — this dialog has exactly the controls above, kept deliberately small per the task's "keep the UI compact" instruction.
 
+## Guided Capture Session
+
+A second, optional mode within the same dialog — not a new top-level window — for systematically working through a controller's currently-unconfirmed controls instead of using Capture Next Input freehand for each one. Inherits diagnostic mode's suppression for free: a session can only be running while the dialog is open, and the dialog forces diagnostic mode on at open (Diagnostic Mode, above), so actuating a Record/Select/fader during a session is exactly as safe as any other probing in this dialog.
+
+- **Steps come from the active controller's own declared gaps, not a hardcoded list.** `build_capture_steps()` reads `unconfirmed_channel_controls` (expanded ×`bank_count` — `"Record 1"`..`"Record {bank_count}"`, then the next label, in declared order) and `unconfirmed_global_controls` (one step each) off whatever `get_active_controller()` returns *at the moment Start is clicked* — not cached from dialog construction, so switching the Controller Profile dropdown before starting a session targets the newly selected controller's own gaps. Both attributes are read via `getattr(..., ())`, matching `setup_hint`'s existing duck-typed, Protocol-absent precedent (`docs/llds/app-ui.md`) — a controller with neither (Intech Grid today) simply produces zero steps, and Start is disabled with an explanatory label rather than opening an empty session.
+- **"Start Guided Capture" is disabled when there are zero steps**, with a label explaining why ("No unconfirmed controls for this profile") rather than a silently-empty session.
+- **Feeding is push-based, via `MidiMonitor.on_record` - a single optional callback, not a cursor into `events`.** A numeric index into `monitor.events` would break once the ring buffer evicts older entries (every index shifts), so starting a session instead sets `monitor.on_record = session.offer`; `record()` invokes it (if set) with the just-built `MonitorEvent`, synchronously, right after appending it — before `record()` returns. This also means an event recorded a moment before Start (already visible in the ongoing log above) is never fed to the session, since the hook wasn't registered yet. Ending a session (Cancel or Save) sets `monitor.on_record = None`.
+- **`offer()` always replaces the current step's `pending` candidate, never accumulates one.** Pressing the wrong control, then the right one, before confirming simply means the right one is what's pending when Confirm is clicked — no separate "undo" is needed for a same-step mis-press.
+- **Confirm locks in whatever is currently `pending`** (as a non-skipped `CaptureResult` carrying that event's raw identity and device name) **and advances to the next step; Skip does the same but always records a skip**, even if something is already pending for the current step (the user explicitly chose not to use it). Both are only meaningful while `current_step is not None`; the dialog disables both controls once `finished`.
+- **The Confirm button is enabled only while `pending is not None`** for the current step — matches the chosen "capture, then require a confirm click" behavior: an event must actually arrive before advancing is allowed, so the prompt can't be silently skipped by a stray click. Skip has no such gate, by design — it's the explicit "I can't test this one" escape.
+- **The current prompt's pending candidate is rendered the same way `last_captured` already is** (`format_event_type`/`format_channel`/`format_number`), so a user sees exactly what was captured before committing to Confirm.
+- **Finishing (all steps consumed) shows a summary count** ("16 captured, 2 skipped") and reveals a **Save Session** button; **Cancel** is available at any point before Save and discards the in-memory session with no file written — there is no partial/auto-save.
+- **`save_capture_session()` writes one JSON file per completed session**, to `~/Documents/DragonMIDI/capture_sessions/{profile_name}-{timestamp}.json` (the same `~/Documents/DragonMIDI/` root, sibling-folder convention `configurations/`/`named_controllers/`/`controllers/` already use; `profile_name` used as-is in the filename, unsanitized, matching `preset_store.py`'s existing `f"{profile_name}.json"` precedent — spaces are not a filesystem problem on macOS/Windows and this codebase has never bothered escaping them). After saving, the dialog shows the written path so the user (or a later session) can find it.
+- **The written report is read-only evidence — nothing in this codebase reads a capture-session file back in.** No code path loads one into a `ControllerProfile`, the Mapping Engine, or any other persisted state; turning a capture session's findings into an actual controller-definition change is a separate, later, human-reviewed change to `dragonmidi/controllers/*.yaml` and `docs/llds/static-mapping.md` — exactly the boundary `docs/high-level-design.md § Key Design Decisions`' "Guided Capture produces a report, never an assignment" bullet states.
+- **A session is entirely in-memory until Save; closing the dialog (or the main window) mid-session discards it with no prompt.** No "unsaved guided-capture session" warning is added — this mirrors Capture Next Input's own no-persistence-until-explicit-action behavior one level up, and keeps this feature from growing a second kind of "unsaved changes" concept alongside the existing builtin/dirty tracking (`docs/llds/app-ui.md § Save/Save As/Load UI`), which is about mapping configurations, not diagnostic sessions.
+- **The diagnostic checkbox is disabled (forced on, un-clickable) for the duration of a running session.** Today's Guided Capture scope (unconfirmed controls only) happens to be safe either way - those controls are, by definition, absent from `opinionated_map`/bank derivation (`MAP-BANK-006`'s own regression test), so no output path fires for them regardless of the checkbox. This is a forward guard, not a reaction to a live bug: if Guided Capture's scope is ever widened to include *confirmed, mapped* controls (Deferred below), disabling the checkbox during a session is what keeps that future change from quietly reopening the exact motion risk this whole feature exists to prevent. Re-enabled the instant the session ends (Cancel or Save), left checked either way - never force-unchecked.
+- **Switching the Controller Profile dropdown mid-session is not a case this LLD needs to handle: it's structurally impossible.** The dropdown lives in the main window, which is blocked by `MidiMonitorDialog`'s own modality for as long as it's open (the same modal-stacking behavior every other dialog in this app already has) - a session can only run while the dialog is open, so the controller a session was built against cannot change out from under it.
+
 ## Decisions & Alternatives
 
 | Decision | Chosen | Alternatives Considered | Rationale |
@@ -138,19 +201,29 @@ class SettingsDialog(QDialog):
 | Table refresh | Batched on the existing 30 ms UI tick, skipped entirely when unchanged (`version` check) | Append a table row synchronously inside `record()` | A jog wheel can emit far faster than 30 Hz; per-event Qt widget mutation from a background-thread-drained queue would be the freeze risk the task calls out, and an unconditional per-tick rebuild would waste cycles while idle |
 | Capture Next Input semantics | One-shot flag; next recorded event is marked `captured` and shown in a dedicated label plus a highlighted table row | Filter the table to show only the captured event | Isolating-by-filtering would hide the surrounding event stream, which is often exactly what's needed to tell a genuine button press apart from incidental noise (e.g., a jog wheel's own CC flood) right before/after it |
 | Module scope | Two new files (`midi_monitor.py`, `midi_monitor_widgets.py`), no changes to `mapping.py`, `control_descriptor.py`, or `inspector_registry.py` | Extend the Inspector Editor Registry with a "monitor" control type | The Monitor is global (one log for the whole device), not per-control; forcing it through the per-control Inspector dispatch would be a worse fit than a standalone dialog reachable from Settings, as the task specifies |
+| Guided Capture scope | Only the active controller's currently-unconfirmed controls (`unconfirmed_channel_controls`/`unconfirmed_global_controls`) | Every control on the active controller, confirmed or not | User's explicit choice - narrower and faster for the immediate hardware-validation need; walking already-confirmed controls too is deferred below, not ruled out |
+| Guided Capture advance | Capture, then an explicit "Confirm & Next" click | Auto-advance the instant any event is recorded for the current step | User's explicit choice - a redo window (press the wrong control, then the right one, before confirming) outweighs the extra click per step |
+| Guided Capture save location | Fixed app folder, auto-named (`~/Documents/DragonMIDI/capture_sessions/{profile}-{timestamp}.json`) | A `QFileDialog` save prompt each time | User's explicit choice - matches the existing Preset Store/Named Controller/Controller Profile convention of one fixed, predictable folder per concern, no dialog friction |
+| Guided Capture's write surface | Produces a JSON report only; no write path into `MappingEngine`, the Preset Store, or a Controller Profile config file | Auto-populate `unconfirmed_channel_controls`'s real CC/note into the YAML directly once captured | The explicit boundary that keeps this from being the MIDI Learn/automatic-assignment feature the task's own Non-Goals exclude - identification and assignment stay separate, human-reviewed steps |
+| Session persistence on close | None - discarded with no prompt if the dialog closes before Save | Warn before discarding, like the builtin/dirty mapping-configuration tracking | Keeps this a second, independent "unsaved state" concept out of a feature whose own existing precedent (Capture Next Input) already has no persistence until an explicit action |
+| Feeding events to a running session | Push-based `MidiMonitor.on_record` callback, invoked synchronously inside `record()` | A numeric cursor/index into `monitor.events` | A ring-buffer index breaks the moment eviction shifts every index; found during this LLD's own edge-case probe before implementation, not after a bug report |
+| Diagnostic checkbox during a session | Disabled (forced on) for the session's duration | Leave it clickable, same as outside a session | Today's unconfirmed-only scope happens to be safe unchecked too (those controls are unmapped by construction), but this is a forward guard against a future scope widening to mapped controls reopening real motion risk |
 
 ## Open Questions & Future Decisions
 
 ### Resolved
 
-None yet — new LLD.
+1. Guided Capture's scope (unconfirmed-only), advance behavior (explicit confirm), and save location (fixed app folder) were resolved directly by the user before this section was drafted - see the Decisions & Alternatives rows above for the rationale each carries.
 
 ### Deferred
 
 1. Table order (oldest-first vs. newest-first/auto-scroll) is a presentation detail left to implementation and can be adjusted without an EARS change, since no spec in this LLD commits to a direction.
-2. Exporting the captured log to a file (for attaching to a roadmap update or an issue) is not requested by the task and is deferred.
+2. Exporting the *ongoing event log* (as opposed to a completed Guided Capture session) to a file remains deferred — Guided Capture's `save_capture_session()` covers the specific, requested "save the test" need; a general "export whatever's currently in the table" action is a different, broader feature not asked for here.
 3. A dedicated Status UI indicator for "diagnostic mode is currently on" (beyond the dialog's own checkbox, visible only while the dialog is open) is not requested; if diagnostic mode needs to be visible from the main window, this is the natural place to add it later.
 4. Distinguishing *why* an event shows no Module/Resolved identity (Grid not active, controller stale, or a genuine address-table miss) is not surfaced — all three render identically as `"-"`. The task asks only that identification be shown "when the current discovery data provides it," not that failure reasons be diagnosed; revisit only if hardware validation work finds this ambiguity actually slows someone down.
+5. Walking *every* control (confirmed or not) rather than only the currently-unconfirmed ones is deferred — the user's explicit choice scoped this to unconfirmed controls only (see Decisions & Alternatives); revisit if full-inventory re-validation turns out to be wanted later.
+6. Reordering or re-visiting an already-confirmed/skipped step within a session (without restarting it) is not supported — `GuidedCaptureSession` only ever advances forward; Cancel-and-restart is the only way to redo an earlier step once a later one has been confirmed.
+7. Nothing reads a saved capture-session JSON file back into the app (no "resume a session," no "load evidence into the Controller Profile editor") — see Guided Capture Session's own "read-only evidence" bullet above. Turning a session's findings into a real controller-definition change stays a separate, later, human-driven edit to `dragonmidi/controllers/*.yaml`.
 
 ## References
 
@@ -159,3 +232,5 @@ None yet — new LLD.
 - `docs/llds/websocket-output.md § Sending a Command` — `E-Stop`'s existing fail-silent `send()` behavior, reused unmodified.
 - `docs/llds/app-ui.md § Settings Dialog` — the existing thin-dialog precedent this Monitor's entry point is added to.
 - `docs/roadmap.md § Hardware verification tasks` — the specific unconfirmed controls this tool exists to help identify.
+- `docs/llds/app-ui.md § Settings Dialog` — `setup_hint`'s existing `getattr(..., None)` duck-typed precedent, mirrored by Guided Capture's `unconfirmed_channel_controls`/`unconfirmed_global_controls` reads.
+- `dragonmidi/controllers/nanokontrol-studio.yaml`, `dragonmidi/controllers/nanokontrol2.yaml` — the `unconfirmed_channel_controls`/`unconfirmed_global_controls` declarations Guided Capture reads at runtime.

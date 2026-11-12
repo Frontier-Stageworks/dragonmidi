@@ -43,6 +43,24 @@ def test_record_preserves_the_raw_event_exactly() -> None:
     assert entry.device_name == "nanoKONTROL2"
 
 
+def test_on_record_is_invoked_synchronously_with_the_just_appended_event() -> None:
+    """@spec MON-CAPTURE-009"""
+    monitor = MidiMonitor()
+    seen: list = []
+    monitor.on_record = seen.append
+
+    entry = monitor.record(_cc(42), device_name="X", resolved=None, module=None)
+
+    assert seen == [entry]
+    assert entry in monitor.events  # appended before the callback fires
+
+
+def test_on_record_is_not_called_when_unset() -> None:
+    """@spec MON-CAPTURE-009"""
+    monitor = MidiMonitor()
+    monitor.record(_cc(), device_name=None, resolved=None, module=None)  # must not raise with on_record left at its default None
+
+
 def test_record_appends_in_order_and_is_visible_via_events() -> None:
     monitor = MidiMonitor()
     first = monitor.record(_cc(1), device_name=None, resolved=None, module=None)

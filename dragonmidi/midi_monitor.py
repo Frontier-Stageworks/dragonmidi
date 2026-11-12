@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from .events import MidiEvent
@@ -91,6 +91,12 @@ class MidiMonitor:
         # (e.g. DragonMidiWindow._dirty). No lock needed.
         self.diagnostic_active: bool = False
         self.capture_pending: bool = False
+        # Set by a running Guided Capture session (capture_session.py), None
+        # otherwise. Push-based rather than a cursor into `events`, since a
+        # numeric index would break once the ring buffer evicts older
+        # entries (@spec MON-CAPTURE-009, docs/llds/midi-monitor.md § Guided
+        # Capture Session).
+        self.on_record: Callable[[MonitorEvent], None] | None = None
         self._last_captured: MonitorEvent | None = None
         self._version: int = 0
 
@@ -133,6 +139,8 @@ class MidiMonitor:
         if captured:
             self._last_captured = entry
         self._version += 1
+        if self.on_record is not None:
+            self.on_record(entry)  # @spec MON-CAPTURE-009
         return entry
 
     def request_capture_next(self) -> None:

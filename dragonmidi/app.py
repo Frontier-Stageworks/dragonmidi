@@ -166,6 +166,11 @@ def _named_controllers_dir() -> Path:
     return Path.home() / "Documents" / "DragonMIDI" / "named_controllers"
 
 
+def _capture_sessions_dir() -> Path:
+    """@spec MON-GUIDE-010"""
+    return Path.home() / "Documents" / "DragonMIDI" / "capture_sessions"
+
+
 def _default_profile(profiles: tuple[ControllerProfile, ...]) -> ControllerProfile:
     """@spec MIDI-PROFILE-004"""
     for profile in profiles:
@@ -374,6 +379,8 @@ class DragonMidiWindow(QMainWindow):
         self._midi_monitor_dialog = MidiMonitorDialog(
             self._midi_monitor,
             on_enter_diagnostic=lambda: self._websocket_output.send(WebSocketCommand("E-Stop")),
+            get_active_controller=lambda: self._mapping.profile,
+            capture_sessions_dir=_capture_sessions_dir(),
         )
 
         load_failure_text = config_load_failure_label(len(self._load_result.failures))

@@ -12,6 +12,7 @@ Traces to `docs/llds/midi-monitor.md`.
 - [ ] **MON-CAPTURE-006**: The system shall retain at most a fixed maximum number of the most recently recorded events (default 500), discarding the oldest event first when the limit is exceeded.
 - [ ] **MON-CAPTURE-007**: The system shall not create a second MIDI backend connection, Grid topology link, or MIDI router for the purpose of monitoring.
 - [ ] **MON-CAPTURE-008**: When the active Controller Profile changes while the Monitor is recording, the system shall reflect the newly active controller in subsequently recorded events without discarding or reinterpreting events recorded before the change.
+- [ ] **MON-CAPTURE-009**: If an `on_record` callback is registered, the system shall invoke it synchronously with the just-recorded event, after that event has been appended to the retained log, on every call to record an event.
 
 ## Diagnostic Mode
 
@@ -36,6 +37,22 @@ Traces to `docs/llds/midi-monitor.md`.
 - [ ] **MON-UI-007**: The system shall refresh the dialog's displayed event log on the application's existing periodic UI tick, rather than performing a widget update for every individual MIDI event, so that a high-frequency input source does not freeze the interface.
 - [ ] **MON-UI-008**: If no new event has been recorded since the dialog's last refresh, the system shall perform no table update on that tick.
 - [ ] **MON-UI-009**: The system shall keep the dialog's own controls (Clear, Capture Next Input, diagnostic-mode checkbox) limited to the fields described in this spec, without introducing controller-selection, network-configuration, or mapping-editing controls.
+
+## Guided Capture
+
+- [ ] **MON-GUIDE-001**: The system shall provide a Guided Capture mode within the MIDI Input Monitor dialog, building its sequence of steps from the active controller's `unconfirmed_channel_controls` (one step per bank, 1 through `bank_count`) and `unconfirmed_global_controls` (one step each), in declared order.
+- [ ] **MON-GUIDE-002**: If the active controller declares neither `unconfirmed_channel_controls` nor `unconfirmed_global_controls`, or both are empty, the system shall disable Start Guided Capture and state that no unconfirmed controls exist for this profile, rather than starting an empty session.
+- [ ] **MON-GUIDE-003**: When Guided Capture starts, the system shall register to receive every subsequently recorded MIDI event and shall not retroactively consider any event recorded before that point.
+- [ ] **MON-GUIDE-004**: While the current step has no pending candidate event, the system shall keep its Confirm control disabled; Skip shall remain enabled regardless of whether a candidate is pending.
+- [ ] **MON-GUIDE-005**: When a MIDI event is offered to the current step, the system shall replace any previously pending candidate for that step with the new one, never accumulate multiple candidates for one step.
+- [ ] **MON-GUIDE-006**: When Confirm is activated, the system shall record the current step's pending candidate as a non-skipped result, clear the pending candidate, and advance to the next step.
+- [ ] **MON-GUIDE-007**: When Skip is activated, the system shall record the current step as skipped, discarding any pending candidate for it, clear the pending candidate, and advance to the next step - regardless of whether a candidate was pending.
+- [ ] **MON-GUIDE-008**: When every step has been confirmed or skipped, the system shall show a summary count of captured versus skipped steps, enable a Save Session control, and no longer accept Confirm or Skip activation.
+- [ ] **MON-GUIDE-009**: The system shall disable the diagnostic-mode checkbox for the duration of a running Guided Capture session, independent of whether the session's current controls would themselves produce dispatched output if diagnostic mode were off.
+- [ ] **MON-GUIDE-010**: When Save Session is activated, the system shall write one JSON file recording the active controller's name, a timestamp, and every step's label with either its captured raw MIDI identity and device name or a skipped marker, to a fixed, auto-named path under `~/Documents/DragonMIDI/capture_sessions/`, and shall display the written path.
+- [ ] **MON-GUIDE-011**: The system shall provide a Cancel control, available at any point before Save Session, that discards the in-memory session without writing a file.
+- [ ] **MON-GUIDE-012**: The system shall not write a captured or skipped result to the Mapping Engine, the Preset Store, or any controller definition file, under any Guided Capture action.
+- [ ] **MON-GUIDE-013**: The system shall not read a previously saved capture-session file back into the application.
 
 ## References
 

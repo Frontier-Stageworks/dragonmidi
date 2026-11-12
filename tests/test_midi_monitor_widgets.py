@@ -13,6 +13,9 @@ hanging the test.
 from __future__ import annotations
 
 import os
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -31,11 +34,33 @@ def _cc(number: int = 36) -> MidiEvent:
     return MidiEvent(type="cc", channel=0, number=number, raw_value=64, normalized=64 / 127, is_press=False, is_release=False)
 
 
-def _dialog(monitor: MidiMonitor | None = None) -> tuple[MidiMonitorDialog, MidiMonitor, list[int]]:
+@dataclass
+class _FakeController:
+    """A minimal stand-in exposing exactly what build_capture_steps() reads -
+    no real MappingEngine/ControllerProfile needed for these widget tests."""
+
+    name: str = "Fake Controller"
+    bank_count: int = 2
+    unconfirmed_channel_controls: tuple[str, ...] = field(default_factory=tuple)
+    unconfirmed_global_controls: tuple[str, ...] = field(default_factory=tuple)
+
+
+def _dialog(
+    monitor: MidiMonitor | None = None,
+    controller: _FakeController | None = None,
+    capture_sessions_dir: Path | None = None,
+) -> tuple[MidiMonitorDialog, MidiMonitor, list[int]]:
     _qapp()
     monitor = monitor or MidiMonitor()
+    controller = controller if controller is not None else _FakeController()
+    capture_sessions_dir = capture_sessions_dir or Path(tempfile.mkdtemp())
     calls: list[int] = []
-    dialog = MidiMonitorDialog(monitor, on_enter_diagnostic=lambda: calls.append(1))
+    dialog = MidiMonitorDialog(
+        monitor,
+        on_enter_diagnostic=lambda: calls.append(1),
+        get_active_controller=lambda: controller,
+        capture_sessions_dir=capture_sessions_dir,
+    )
     return dialog, monitor, calls
 
 

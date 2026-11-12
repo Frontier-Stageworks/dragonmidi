@@ -12,6 +12,7 @@ uses - rather than a fake/stub controller.
 
 @spec MON-CAPTURE-001 through MON-CAPTURE-006, MON-CAPTURE-008
 @spec MON-DIAG-001 through MON-DIAG-009
+@spec MON-GUIDE-001 through MON-GUIDE-013
 
 Note on scope: MON-CAPTURE-007 ("no second MIDI backend connection, Grid
 topology link, or MIDI router") is exercised structurally by inspection -
@@ -24,6 +25,7 @@ treatment of its own structural, no-new-resource specs.
 
 from __future__ import annotations
 
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -59,6 +61,7 @@ def window(tmp_path, monkeypatch):
     monkeypatch.setattr(appmod, "_user_controllers_dir", lambda: tmp_path / "controllers")
     monkeypatch.setattr(appmod, "_configurations_dir", lambda: tmp_path / "configurations")
     monkeypatch.setattr(appmod, "_named_controllers_dir", lambda: tmp_path / "named_controllers")
+    monkeypatch.setattr(appmod, "_capture_sessions_dir", lambda: tmp_path / "capture_sessions")
     monkeypatch.setattr(appmod, "PynputBackend", _FakePynputBackend)
     win = appmod.DragonMidiWindow()
     yield win
@@ -247,3 +250,93 @@ def test_grid_dropped_unresolved_events_are_still_dropped_when_diagnostic_is_off
     window._process_midi_event(_fader_cc_event(99))
 
     assert sent == []
+
+
+# --- Guided Capture, end-to-end against the real nanoKONTROL Studio profile ---
+# @spec MON-GUIDE-001 through MON-GUIDE-013
+
+
+def test_guided_capture_end_to_end_against_the_real_studio_profile_and_saves_a_report(window, tmp_path) -> None:
+    """Drives the exact path a real user follows: open the Monitor (Studio
+    is already the default active controller - a real ControllerProfile
+    loaded from the bundled YAML, not a fake), start Guided Capture, send
+    real-shaped raw MIDI for the first two steps, confirm one and skip one,
+    then save and read back the written JSON."""
+    channel = window._default_profile.default_channel
+    dialog = window._midi_monitor_dialog
+    dialog.show()  # diagnostic mode on, same as a real Settings-launched open
+
+    dialog._on_guided_start_clicked()
+    assert dialog._guided_session is not None
+    assert dialog._guided_session.current_step.label == "Record 1"
+    assert dialog._guided_confirm_button.isEnabled() is False  # nothing pending yet
+    assert dialog._diagnostic_checkbox.isEnabled() is False  # @spec MON-GUIDE-009
+
+    # "Press Record 1" - any raw CC on this channel flows through the real
+    # dispatch path (_process_midi_event), gets recorded, and - because
+    # diagnostic mode is on - reaches the session via MidiMonitor.on_record.
+    window._process_midi_event(_fader_cc_event(34, raw_value=127, channel=channel))
+    assert dialog._guided_session.pending is not None
+    dialog.refresh()  # the next UI tick - button enablement is refresh-driven, not synchronous
+    assert dialog._guided_confirm_button.isEnabled() is True
+
+    dialog._on_guided_confirm_clicked()
+    assert dialog._guided_session.current_step.label == "Record 2"
+
+    dialog._on_guided_skip_clicked()
+    assert dialog._guided_session.current_step.label == "Record 3"
+
+    # Skip through the remaining 16 steps to reach Save Session.
+    for _ in range(16):
+        dialog._on_guided_skip_clicked()
+    assert dialog._guided_session.finished is True
+    assert dialog._guided_save_button.isEnabled() is True
+
+    dialog._on_guided_save_clicked()
+
+    assert dialog._guided_session is None  # session ended after Save
+    assert dialog._diagnostic_checkbox.isEnabled() is True  # re-enabled
+
+    saved_files = list((tmp_path / "capture_sessions").glob("nanoKONTROL Studio-*.json"))
+    assert len(saved_files) == 1
+    report = json.loads(saved_files[0].read_text())
+    assert report["profile_name"] == "nanoKONTROL Studio"
+    assert len(report["results"]) == 18  # 8 Record + 8 Select + Set Marker + Return to Zero
+    assert report["results"][0] == {
+        "label": "Record 1",
+        "skipped": False,
+        "raw": {"type": "cc", "channel": channel, "number": 34, "raw_value": 127},
+        "device_name": None,
+    }
+    assert report["results"][1]["skipped"] is True
+
+
+def test_guided_capture_cancel_discards_without_writing_a_file(window, tmp_path) -> None:
+    """@spec MON-GUIDE-011"""
+    dialog = window._midi_monitor_dialog
+    dialog.show()
+    dialog._on_guided_start_clicked()
+    window._process_midi_event(_fader_cc_event(34, channel=window._default_profile.default_channel))
+
+    dialog._on_guided_cancel_clicked()
+
+    assert dialog._guided_session is None
+    assert dialog._diagnostic_checkbox.isEnabled() is True
+    assert not (tmp_path / "capture_sessions").exists()
+
+
+def test_guided_capture_disabled_for_a_controller_with_no_unconfirmed_controls(window) -> None:
+    """A profile whose unconfirmed_channel_controls/unconfirmed_global_controls
+    are both empty (hypothetically fully confirmed) must disable Start with
+    an explanatory label, never open an empty session."""
+    from dataclasses import replace
+
+    fully_confirmed = replace(window._default_profile, unconfirmed_channel_controls=(), unconfirmed_global_controls=())
+    window._mapping.set_profile(fully_confirmed)
+    dialog = window._midi_monitor_dialog
+    dialog.show()
+
+    dialog._update_guided_ui()  # re-derive from the now-different active controller
+
+    assert dialog._guided_start_button.isEnabled() is False
+    assert "No unconfirmed controls" in dialog._guided_status_label.text()
