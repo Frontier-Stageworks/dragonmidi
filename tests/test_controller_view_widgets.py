@@ -299,9 +299,11 @@ def test_selecting_record_shows_unconfirmed_midi_identity_not_unassigned() -> No
     """Record is confirmed physically present but has no confirmed CC/note
     number - its Assignment text must say so explicitly, not "Unassigned"
     (which would wrongly imply it's a real, assignable control nobody has
-    configured yet)."""
+    configured yet). Uses nanoKONTROL2, not the Studio - the Studio's
+    Record/Select were confirmed via Guided Capture (Phase 1.6.1) and no
+    longer exercise this path; nanoKONTROL2's remain unconfirmed."""
     _qapp()
-    engine = MappingEngine(profile=STUDIO_PROFILE)
+    engine = MappingEngine(profile=NANOKONTROL2_PROFILE)
     view = ControllerView(engine, AxisDiscovery())
     record_key = next(d.key for d in view._descriptors if d.label == "Record")
     _select(view, record_key)

@@ -72,6 +72,16 @@ def _bank_index_for(key: "_Key", active_controller: "ActiveController") -> int |
     ws_keys = active_controller.websocket_keys
     if ws_keys is not None and key in ws_keys.solos:
         return ws_keys.solos.index(key) + 1
+    # Record/Select (Phase 1.6.1, @spec UI-CTRLGROUP-009): resolved directly
+    # against record_to_fader/select_to_fader, deliberately NOT via
+    # bank_fader_key() - that method must never learn about these two dicts
+    # (MAP-BANK-006/007, see build_bank_membership()'s docstring).
+    record_fader_key = active_controller.record_to_fader.get(key) or active_controller.select_to_fader.get(key)
+    if record_fader_key is not None:
+        try:
+            return bank_fader_keys.index(record_fader_key) + 1
+        except ValueError:
+            return None
     kind, number = key
     if kind in _PBF4_CHANNEL_TAGS and isinstance(number, int) and 1 <= number <= active_controller.bank_count:
         return number

@@ -256,19 +256,24 @@ def test_grid_dropped_unresolved_events_are_still_dropped_when_diagnostic_is_off
 # @spec MON-GUIDE-001 through MON-GUIDE-013
 
 
-def test_guided_capture_end_to_end_against_the_real_studio_profile_and_saves_a_report(window, tmp_path) -> None:
-    """Drives the exact path a real user follows: open the Monitor (Studio
-    is already the default active controller - a real ControllerProfile
-    loaded from the bundled YAML, not a fake), start Guided Capture, send
+def test_guided_capture_end_to_end_against_the_real_nanokontrol2_profile_and_saves_a_report(window, tmp_path) -> None:
+    """Drives the exact path a real user follows: open the Monitor, switch
+    to nanoKONTROL2 (a real ControllerProfile loaded from the bundled YAML,
+    not a fake - still has genuinely unconfirmed controls, unlike the
+    Studio, whose Record/Select/Set Marker/Return to Zero were confirmed via
+    Guided Capture itself in Phase 1.6.1), start Guided Capture, send
     real-shaped raw MIDI for the first two steps, confirm one and skip one,
     then save and read back the written JSON."""
-    channel = window._default_profile.default_channel
+    nk2_index = next(i for i, c in enumerate(window._controller_choices) if c.name == "nanoKONTROL2")
+    window._profile_combo.setCurrentIndex(nk2_index)
+    channel = window._mapping.profile.default_channel
     dialog = window._midi_monitor_dialog
     dialog.show()  # diagnostic mode on, same as a real Settings-launched open
 
     dialog._on_guided_start_clicked()
     assert dialog._guided_session is not None
     assert dialog._guided_session.current_step.label == "Record 1"
+    assert dialog._guided_session.total_steps == 9  # 8 Record + Set Marker
     assert dialog._guided_confirm_button.isEnabled() is False  # nothing pending yet
     assert dialog._diagnostic_checkbox.isEnabled() is False  # @spec MON-GUIDE-009
 
@@ -286,8 +291,8 @@ def test_guided_capture_end_to_end_against_the_real_studio_profile_and_saves_a_r
     dialog._on_guided_skip_clicked()
     assert dialog._guided_session.current_step.label == "Record 3"
 
-    # Skip through the remaining 16 steps to reach Save Session.
-    for _ in range(16):
+    # Skip through the remaining 7 steps (Record 3-8, Set Marker) to reach Save Session.
+    for _ in range(7):
         dialog._on_guided_skip_clicked()
     assert dialog._guided_session.finished is True
     assert dialog._guided_save_button.isEnabled() is True
@@ -297,11 +302,11 @@ def test_guided_capture_end_to_end_against_the_real_studio_profile_and_saves_a_r
     assert dialog._guided_session is None  # session ended after Save
     assert dialog._diagnostic_checkbox.isEnabled() is True  # re-enabled
 
-    saved_files = list((tmp_path / "capture_sessions").glob("nanoKONTROL Studio-*.json"))
+    saved_files = list((tmp_path / "capture_sessions").glob("nanoKONTROL2-*.json"))
     assert len(saved_files) == 1
     report = json.loads(saved_files[0].read_text())
-    assert report["profile_name"] == "nanoKONTROL Studio"
-    assert len(report["results"]) == 18  # 8 Record + 8 Select + Set Marker + Return to Zero
+    assert report["profile_name"] == "nanoKONTROL2"
+    assert len(report["results"]) == 9  # 8 Record + Set Marker
     assert report["results"][0] == {
         "label": "Record 1",
         "skipped": False,

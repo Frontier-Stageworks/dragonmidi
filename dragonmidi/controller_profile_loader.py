@@ -110,6 +110,8 @@ def _parse_controls(raw: object, path: Path) -> ControlsConfig:
             solos=tuple(raw.get("solos") or ()),
             transport=dict(raw.get("transport") or {}),
             jog_wheel=raw.get("jog_wheel"),
+            records=tuple(raw.get("records") or ()),
+            selects=tuple(raw.get("selects") or ()),
         )
     except KeyError as exc:
         raise ControlsConfigError(f"{path}: 'controls' missing required field {exc}") from exc

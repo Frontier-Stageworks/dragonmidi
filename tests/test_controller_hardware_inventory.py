@@ -74,27 +74,43 @@ def test_studio_has_exactly_one_jog_wheel() -> None:
     assert jog_labels == ["Jog Wheel"]
 
 
-def test_studio_has_record_and_select_as_unconfirmed_per_channel_controls() -> None:
-    """Record 1-8/Select 1-8 are confirmed physically present
-    (`docs/llds/static-mapping.md`'s Opinionated Default Map, `MAP-BANK-006`)
-    but have no confirmed CC/note identity ("various CCs") - they must appear
-    in the Controller View, but never as a real MIDI-backed, bank-derived
-    control (reusing `rec_to_fader`-style wiring here was tried and reverted:
-    it broke `test_record_and_select_stay_unmapped_regardless_of_bank_axis`,
-    `MAP-BANK-006`'s own regression guard)."""
+# @spec UI-CTRLDESC-007, MAP-BANK-006, MAP-BANK-011
+def test_studio_has_record_and_select_as_confirmed_per_channel_controls() -> None:
+    """Record 1-8/Select 1-8's real CC identity was confirmed via a Guided
+    Capture session against physical hardware (Phase 1.6.1, 2026-11-12,
+    docs/roadmap.md § Hardware verification tasks) - channel 16, CC 64-71/
+    80-87. They appear in the Controller View with their real per-channel
+    labels, but are still never a real MIDI-backed, bank-derived *action*:
+    `record_to_fader`/`select_to_fader` exist only for naming/grouping, never
+    consulted by `bank_fader_key()` (reusing `rec_to_fader`-style wiring for
+    actual dispatch here was tried and reverted once already: it broke
+    `test_record_and_select_stay_unmapped_regardless_of_bank_axis`,
+    `MAP-BANK-006`'s own regression guard - unaffected by this phase)."""
     engine = MappingEngine(profile=STUDIO_PROFILE)
     descriptors = _descriptors(engine)
     labels = Counter(d.label for d in descriptors)
-    assert labels["Record"] == 8
-    assert labels["Select"] == 8
+    for n in range(1, 9):
+        assert labels[f"Record {n}"] == 1
+        assert labels[f"Select {n}"] == 1
+    # The safety invariant MAP-BANK-006 protects: confirmed identity does not
+    # mean dispatch-eligible.
+    for cc in range(64, 72):
+        assert STUDIO_PROFILE.bank_fader_key(("cc", cc)) is None
+    for cc in range(80, 88):
+        assert STUDIO_PROFILE.bank_fader_key(("cc", cc)) is None
 
 
-def test_studio_has_set_marker_and_return_to_zero_as_unconfirmed_globals() -> None:
+def test_studio_has_set_marker_and_return_to_zero_as_confirmed_globals() -> None:
+    """Phase 1.6.1: real CC identity confirmed (channel 16, CC 60/47) -
+    named, but still produces no OSC/WebSocket output (not in
+    opinionated_map, build_websocket_keys(), or build_group_keys())."""
     engine = MappingEngine(profile=STUDIO_PROFILE)
     descriptors = _descriptors(engine)
     labels = Counter(d.label for d in descriptors)
     assert labels["Set Marker"] == 1
     assert labels["Return to Zero"] == 1
+    assert ("cc", 60) not in STUDIO_PROFILE.opinionated_map
+    assert ("cc", 47) not in STUDIO_PROFILE.opinionated_map
 
 
 def test_studio_channel_groups_each_have_fader_rotary_button() -> None:

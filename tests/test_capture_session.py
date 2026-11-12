@@ -83,17 +83,29 @@ def test_build_capture_steps_handles_a_controller_with_no_such_attributes_at_all
     assert build_capture_steps(controller) == []
 
 
-def test_build_capture_steps_against_the_real_nanokontrol_studio_profile(tmp_path) -> None:
-    """Exercises the real ControllerProfile/YAML, not a fake, to guard
-    against this feature and static-mapping.md's declarations drifting
-    apart silently."""
+def test_build_capture_steps_is_empty_for_the_real_nanokontrol_studio_profile(tmp_path) -> None:
+    """Exercises the real ControllerProfile/YAML, not a fake. Record/Select/
+    Set Marker/Return to Zero were confirmed via a real Guided Capture
+    session (Phase 1.6.1, 2026-11-12) and removed from the Studio's
+    unconfirmed_channel_controls/unconfirmed_global_controls - this is the
+    direct regression guard that Guided Capture no longer prompts for them."""
     result = load_controller_profiles(bundled_dir=_bundled_controllers_dir(), user_dir=tmp_path / "controllers")
     studio = next(p for p in result.profiles if p.name == "nanoKONTROL Studio")
 
-    steps = build_capture_steps(studio)
+    assert build_capture_steps(studio) == []
+
+
+def test_build_capture_steps_against_the_real_nanokontrol2_profile(tmp_path) -> None:
+    """nanoKONTROL2 still has real, unconfirmed controls (no capture
+    evidence gathered for it yet) - guards against this feature and
+    static-mapping.md's declarations drifting apart silently."""
+    result = load_controller_profiles(bundled_dir=_bundled_controllers_dir(), user_dir=tmp_path / "controllers")
+    nk2 = next(p for p in result.profiles if p.name == "nanoKONTROL2")
+
+    steps = build_capture_steps(nk2)
 
     labels = [s.label for s in steps]
-    assert labels == [f"Record {n}" for n in range(1, 9)] + [f"Select {n}" for n in range(1, 9)] + ["Set Marker", "Return to Zero"]
+    assert labels == [f"Record {n}" for n in range(1, 9)] + ["Set Marker"]
 
 
 # --- Session state machine (MON-GUIDE-003 through 008) ---

@@ -40,7 +40,7 @@ def test_studio_has_eight_channel_groups_in_order() -> None:
     assert [g.label for g in channel_groups] == [f"Channel {i}" for i in range(1, 9)]
 
 
-# @spec UI-CTRLGROUP-001
+# @spec UI-CTRLGROUP-001, UI-CTRLGROUP-009
 def test_channel_1_contains_fader_knob_mute_solo_record_and_select() -> None:
     engine = MappingEngine(profile=STUDIO_PROFILE)
     groups = build_control_groups(_descriptors(engine), engine.profile)
@@ -49,16 +49,20 @@ def test_channel_1_contains_fader_knob_mute_solo_record_and_select() -> None:
     knob_key = next(k for k, f in STUDIO_PROFILE.knob_to_fader.items() if f == fader_key)
     mute_key = next(k for k, f in STUDIO_PROFILE.mute_to_fader.items() if f == fader_key)
     solo_key = STUDIO_PROFILE.websocket_keys.solos[0]
+    # Record/Select (Phase 1.6.1): now a real, confirmed CC identity - grouped
+    # via record_to_fader/select_to_fader, same positional pairing as Mute above.
+    record_key = next(k for k, f in STUDIO_PROFILE.record_to_fader.items() if f == fader_key)
+    select_key = next(k for k, f in STUDIO_PROFILE.select_to_fader.items() if f == fader_key)
     member_keys = {c.key for c in channel_1.controls}
     member_labels = {c.label for c in channel_1.controls}
     assert fader_key in member_keys
     assert knob_key in member_keys
     assert mute_key in member_keys
     assert solo_key in member_keys
-    # Record/Select (Phase 1.5.1): physically present but MIDI-identity
-    # unconfirmed, so they have no real key to assert - the label is enough.
-    assert "Record" in member_labels
-    assert "Select" in member_labels
+    assert record_key in member_keys
+    assert select_key in member_keys
+    assert "Record 1" in member_labels
+    assert "Select 1" in member_labels
     assert len(channel_1.controls) == 6
 
 
@@ -162,6 +166,8 @@ def test_controller_with_no_recognized_structure_falls_back_to_one_group() -> No
         fader_keys: frozenset = frozenset()
         knob_to_fader: dict = field(default_factory=dict)
         mute_to_fader: dict = field(default_factory=dict)
+        record_to_fader: dict = field(default_factory=dict)
+        select_to_fader: dict = field(default_factory=dict)
         websocket_keys: object = None
         bank_fader_keys: tuple = ()
         bank_count: int = 0
@@ -248,6 +254,8 @@ def test_descriptor_missing_from_control_module_is_not_dropped() -> None:
         fader_keys: frozenset = frozenset({("grid_fader", 1)})
         knob_to_fader: dict = {}
         mute_to_fader: dict = {}
+        record_to_fader: dict = {}
+        select_to_fader: dict = {}
         websocket_keys: object = None
         bank_fader_keys: tuple = (("grid_fader", 1),)
         bank_count: int = 1

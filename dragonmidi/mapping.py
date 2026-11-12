@@ -77,6 +77,14 @@ class ControlsConfig:
     solos: tuple[int, ...]
     transport: Mapping[str, int]
     jog_wheel: int | None
+    # Record/Select (Phase 1.6.1, @spec MAP-CONFIG-010): per-channel, like
+    # knobs/mutes/solos - independently sized, may be empty. Deliberately
+    # NOT consumed by build_opinionated_map()/_fader_entries()-style helpers
+    # below - see build_bank_membership()'s record_to_fader/select_to_fader
+    # docstring for why they stay outside bank_fader_key()'s dispatch gate
+    # (MAP-BANK-006).
+    records: tuple[int, ...] = ()
+    selects: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -132,6 +140,13 @@ _TRANSPORT_DISPLAY_NAMES: dict[str, str] = {
     "fast_forward": "Fast Forward",
     "previous_track": "Previous Track",
     "next_track": "Next Track",
+    # Named (Phase 1.6.1, @spec MAP-CONFIG-010) but deliberately absent from
+    # _TRANSPORT_OSC_TARGETS/build_websocket_keys()/build_group_keys() above -
+    # a real, confirmed CC with a real name, producing no OSC/WebSocket/
+    # Group-switch output at all (MAP-TABLE-005 already covers "not in
+    # opinionated_map -> no OSC output" generically; no new spec needed here).
+    "set_marker": "Set Marker",
+    "return_to_zero": "Return to Zero",
 }
 
 
@@ -231,12 +246,27 @@ def build_bank_membership(controls: ControlsConfig, key_type: str = "cc") -> dic
     # Ordered (index 0 = Bank 1), unlike fader_keys' frozenset - needed by the Preset
     # Store to translate a persisted Bank index back to a fader key (@spec MAP-STORE-001).
     bank_fader_keys = tuple((key_type, cc) for cc in controls.faders)
+    # Record/Select (Phase 1.6.1, @spec MAP-BANK-011): positional pairing,
+    # same shape as knob_to_fader/mute_to_fader above, but deliberately
+    # consulted ONLY by control_grouping.py's _bank_index_for() and
+    # control_descriptor.py's per-bank expansion - never by
+    # ActiveController.bank_fader_key(), which stays exactly as before.
+    # Routing these through bank_fader_key() was tried and reverted once
+    # already (docs/llds/static-mapping.md's Phase 1.5.1 Resolved item 18):
+    # it made MappingEngine.process() resolve them into _process_bank_derived()'s
+    # setZero path, directly violating MAP-BANK-006's "stay unmapped
+    # regardless of Bank N's fader state" invariant. These two dicts exist
+    # purely for naming/grouping; nothing in this file ever reads them.
+    record_to_fader = {(key_type, cc): (key_type, fader_cc) for fader_cc, cc in zip(controls.faders, controls.records)}
+    select_to_fader = {(key_type, cc): (key_type, fader_cc) for fader_cc, cc in zip(controls.faders, controls.selects)}
     return {
         "fader_keys": fader_keys,
         "knob_to_fader": knob_to_fader,
         "mute_to_fader": mute_to_fader,
         "fader_to_knob": fader_to_knob,
         "bank_fader_keys": bank_fader_keys,
+        "record_to_fader": record_to_fader,
+        "select_to_fader": select_to_fader,
     }
 
 
@@ -264,6 +294,8 @@ def build_control_names(controls: ControlsConfig, has_scene_button: bool) -> dic
     names: dict[_Key, str] = {("cc", cc): f"Fader Channel {i + 1}" for i, cc in enumerate(controls.faders)}
     names.update({("cc", cc): f"Knob {i + 1}" for i, cc in enumerate(controls.knobs)})
     names.update({("cc", cc): f"Mute {i + 1}" for i, cc in enumerate(controls.mutes)})
+    names.update({("cc", cc): f"Record {i + 1}" for i, cc in enumerate(controls.records)})
+    names.update({("cc", cc): f"Select {i + 1}" for i, cc in enumerate(controls.selects)})
     for name, cc in controls.transport.items():
         label = _TRANSPORT_DISPLAY_NAMES.get(name)
         if label is not None:
@@ -340,8 +372,14 @@ STUDIO_CONTROLS = ControlsConfig(
     knobs=tuple(range(16, 24)),
     mutes=tuple(range(48, 56)),
     solos=tuple(range(32, 40)),
-    transport=dict(_SHARED_TRANSPORT),
+    transport={**_SHARED_TRANSPORT, "set_marker": 60, "return_to_zero": 47},
     jog_wheel=JOG_WHEEL_CC,
+    # Confirmed by a real Guided Capture session against a physical
+    # nanoKONTROL Studio (2026-11-12, docs/roadmap.md § Hardware
+    # verification tasks) - channel 16 (0-indexed 15, this profile's
+    # default_channel), sequential CC blocks.
+    records=tuple(range(64, 72)),
+    selects=tuple(range(80, 88)),
 )
 
 NANOKONTROL2_CONTROLS = ControlsConfig(
@@ -362,15 +400,14 @@ STUDIO_PROFILE = build_profile(
     has_jog_wheel=True,
     has_scene_button=True,
     controls=STUDIO_CONTROLS,
-    # Physically present, confirmed by `docs/llds/static-mapping.md`'s own
-    # pre-existing Opinionated Default Map table and `MAP-BANK-006`/
-    # `MAP-PROFILE-003` - but with no confirmed CC/note number ("various CCs"),
-    # so represented here rather than wired to a guessed MIDI identity
-    # (Phase 1.5.1). Record/Select are per-channel; Set Marker/Return to Zero
-    # are single global transport buttons, distinct from the already-wired
-    # Previous/Next Marker and Rewind.
-    unconfirmed_channel_controls=("Record", "Select"),
-    unconfirmed_global_controls=("Set Marker", "Return to Zero"),
+    # Record/Select/Set Marker/Return to Zero are no longer unconfirmed as of
+    # Phase 1.6.1 - real CC identity confirmed via Guided Capture and now
+    # declared directly in STUDIO_CONTROLS above (records/selects/transport).
+    # Both tuples below are empty for this profile; left as an explicit
+    # no-op call rather than omitted, so a future re-unconfirmed control
+    # has an obvious place to be added back.
+    unconfirmed_channel_controls=(),
+    unconfirmed_global_controls=(),
 )
 
 # @spec MIDI-PROFILE-003

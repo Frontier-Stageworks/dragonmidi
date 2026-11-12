@@ -108,6 +108,18 @@ def build_control_descriptors(
         label = active_controller.control_names.get(mute_key, "Mute")
         descriptors.append(ControlDescriptor(key=mute_key, label=label, control_type="button"))
         seen.add(mute_key)
+    # Record/Select (Phase 1.6.1, @spec UI-CTRLDESC-007): confirmed real CC
+    # identity, grouped per-bank like Mute above - but never routed through
+    # bank_fader_key()/opinionated_map (MAP-BANK-006/007), so they carry no
+    # behavior, only identity and position.
+    for record_key in active_controller.record_to_fader:
+        label = active_controller.control_names.get(record_key, "Record")
+        descriptors.append(ControlDescriptor(key=record_key, label=label, control_type="button"))
+        seen.add(record_key)
+    for select_key in active_controller.select_to_fader:
+        label = active_controller.control_names.get(select_key, "Select")
+        descriptors.append(ControlDescriptor(key=select_key, label=label, control_type="button"))
+        seen.add(select_key)
     ws_keys = active_controller.websocket_keys
     if ws_keys is not None:
         for solo_key in ws_keys.solos:

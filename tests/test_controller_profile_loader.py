@@ -184,6 +184,35 @@ def test_setup_hint_absent_is_none(bundled_dir: Path, user_dir: Path) -> None:
     assert result.profiles[0].setup_hint is None
 
 
+# --- MAP-CONFIG-010 / PROFILE-LOAD: records/selects (Phase 1.6.1) ---
+
+
+def test_records_and_selects_are_parsed_from_the_controls_block(bundled_dir: Path, user_dir: Path) -> None:
+    user_dir.mkdir(parents=True)
+    _write_profile(
+        bundled_dir,
+        "a.yaml",
+        name="A",
+        match_substring="a",
+        controls={**_DEFAULT_CONTROLS, "records": [64, 65], "selects": [80, 81]},
+    )
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=user_dir)
+    profile = result.profiles[0]
+    record_key = next(k for k, f in profile.record_to_fader.items() if f == profile.bank_fader_keys[0])
+    select_key = next(k for k, f in profile.select_to_fader.items() if f == profile.bank_fader_keys[0])
+    assert record_key == ("cc", 64)
+    assert select_key == ("cc", 80)
+
+
+def test_records_and_selects_absent_default_to_empty(bundled_dir: Path, user_dir: Path) -> None:
+    user_dir.mkdir(parents=True)
+    _write_profile(bundled_dir, "a.yaml", name="A", match_substring="a")
+    result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=user_dir)
+    profile = result.profiles[0]
+    assert profile.record_to_fader == {}
+    assert profile.select_to_fader == {}
+
+
 # --- MAP-CONFIG-009 / PROFILE-LOAD: unconfirmed_channel_controls/unconfirmed_global_controls (Phase 1.5.1) ---
 
 
@@ -227,12 +256,17 @@ def test_unconfirmed_controls_must_be_a_list_of_strings(bundled_dir: Path, user_
 def test_bundled_studio_and_nanokontrol2_yaml_declare_their_unconfirmed_controls(tmp_path: Path) -> None:
     """The two shipped config files, loaded for real (not a synthetic
     fixture) - confirms the fix actually reaches the running app's default
-    profile list, not just this test module's own fixtures."""
+    profile list, not just this test module's own fixtures.
+
+    Studio's Record/Select/Set Marker/Return to Zero were confirmed via a
+    real Guided Capture session (Phase 1.6.1, 2026-11-12) - both tuples are
+    now empty for it. nanoKONTROL2's remain unconfirmed (no capture evidence
+    gathered for it yet)."""
     bundled_dir = Path(__file__).resolve().parent.parent / "dragonmidi" / "controllers"
     result = load_controller_profiles(bundled_dir=bundled_dir, user_dir=tmp_path / "controllers")
     by_name = {p.name: p for p in result.profiles}
-    assert by_name["nanoKONTROL Studio"].unconfirmed_channel_controls == ("Record", "Select")
-    assert by_name["nanoKONTROL Studio"].unconfirmed_global_controls == ("Set Marker", "Return to Zero")
+    assert by_name["nanoKONTROL Studio"].unconfirmed_channel_controls == ()
+    assert by_name["nanoKONTROL Studio"].unconfirmed_global_controls == ()
     assert by_name["nanoKONTROL2"].unconfirmed_channel_controls == ("Record",)
     assert by_name["nanoKONTROL2"].unconfirmed_global_controls == ("Set Marker",)
 

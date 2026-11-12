@@ -443,6 +443,60 @@ def test_build_bank_membership_accepts_a_non_cc_key_type() -> None:
     assert membership["mute_to_fader"] == {}
 
 
+# --- Record/Select: confirmed identity, grouping-only membership (Phase 1.6.1) ---
+
+
+# @spec MAP-BANK-011, MAP-CONFIG-010
+def test_record_and_select_are_positionally_paired_like_mute() -> None:
+    controls = ControlsConfig(
+        faders=(0, 1, 2),
+        knobs=(),
+        mutes=(),
+        solos=(),
+        transport={},
+        jog_wheel=None,
+        records=(64, 65, 66),
+        selects=(80, 81, 82),
+    )
+    membership = build_bank_membership(controls)
+    assert membership["record_to_fader"] == {("cc", 64): ("cc", 0), ("cc", 65): ("cc", 1), ("cc", 66): ("cc", 2)}
+    assert membership["select_to_fader"] == {("cc", 80): ("cc", 0), ("cc", 81): ("cc", 1), ("cc", 82): ("cc", 2)}
+
+
+# @spec MAP-CONFIG-010
+def test_records_and_selects_default_to_empty_when_not_declared() -> None:
+    controls = ControlsConfig(faders=(0,), knobs=(), mutes=(), solos=(), transport={}, jog_wheel=None)
+    assert controls.records == ()
+    assert controls.selects == ()
+    membership = build_bank_membership(controls)
+    assert membership["record_to_fader"] == {}
+    assert membership["select_to_fader"] == {}
+
+
+# @spec MAP-BANK-006, MAP-BANK-011
+def test_record_and_select_never_enter_the_opinionated_map_even_when_declared() -> None:
+    """The defining property of the 'stub' design: a real, declared CC for
+    Record/Select produces a name/grouping entry, but build_opinionated_map()
+    - the only thing MappingEngine.process() actually dispatches through -
+    never sees it."""
+    controls = ControlsConfig(faders=(0,), knobs=(), mutes=(), solos=(), transport={}, jog_wheel=None, records=(64,), selects=(80,))
+    opinionated = build_opinionated_map(controls, has_scene_button=False)
+    assert ("cc", 64) not in opinionated
+    assert ("cc", 80) not in opinionated
+
+
+# @spec MAP-CONFIG-010
+def test_build_control_names_labels_record_and_select_per_bank() -> None:
+    from dragonmidi.mapping import build_control_names
+
+    controls = ControlsConfig(faders=(0, 1), knobs=(), mutes=(), solos=(), transport={}, jog_wheel=None, records=(64, 65), selects=(80, 81))
+    names = build_control_names(controls, has_scene_button=False)
+    assert names[("cc", 64)] == "Record 1"
+    assert names[("cc", 65)] == "Record 2"
+    assert names[("cc", 80)] == "Select 1"
+    assert names[("cc", 81)] == "Select 2"
+
+
 # @spec MAP-CONFIG-008
 def test_bank_membership_truncates_to_the_shorter_of_faders_and_knobs() -> None:
     # 4 faders but 6 knobs: only the first 4 knobs pair to a Bank; the extra 2 are

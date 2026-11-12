@@ -114,6 +114,10 @@ class GridRuntimeController:
         self.knob_to_fader: dict[_Key, _Key] = dict(knob_to_fader or {})
         self.mute_to_fader: dict[_Key, _Key] = dict(mute_to_fader or {})
         self.fader_to_knob: dict[_Key, _Key] = {fader_key: knob_key for knob_key, fader_key in self.knob_to_fader.items()}
+        # Record/Select have no Grid equivalent (Phase 1.6.1, @spec MAP-BANK-011) -
+        # always empty, satisfying the ActiveController Protocol structurally.
+        self.record_to_fader: dict[_Key, _Key] = {}
+        self.select_to_fader: dict[_Key, _Key] = {}
         self.opinionated_map = opinionated_map
         self.control_names = control_names
         self.address_table = address_table

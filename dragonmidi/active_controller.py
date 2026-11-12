@@ -37,6 +37,11 @@ class ActiveController(Protocol):
     knob_to_fader: "Mapping[_Key, _Key]"
     mute_to_fader: "Mapping[_Key, _Key]"
     fader_to_knob: "Mapping[_Key, _Key]"
+    # Phase 1.6.1, @spec MAP-BANK-011: naming/grouping only - read by
+    # control_descriptor.py/control_grouping.py, never by bank_fader_key()
+    # or MappingEngine's dispatch (see build_bank_membership()'s docstring).
+    record_to_fader: "Mapping[_Key, _Key]"
+    select_to_fader: "Mapping[_Key, _Key]"
     opinionated_map: "Mapping[_Key, _MapEntry]"
     control_names: "Mapping[_Key, str]"
     websocket_keys: "WebSocketKeys | None"

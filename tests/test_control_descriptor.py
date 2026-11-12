@@ -186,6 +186,8 @@ class _FakeActiveController:
     fader_keys: frozenset = frozenset()
     knob_to_fader: dict = field(default_factory=dict)
     mute_to_fader: dict = field(default_factory=dict)
+    record_to_fader: dict = field(default_factory=dict)
+    select_to_fader: dict = field(default_factory=dict)
     websocket_keys: object = None
 
 

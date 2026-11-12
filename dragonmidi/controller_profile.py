@@ -44,6 +44,11 @@ class ControllerProfile:
     fader_to_knob: Mapping[Any, Any] = None  # type: ignore[assignment]
     control_names: Mapping[Any, str] = None  # type: ignore[assignment]
     bank_fader_keys: tuple[Any, ...] = ()  # ordered, index 0 = Bank 1 (@spec MAP-STORE-001)
+    # Record/Select (Phase 1.6.1, @spec MAP-BANK-011): naming/grouping only -
+    # see bank_fader_key()'s docstring below for why these are never
+    # consulted there.
+    record_to_fader: Mapping[Any, Any] = None  # type: ignore[assignment]
+    select_to_fader: Mapping[Any, Any] = None  # type: ignore[assignment]
     # Physically-present controls with no confirmed MIDI identity (Phase 1.5.1,
     # @spec MAP-CONFIG-009): displayed so they're never missing from the
     # Controller View, but never wired to a key/action - "represent the
@@ -66,6 +71,10 @@ class ControllerProfile:
             object.__setattr__(self, "fader_to_knob", {})
         if self.control_names is None:
             object.__setattr__(self, "control_names", {})
+        if self.record_to_fader is None:
+            object.__setattr__(self, "record_to_fader", {})
+        if self.select_to_fader is None:
+            object.__setattr__(self, "select_to_fader", {})
 
     @property
     def bank_count(self) -> int:
@@ -92,7 +101,8 @@ class ControllerProfile:
         """Given a Knob/Mute key, return its bank's Fader key by positional index
         (Bank N = index N-1 in each of faders/knobs/mutes), not CC arithmetic -
         `None` if `key` is not a bank member for this profile. Deliberately never
-        consults Record/Select (`MAP-BANK-006`): those stay unmapped regardless
-        of bank state, by design - see `unconfirmed_channel_controls`.
+        consults `record_to_fader`/`select_to_fader` (`MAP-BANK-006`/`MAP-BANK-011`):
+        Record/Select stay unmapped regardless of bank state, by design, whether
+        or not their real MIDI identity is confirmed.
         """
         return self.knob_to_fader.get(key) or self.mute_to_fader.get(key)
