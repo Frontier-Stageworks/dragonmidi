@@ -17,17 +17,28 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
 )
 
-from .capture_session import GuidedCaptureSession, build_capture_steps, save_capture_session
+from .capture_session import (
+    GuidedCaptureSession,
+    GuidedVerifySession,
+    actual_key,
+    build_capture_steps,
+    build_verify_steps,
+    save_capture_session,
+    save_verify_session,
+)
+from .control_descriptor import build_control_descriptors
+from .mapping_view_model import build_configuration_rows, build_fader_rows
 from .midi_monitor import MidiMonitor, format_channel, format_event_type, format_module, format_number, format_resolved
 
 if TYPE_CHECKING:
-    from .active_controller import ActiveController
+    from .mapping import MappingEngine
 
 _COLUMNS = ("Time", "Device", "Type", "Channel", "Number", "Value", "Module", "Resolved")
 
@@ -47,17 +58,18 @@ class MidiMonitorDialog(QDialog):
         self,
         monitor: MidiMonitor,
         on_enter_diagnostic: Callable[[], None],
-        get_active_controller: Callable[[], "ActiveController"],
+        get_mapping_engine: Callable[[], "MappingEngine"],
         capture_sessions_dir: Path,
     ) -> None:
         super().__init__()
         self.setWindowTitle("MIDI Input Monitor")
         self._monitor = monitor
         self._on_enter_diagnostic = on_enter_diagnostic
-        self._get_active_controller = get_active_controller
+        self._get_mapping_engine = get_mapping_engine
         self._capture_sessions_dir = capture_sessions_dir
         self._last_rendered_version = -1
         self._guided_session: GuidedCaptureSession | None = None
+        self._verify_session: GuidedVerifySession | None = None
 
         layout = QVBoxLayout(self)
 
@@ -105,6 +117,37 @@ class MidiMonitorDialog(QDialog):
         layout.addWidget(guided_box)
         self._update_guided_ui()
 
+        verify_box = QGroupBox("Guided Verify")
+        verify_layout = QVBoxLayout(verify_box)
+        self._verify_status_label = QLabel("")
+        verify_layout.addWidget(self._verify_status_label)
+        self._verify_pending_label = QLabel("")
+        verify_layout.addWidget(self._verify_pending_label)
+        verify_buttons_row = QHBoxLayout()
+        self._verify_start_button = QPushButton("Start Guided Verify")
+        self._verify_start_button.clicked.connect(self._on_verify_start_clicked)
+        verify_buttons_row.addWidget(self._verify_start_button)
+        self._verify_retry_button = QPushButton("Retry")
+        self._verify_retry_button.clicked.connect(self._on_verify_retry_clicked)
+        verify_buttons_row.addWidget(self._verify_retry_button)
+        self._verify_next_button = QPushButton("Next")
+        self._verify_next_button.clicked.connect(self._on_verify_next_clicked)
+        verify_buttons_row.addWidget(self._verify_next_button)
+        self._verify_save_button = QPushButton("Save Report")
+        self._verify_save_button.clicked.connect(self._on_verify_save_clicked)
+        verify_buttons_row.addWidget(self._verify_save_button)
+        self._verify_cancel_button = QPushButton("Cancel")
+        self._verify_cancel_button.clicked.connect(self._on_verify_cancel_clicked)
+        verify_buttons_row.addWidget(self._verify_cancel_button)
+        verify_buttons_row.addStretch(1)
+        verify_layout.addLayout(verify_buttons_row)
+        self._verify_log = QPlainTextEdit()
+        self._verify_log.setReadOnly(True)
+        self._verify_log.setMaximumHeight(80)
+        verify_layout.addWidget(self._verify_log)
+        layout.addWidget(verify_box)
+        self._update_verify_ui()
+
         self._table = QTableWidget(0, len(_COLUMNS))
         self._table.setHorizontalHeaderLabels(_COLUMNS)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -131,12 +174,20 @@ class MidiMonitorDialog(QDialog):
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         """@spec MON-DIAG-008: unconditional, regardless of the checkbox's
-        state at close time. @spec MON-GUIDE-011-adjacent: a running session
-        is entirely in-memory - closing the dialog discards it with no
-        prompt, same as never starting one."""
+        state at close time. @spec MON-GUIDE-011-adjacent, MON-VERIFY-adjacent:
+        a running session is entirely in-memory - closing the dialog discards
+        it with no prompt, same as never starting one."""
         self._exit_diagnostic()
         self._end_guided_session()
+        self._end_verify_session()
         super().closeEvent(event)
+
+    def _get_active_controller(self):
+        return self._get_mapping_engine().profile
+
+    def _build_descriptors(self):
+        engine = self._get_mapping_engine()
+        return build_control_descriptors(build_fader_rows(engine), build_configuration_rows(engine), engine.profile)
 
     def _enter_diagnostic(self) -> None:
         self._monitor.diagnostic_active = True
@@ -220,9 +271,19 @@ class MidiMonitorDialog(QDialog):
 
     def _update_guided_ui(self) -> None:
         session = self._guided_session
-        self._diagnostic_checkbox.setEnabled(session is None)  # @spec MON-GUIDE-009
+        self._diagnostic_checkbox.setEnabled(session is None and self._verify_session is None)  # @spec MON-GUIDE-009
 
         if session is None:
+            if self._verify_session is not None:
+                # Mutual exclusion: only one guided session (capture or verify) at a time.
+                self._guided_start_button.setEnabled(False)
+                self._guided_status_label.setText("Guided Verify is running.")
+                self._guided_pending_label.setText("")
+                self._guided_confirm_button.setEnabled(False)
+                self._guided_skip_button.setEnabled(False)
+                self._guided_save_button.setEnabled(False)
+                self._guided_cancel_button.setEnabled(False)
+                return
             controller = self._get_active_controller()
             has_steps = len(build_capture_steps(controller)) > 0
             self._guided_start_button.setEnabled(has_steps)
@@ -260,6 +321,142 @@ class MidiMonitorDialog(QDialog):
         self._guided_confirm_button.setEnabled(pending is not None)  # @spec MON-GUIDE-004
         self._guided_skip_button.setEnabled(True)
         self._guided_save_button.setEnabled(False)
+
+    # --- Guided Verify (docs/llds/midi-monitor.md § Guided Verify Session) ---
+
+    def _on_verify_start_clicked(self) -> None:
+        """@spec MON-VERIFY-001, MON-VERIFY-002, MON-VERIFY-003, MON-VERIFY-010"""
+        if self._guided_session is not None:
+            return  # mutual exclusion - Start is disabled in this state; defensive no-op
+        descriptors = self._build_descriptors()
+        steps = build_verify_steps(descriptors)
+        if not steps:
+            return
+        self._verify_session = GuidedVerifySession(self._get_active_controller().name, steps)
+        # Same safety guarantee as Guided Capture's Start - forces diagnostic
+        # mode back on regardless of the checkbox's state at this moment.
+        # More load-bearing here: Guided Verify's step list includes every
+        # real, dispatch-capable control (faders, knobs, mutes, solos,
+        # transport), not just inert stubs.
+        self._diagnostic_checkbox.blockSignals(True)
+        self._diagnostic_checkbox.setChecked(True)
+        self._diagnostic_checkbox.blockSignals(False)
+        self._enter_diagnostic()
+        self._monitor.on_record = self._verify_session.offer
+        self._verify_log.clear()
+        self._update_verify_ui()
+
+    def _on_verify_retry_clicked(self) -> None:
+        """@spec MON-VERIFY-007"""
+        if self._verify_session is None:
+            return
+        self._verify_session.retry()
+        self._update_verify_ui()
+
+    def _on_verify_next_clicked(self) -> None:
+        """@spec MON-VERIFY-006: accepts the current (failing) pending result
+        and advances anyway - the explicit override for a mismatch the user
+        has decided not to chase further right now."""
+        session = self._verify_session
+        if session is None or session.pending is None:
+            return
+        self._log_verify_result(session.current_step, session.pending)
+        session.advance()
+        self._update_verify_ui()
+
+    def _on_verify_save_clicked(self) -> None:
+        """@spec MON-VERIFY-009"""
+        session = self._verify_session
+        if session is None or not session.finished:
+            return
+        path = save_verify_session(self._capture_sessions_dir, session.profile_name, session.results)
+        self._verify_status_label.setText(f"Saved to {path}")
+        self._end_verify_session()
+
+    def _on_verify_cancel_clicked(self) -> None:
+        """@spec MON-VERIFY-adjacent: discards without saving, mirroring
+        Guided Capture's Cancel."""
+        self._end_verify_session()
+
+    def _end_verify_session(self) -> None:
+        self._verify_session = None
+        self._monitor.on_record = None
+        self._update_verify_ui()
+
+    def _log_verify_result(self, step, entry) -> None:
+        """Appends one line to the running log for a just-resolved step -
+        shared by the auto-pass path in `_update_verify_ui()` and the
+        explicit Next-after-failure path above."""
+        raw = entry.raw
+        actual = actual_key(entry)
+        passed = actual == step.expected_key
+        mark = "✓" if passed else "✗"
+        detail = f"{format_event_type(raw)} {format_channel(raw.channel)} #{format_number(raw.number)}"
+        if passed:
+            self._verify_log.appendPlainText(f"{mark} {step.label} — {detail}")
+        else:
+            self._verify_log.appendPlainText(f"{mark} {step.label} — expected {step.expected_key}, got {format_resolved(actual)} ({detail})")
+
+    def _update_verify_ui(self) -> None:
+        session = self._verify_session
+
+        # Auto-advance every passing pending candidate immediately - at most
+        # one iteration in practice (advancing clears `pending`, and the new
+        # current step starts with nothing pending), but loop defensively.
+        while session is not None and session.pending_passed is True:
+            step = session.current_step
+            self._log_verify_result(step, session.pending)
+            session.advance()
+
+        self._diagnostic_checkbox.setEnabled(session is None and self._guided_session is None)  # @spec MON-VERIFY-010
+
+        if session is None:
+            if self._guided_session is not None:
+                self._verify_start_button.setEnabled(False)
+                self._verify_status_label.setText("Guided Capture is running.")
+            else:
+                descriptors = self._build_descriptors()
+                has_steps = len(descriptors) > 0
+                self._verify_start_button.setEnabled(has_steps)
+                self._verify_status_label.setText("" if has_steps else "No known controls for this profile.")
+            self._verify_pending_label.setText("")
+            self._verify_retry_button.setEnabled(False)
+            self._verify_next_button.setEnabled(False)
+            self._verify_save_button.setEnabled(False)
+            self._verify_cancel_button.setEnabled(False)
+            return
+
+        self._verify_start_button.setEnabled(False)
+        self._verify_cancel_button.setEnabled(True)
+
+        if session.finished:
+            passed = sum(1 for r in session.results if r.passed)
+            failed = sum(1 for r in session.results if not r.passed)
+            self._verify_status_label.setText(f"Finished: {passed} passed, {failed} failed.")
+            self._verify_pending_label.setText("")
+            self._verify_retry_button.setEnabled(False)
+            self._verify_next_button.setEnabled(False)
+            self._verify_save_button.setEnabled(True)
+            return
+
+        step = session.current_step
+        self._verify_status_label.setText(f"Step {len(session.results) + 1} of {session.total_steps}: press/move “{step.label}”")
+        pending = session.pending
+        if pending is None:
+            self._verify_pending_label.setText("Waiting for input…")
+            self._verify_retry_button.setEnabled(False)
+            self._verify_next_button.setEnabled(False)
+        else:
+            # Only the failing case ever reaches this branch live - a passing
+            # pending candidate was already consumed by the auto-advance loop
+            # above, on this same call.
+            raw = pending.raw
+            self._verify_pending_label.setText(
+                f"✗ Mismatch — expected {step.expected_key}, got {format_event_type(raw)} {format_channel(raw.channel)} #{format_number(raw.number)}"
+            )
+            self._verify_retry_button.setEnabled(True)
+            self._verify_next_button.setEnabled(True)
+        self._verify_save_button.setEnabled(False)
 
     def refresh(self) -> None:
         """Called every tick from `app.py`'s existing `_on_tick()` - skips
@@ -305,6 +502,10 @@ class MidiMonitorDialog(QDialog):
         # A running session's `pending` is set by `on_record` (app.py's
         # dispatch thread, via MidiMonitor.record()), not by a button click -
         # re-render it here, on the same version-gated cadence as the table
-        # above, so a background capture becomes visible without a click.
+        # above, so a background capture/verify becomes visible without a
+        # click, and a passing Guided Verify step auto-advances immediately
+        # rather than waiting for the user to do anything (@spec MON-VERIFY-005).
         if self._guided_session is not None:
             self._update_guided_ui()
+        if self._verify_session is not None:
+            self._update_verify_ui()

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -22,6 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from dragonmidi.events import MidiEvent  # noqa: E402
+from dragonmidi.mapping import NANOKONTROL2_PROFILE, MappingEngine  # noqa: E402
 from dragonmidi.midi_monitor import MidiMonitor  # noqa: E402
 from dragonmidi.midi_monitor_widgets import MidiMonitorDialog  # noqa: E402
 
@@ -34,31 +34,26 @@ def _cc(number: int = 36) -> MidiEvent:
     return MidiEvent(type="cc", channel=0, number=number, raw_value=64, normalized=64 / 127, is_press=False, is_release=False)
 
 
-@dataclass
-class _FakeController:
-    """A minimal stand-in exposing exactly what build_capture_steps() reads -
-    no real MappingEngine/ControllerProfile needed for these widget tests."""
-
-    name: str = "Fake Controller"
-    bank_count: int = 2
-    unconfirmed_channel_controls: tuple[str, ...] = field(default_factory=tuple)
-    unconfirmed_global_controls: tuple[str, ...] = field(default_factory=tuple)
-
-
 def _dialog(
     monitor: MidiMonitor | None = None,
-    controller: _FakeController | None = None,
+    engine: MappingEngine | None = None,
     capture_sessions_dir: Path | None = None,
 ) -> tuple[MidiMonitorDialog, MidiMonitor, list[int]]:
+    """Defaults to a real `MappingEngine(profile=NANOKONTROL2_PROFILE)` -
+    Guided Verify's step list is built from real `build_fader_rows()`/
+    `build_configuration_rows()` output, which need a genuine engine, not a
+    duck-typed stand-in. nanoKONTROL2 (not the Studio) specifically because
+    it still has real unconfirmed controls (Record, Set Marker), useful for
+    any test here that wants to exercise Guided Capture's "has steps" path."""
     _qapp()
     monitor = monitor or MidiMonitor()
-    controller = controller if controller is not None else _FakeController()
+    engine = engine if engine is not None else MappingEngine(profile=NANOKONTROL2_PROFILE)
     capture_sessions_dir = capture_sessions_dir or Path(tempfile.mkdtemp())
     calls: list[int] = []
     dialog = MidiMonitorDialog(
         monitor,
         on_enter_diagnostic=lambda: calls.append(1),
-        get_active_controller=lambda: controller,
+        get_mapping_engine=lambda: engine,
         capture_sessions_dir=capture_sessions_dir,
     )
     return dialog, monitor, calls
@@ -228,3 +223,164 @@ def test_dialog_has_no_controller_selection_or_network_configuration_widgets() -
     dialog, _, _ = _dialog()
     assert dialog.findChildren(QComboBox) == []
     assert dialog.findChildren(QLineEdit) == []
+
+
+# ============================================================
+# Guided Verify (docs/specs/midi-monitor.md § Guided Verify)
+# ============================================================
+
+
+def _studio_fader_cc(number: int, raw_value: int = 64) -> MidiEvent:
+    return MidiEvent(type="cc", channel=15, number=number, raw_value=raw_value, normalized=raw_value / 127, is_press=False, is_release=False)
+
+
+def _studio_dialog():
+    from dragonmidi.mapping import STUDIO_PROFILE
+
+    return _dialog(engine=MappingEngine(profile=STUDIO_PROFILE))
+
+
+# @spec MON-VERIFY-001, MON-VERIFY-002
+def test_verify_start_builds_steps_from_the_real_descriptor_list() -> None:
+    dialog, _, _ = _studio_dialog()
+    dialog._on_verify_start_clicked()
+    assert dialog._verify_session is not None
+    assert dialog._verify_session.total_steps > 0
+    assert dialog._verify_session.current_step.label == "Fader Channel 1"
+    assert dialog._verify_session.current_step.expected_key == ("cc", 0)
+
+
+# @spec MON-VERIFY-009, MON-VERIFY-010
+def test_verify_start_forces_diagnostic_on_and_disables_its_checkbox() -> None:
+    dialog, monitor, calls = _studio_dialog()
+    dialog._diagnostic_checkbox.setChecked(False)
+    assert monitor.diagnostic_active is False
+
+    dialog._on_verify_start_clicked()
+
+    assert monitor.diagnostic_active is True
+    assert calls == [1]
+    assert dialog._diagnostic_checkbox.isEnabled() is False
+
+
+# @spec MON-VERIFY-003, MON-VERIFY-004, MON-VERIFY-005
+def test_verify_auto_advances_and_logs_on_a_correct_move() -> None:
+    dialog, monitor, _ = _studio_dialog()
+    dialog._on_verify_start_clicked()
+    first_step = dialog._verify_session.current_step
+
+    monitor.record(_studio_fader_cc(0), device_name="Studio", resolved=None, module=None)  # correct: Fader 1 is CC 0
+    dialog.refresh()  # next UI tick
+
+    assert dialog._verify_session.current_step != first_step
+    assert len(dialog._verify_session.results) == 1
+    assert dialog._verify_session.results[0].passed is True
+    assert "✓" in dialog._verify_log.toPlainText()
+
+
+# @spec MON-VERIFY-004, MON-VERIFY-006, MON-VERIFY-007
+def test_verify_reports_a_mismatch_and_requires_retry_or_next() -> None:
+    dialog, monitor, _ = _studio_dialog()
+    dialog._on_verify_start_clicked()  # expects Fader Channel 1, CC 0
+
+    monitor.record(_studio_fader_cc(5), device_name="Studio", resolved=None, module=None)  # wrong control
+    dialog.refresh()
+
+    assert dialog._verify_session.pending_passed is False
+    assert len(dialog._verify_session.results) == 0  # not auto-advanced
+    assert dialog._verify_retry_button.isEnabled() is True
+    assert dialog._verify_next_button.isEnabled() is True
+    assert "Mismatch" in dialog._verify_pending_label.text()
+
+
+def test_verify_retry_clears_pending_and_keeps_the_same_step() -> None:
+    dialog, monitor, _ = _studio_dialog()
+    dialog._on_verify_start_clicked()
+    step_before = dialog._verify_session.current_step
+    monitor.record(_studio_fader_cc(5), device_name=None, resolved=None, module=None)
+    dialog.refresh()
+
+    dialog._on_verify_retry_clicked()
+
+    assert dialog._verify_session.pending is None
+    assert dialog._verify_session.current_step == step_before
+    assert dialog._verify_session.results == ()
+
+
+def test_verify_next_accepts_the_failure_and_advances() -> None:
+    dialog, monitor, _ = _studio_dialog()
+    dialog._on_verify_start_clicked()
+    step_before = dialog._verify_session.current_step
+    monitor.record(_studio_fader_cc(5), device_name=None, resolved=None, module=None)
+    dialog.refresh()
+
+    dialog._on_verify_next_clicked()
+
+    assert len(dialog._verify_session.results) == 1
+    assert dialog._verify_session.results[0].passed is False
+    assert dialog._verify_session.current_step != step_before
+    assert "✗" in dialog._verify_log.toPlainText()
+
+
+def test_verify_cancel_discards_without_saving(tmp_path) -> None:
+    dialog, monitor, _ = _studio_dialog()
+    dialog._capture_sessions_dir = tmp_path
+    dialog._on_verify_start_clicked()
+    monitor.record(_studio_fader_cc(0), device_name=None, resolved=None, module=None)
+    dialog.refresh()
+
+    dialog._on_verify_cancel_clicked()
+
+    assert dialog._verify_session is None
+    assert dialog._diagnostic_checkbox.isEnabled() is True
+    assert not list(tmp_path.glob("*.json"))
+
+
+# @spec MON-VERIFY-008
+def test_verify_finishing_shows_a_summary_and_enables_save_then_save_ends_the_session(tmp_path) -> None:
+    dialog, monitor, _ = _studio_dialog()
+    dialog._capture_sessions_dir = tmp_path
+    dialog._on_verify_start_clicked()
+    total = dialog._verify_session.total_steps
+
+    # Pass every step by always offering an event that resolves (via the raw
+    # fallback) to whatever the current step's expected key already is -
+    # this test only needs "finished", not a mix of pass/fail.
+    for _ in range(total):
+        key = dialog._verify_session.current_step.expected_key
+        raw = MidiEvent(type=key[0], channel=15, number=key[1], raw_value=64, normalized=64 / 127, is_press=False, is_release=False)
+        monitor.record(raw, device_name=None, resolved=None, module=None)
+        dialog.refresh()
+
+    assert dialog._verify_session.finished is True
+    assert dialog._verify_retry_button.isEnabled() is False
+    assert dialog._verify_next_button.isEnabled() is False
+    assert dialog._verify_save_button.isEnabled() is True
+    assert f"{total} passed, 0 failed" in dialog._verify_status_label.text()
+
+    dialog._on_verify_save_clicked()
+
+    assert dialog._verify_session is None  # Save ends the session, mirroring Guided Capture
+    saved = list(tmp_path.glob("*-verify-*.json"))
+    assert len(saved) == 1
+
+
+# --- Mutual exclusion between Guided Capture and Guided Verify ---
+
+
+def test_guided_capture_and_guided_verify_are_mutually_exclusive() -> None:
+    dialog, _, _ = _studio_dialog()  # STUDIO_PROFILE has no unconfirmed controls - force the engine's profile for Capture's own steps too
+    from dragonmidi.mapping import NANOKONTROL2_PROFILE
+
+    dialog._get_mapping_engine = lambda: MappingEngine(profile=NANOKONTROL2_PROFILE)
+
+    dialog._on_guided_start_clicked()
+    assert dialog._guided_session is not None
+    dialog._update_verify_ui()
+    assert dialog._verify_start_button.isEnabled() is False
+
+    dialog._end_guided_session()
+    dialog._on_verify_start_clicked()
+    assert dialog._verify_session is not None
+    dialog._update_guided_ui()
+    assert dialog._guided_start_button.isEnabled() is False

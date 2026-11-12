@@ -345,3 +345,105 @@ def test_guided_capture_disabled_for_a_controller_with_no_unconfirmed_controls(w
 
     assert dialog._guided_start_button.isEnabled() is False
     assert "No unconfirmed controls" in dialog._guided_status_label.text()
+
+
+# --- Guided Verify, end-to-end against real dispatch and the real Studio profile ---
+# @spec MON-VERIFY-001 through MON-VERIFY-010
+
+
+def test_guided_verify_end_to_end_against_real_dispatch_pass_and_fail(window, tmp_path) -> None:
+    """Drives the exact path a real user follows: open the Monitor (the
+    Studio is the default active controller, a real ControllerProfile - not
+    a fake), start Guided Verify, send a correct raw CC for the first step
+    (auto-pass), an incorrect one for the second (reported, retried, then
+    accepted), and save the resulting report. Diagnostic mode (forced on by
+    Guided Verify, same as Guided Capture) means none of this reaches
+    `self._mapping.process()` for real - verified by also asserting no OSC
+    was sent for the whole sequence, even though several of these steps
+    (Fader 1/2) would normally dispatch `gotoPosition`/encoder messages."""
+    osc_sent = []
+    monkeypatch_target = window._osc_client
+    original_send = monkeypatch_target.send
+    monkeypatch_target.send = lambda *a, **k: osc_sent.append(a)
+    try:
+        dialog = window._midi_monitor_dialog
+        dialog.show()
+
+        dialog._on_verify_start_clicked()
+        assert dialog._verify_session is not None
+        first_step = dialog._verify_session.current_step
+        assert first_step.label == "Fader Channel 1"
+        assert first_step.expected_key == ("cc", 0)
+
+        # Correct move: real CC 0 on the Studio's channel, through the real dispatch path.
+        window._process_midi_event(_fader_cc_event(0, channel=15))
+        dialog.refresh()
+        assert len(dialog._verify_session.results) == 1
+        assert dialog._verify_session.results[0].passed is True
+        assert dialog._verify_session.current_step.label == "Fader Channel 2"
+
+        # Incorrect move: pressing CC 5 (Fader 6) while Fader 2 (CC 1) is expected.
+        window._process_midi_event(_fader_cc_event(5, channel=15))
+        dialog.refresh()
+        assert dialog._verify_session.pending_passed is False
+        dialog._on_verify_retry_clicked()
+        assert len(dialog._verify_session.results) == 1  # still just the one pass from before, retry didn't lock anything in
+
+        window._process_midi_event(_fader_cc_event(5, channel=15))  # same wrong control again
+        dialog.refresh()
+        dialog._on_verify_next_clicked()  # accept the mismatch and move on
+        assert len(dialog._verify_session.results) == 2
+        assert dialog._verify_session.results[1].passed is False
+
+        assert osc_sent == []  # nothing dispatched for real throughout - diagnostic mode held the whole time
+    finally:
+        monkeypatch_target.send = original_send
+
+
+def test_guided_verify_disabled_during_a_guided_capture_session(window) -> None:
+    dialog = window._midi_monitor_dialog
+    dialog.show()
+    dialog._on_guided_start_clicked()  # Studio has no unconfirmed controls as of Phase 1.6.1 - switch first
+    if dialog._guided_session is None:
+        nk2_index = next(i for i, c in enumerate(window._controller_choices) if c.name == "nanoKONTROL2")
+        window._profile_combo.setCurrentIndex(nk2_index)
+        dialog._on_guided_start_clicked()
+    assert dialog._guided_session is not None
+
+    dialog._update_verify_ui()
+
+    assert dialog._verify_start_button.isEnabled() is False
+
+
+# --- Guided Verify against the real Intech Grid runtime (resolved-key comparison) ---
+
+
+def test_guided_verify_against_real_grid_runtime_resolves_correctly(window) -> None:
+    """Grid's step expected_key is a logical key (e.g. ("grid_fader", 1)), not
+    a raw CC - verifying it means comparing against the resolved identity
+    GridRuntimeController's own address_table produces for the real raw CC a
+    physical fader sends, not the raw CC itself (which changes with topology)."""
+    controller = _install_real_grid_controller(window, _pbf4(0))
+    dialog = window._midi_monitor_dialog
+    dialog.show()
+
+    dialog._on_verify_start_clicked()
+    assert dialog._verify_session is not None
+    first_step = dialog._verify_session.current_step
+    assert first_step.expected_key[0] == "grid_fader"
+
+    # Fader element index 4 at x=0 -> cc number (32+0*16+4)%128 = 36 (matches
+    # test_grid_resolution.py's own derivation) - the real raw CC for Grid Fader 1.
+    window._process_midi_event(_fader_cc_event(36))
+    dialog.refresh()
+
+    assert len(dialog._verify_session.results) == 1
+    result = dialog._verify_session.results[0]
+    assert result.passed is True
+    assert result.actual_key == ("grid_fader", 1)
+
+    # An unrelated raw CC that doesn't resolve to anything - must fail, never guess.
+    window._process_midi_event(_fader_cc_event(99))
+    dialog.refresh()
+    assert dialog._verify_session.pending_passed is False
+    assert controller.is_stale is False  # sanity: still the same settled controller throughout

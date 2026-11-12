@@ -1,8 +1,9 @@
-"""Tests for the Guided Capture Session's Qt-free domain logic
-(docs/specs/midi-monitor.md § Guided Capture).
+"""Tests for the Guided Capture and Guided Verify sessions' Qt-free domain
+logic (docs/specs/midi-monitor.md § Guided Capture, § Guided Verify).
 
 @spec MON-GUIDE-001, MON-GUIDE-002, MON-GUIDE-003, MON-GUIDE-004, MON-GUIDE-005
 @spec MON-GUIDE-006, MON-GUIDE-007, MON-GUIDE-008, MON-GUIDE-010, MON-GUIDE-012
+@spec MON-VERIFY-001 through MON-VERIFY-009
 """
 
 from __future__ import annotations
@@ -14,10 +15,16 @@ from pathlib import Path
 from dragonmidi.capture_session import (
     CaptureStep,
     GuidedCaptureSession,
+    GuidedVerifySession,
+    VerifyStep,
     build_capture_steps,
     build_report,
+    build_verify_report,
+    build_verify_steps,
     save_capture_session,
+    save_verify_session,
 )
+from dragonmidi.control_descriptor import ControlDescriptor
 from dragonmidi.controller_profile_loader import load_controller_profiles
 from dragonmidi.events import MidiEvent
 from dragonmidi.midi_monitor import MonitorEvent
@@ -249,3 +256,170 @@ def test_saving_twice_produces_two_distinct_files_when_clocks_differ(tmp_path) -
 
     assert first != second
     assert first.is_file() and second.is_file()
+
+
+# ============================================================
+# Guided Verify Session (docs/specs/midi-monitor.md § Guided Verify)
+# ============================================================
+
+
+def _resolved_entry(resolved, device_name: str | None = "X") -> MonitorEvent:
+    """A MonitorEvent as it would look once Grid has resolved it - raw CC is
+    deliberately unrelated to `resolved`, matching how a real Grid raw
+    address bears no numeric relationship to its logical key."""
+    raw = _cc(number=99)
+    return MonitorEvent(timestamp=0.0, device_name=device_name, raw=raw, resolved=resolved, module=None, captured=False)
+
+
+# --- Building steps from the real Controller Descriptor list (MON-VERIFY-001) ---
+
+
+def test_build_verify_steps_mirrors_the_descriptor_list_exactly() -> None:
+    descriptors = [
+        ControlDescriptor(key=("cc", 0), label="Fader Channel 1", control_type="fader"),
+        ControlDescriptor(key=("cc", 64), label="Record 1", control_type="button"),
+    ]
+    steps = build_verify_steps(descriptors)
+    assert steps == [VerifyStep("Fader Channel 1", ("cc", 0)), VerifyStep("Record 1", ("cc", 64))]
+
+
+# --- actual-identity resolution: resolved key wins when present, else raw (MON-VERIFY-004) ---
+
+
+def test_pending_passed_compares_raw_identity_for_a_non_grid_control() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64))])
+    session.offer(_entry(_cc(number=64)))  # raw matches expected exactly
+    assert session.pending_passed is True
+
+
+def test_pending_passed_compares_resolved_identity_when_grid_has_resolved_it() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Grid Fader 3", ("grid_fader", 3))])
+    # Raw CC (99) bears no relation to the logical key - only `resolved` matters.
+    session.offer(_resolved_entry(resolved=("grid_fader", 3)))
+    assert session.pending_passed is True
+
+
+def test_pending_passed_is_false_on_a_genuine_mismatch() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64))])
+    session.offer(_entry(_cc(number=65)))  # wrong control pressed
+    assert session.pending_passed is False
+
+
+def test_pending_passed_is_none_before_anything_is_offered() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64))])
+    assert session.pending_passed is None
+
+
+# --- offer/advance/retry state machine (MON-VERIFY-003, 005, 006, 007, 008) ---
+
+
+def test_offer_replaces_pending_not_accumulates() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64))])
+    first = _entry(_cc(65))
+    second = _entry(_cc(64))
+    session.offer(first)
+    session.offer(second)
+    assert session.pending is second
+
+
+def test_advance_records_a_pass_and_moves_to_the_next_step() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64)), VerifyStep("Record 2", ("cc", 65))])
+    session.offer(_entry(_cc(64), device_name="D"))
+    session.advance()
+
+    assert len(session.results) == 1
+    result = session.results[0]
+    assert result.passed is True
+    assert result.expected_key == ("cc", 64)
+    assert result.actual_key == ("cc", 64)
+    assert result.device_name == "D"
+    assert session.current_step == VerifyStep("Record 2", ("cc", 65))
+    assert session.pending is None
+
+
+def test_advance_records_a_failure_without_blocking_progress() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64)), VerifyStep("Record 2", ("cc", 65))])
+    session.offer(_entry(_cc(99)))  # wrong control
+    session.advance()
+
+    result = session.results[0]
+    assert result.passed is False
+    assert result.actual_key == ("cc", 99)
+    assert session.current_step == VerifyStep("Record 2", ("cc", 65))  # still advanced
+
+
+def test_advance_with_nothing_pending_is_a_no_op() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64))])
+    session.advance()
+    assert session.results == ()
+    assert session.current_step == VerifyStep("Record 1", ("cc", 64))
+
+
+def test_retry_discards_pending_without_advancing() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64))])
+    session.offer(_entry(_cc(99)))
+    assert session.pending_passed is False
+
+    session.retry()
+
+    assert session.pending is None
+    assert session.current_step == VerifyStep("Record 1", ("cc", 64))  # unchanged, no result recorded
+    assert session.results == ()
+
+
+def test_session_finishes_after_the_last_step() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("Record 1", ("cc", 64))])
+    session.offer(_entry(_cc(64)))
+    session.advance()
+
+    assert session.finished is True
+    assert session.current_step is None
+    assert session.pending_passed is None  # nothing left to check against
+
+    session.offer(_entry(_cc(64)))  # no-op: nothing to offer to
+    assert session.pending is None
+
+
+def test_results_preserve_order_mixing_pass_and_fail() -> None:
+    session = GuidedVerifySession("p", [VerifyStep("A", ("cc", 1)), VerifyStep("B", ("cc", 2)), VerifyStep("C", ("cc", 3))])
+    session.offer(_entry(_cc(1)))
+    session.advance()  # A: pass
+    session.offer(_entry(_cc(99)))
+    session.advance()  # B: fail
+    session.offer(_entry(_cc(3)))
+    session.advance()  # C: pass
+
+    assert [(r.label, r.passed) for r in session.results] == [("A", True), ("B", False), ("C", True)]
+
+
+# --- Report / save (MON-VERIFY-009) ---
+
+
+def test_build_verify_report_includes_expected_and_actual_keys() -> None:
+    session = GuidedVerifySession("nanoKONTROL Studio", [VerifyStep("Record 1", ("cc", 64)), VerifyStep("Record 2", ("cc", 65))])
+    session.offer(_entry(_cc(64), device_name="D"))
+    session.advance()
+    session.offer(_entry(_cc(99)))
+    session.advance()
+
+    report = build_verify_report("nanoKONTROL Studio", session.results, clock=lambda: 1_700_000_000.0)
+
+    assert report["profile_name"] == "nanoKONTROL Studio"
+    assert report["results"][0]["passed"] is True
+    assert report["results"][0]["expected_key"] == ["cc", 64]
+    assert report["results"][0]["actual_key"] == ["cc", 64]
+    assert report["results"][1]["passed"] is False
+    assert report["results"][1]["actual_key"] == ["cc", 99]
+
+
+def test_save_verify_session_writes_a_distinctly_named_json_file(tmp_path) -> None:
+    session = GuidedVerifySession("nanoKONTROL Studio", [VerifyStep("Record 1", ("cc", 64))])
+    session.offer(_entry(_cc(64)))
+    session.advance()
+
+    path = save_verify_session(tmp_path, "nanoKONTROL Studio", session.results, clock=lambda: 1_700_000_000.0)
+
+    assert path.is_file()
+    assert "-verify-" in path.name  # distinct from a Guided Capture report in the same folder
+    written = json.loads(path.read_text())
+    assert written["results"][0]["label"] == "Record 1"

@@ -379,7 +379,7 @@ class DragonMidiWindow(QMainWindow):
         self._midi_monitor_dialog = MidiMonitorDialog(
             self._midi_monitor,
             on_enter_diagnostic=lambda: self._websocket_output.send(WebSocketCommand("E-Stop")),
-            get_active_controller=lambda: self._mapping.profile,
+            get_mapping_engine=lambda: self._mapping,
             capture_sessions_dir=_capture_sessions_dir(),
         )
 

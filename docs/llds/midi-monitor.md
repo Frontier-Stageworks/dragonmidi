@@ -109,6 +109,50 @@ class GuidedCaptureSession:
 def save_capture_session(directory: Path, profile_name: str, results: Sequence[CaptureResult]) -> Path: ...
     # Writes directory / f"{profile_name}-{timestamp}.json"; creates directory
     # if needed. Returns the path written, for the dialog to display.
+
+@dataclass(frozen=True)
+class VerifyStep:
+    label: str
+    expected_key: _Key          # a descriptor's own key - "cc" tuple for a
+                                 # static profile, logical key for Grid
+
+@dataclass(frozen=True)
+class VerifyResult:
+    label: str
+    expected_key: _Key
+    actual_key: _Key
+    passed: bool
+    raw: MidiEvent
+    device_name: str | None
+
+def build_verify_steps(descriptors: Sequence[ControlDescriptor]) -> list[VerifyStep]: ...
+    # One step per descriptor, in that list's own order - no separate model.
+
+def actual_key(entry: MonitorEvent) -> _Key: ...
+    # entry.resolved if not None, else (entry.raw.type, entry.raw.number).
+
+class GuidedVerifySession:
+    def __init__(self, profile_name: str, steps: Sequence[VerifyStep]) -> None: ...
+    @property
+    def current_step(self) -> VerifyStep | None: ...   # None once finished
+    @property
+    def pending(self) -> MonitorEvent | None: ...
+    @property
+    def pending_passed(self) -> bool | None: ...  # None while nothing pending
+    @property
+    def results(self) -> Sequence[VerifyResult]: ...
+    @property
+    def finished(self) -> bool: ...
+    @property
+    def total_steps(self) -> int: ...
+
+    def offer(self, entry: MonitorEvent) -> None: ...  # replaces `pending`
+    def advance(self) -> None: ...  # locks in pending (pass or fail per
+                                     # pending_passed), advances
+    def retry(self) -> None: ...    # discards pending, no result, same step
+
+def save_verify_session(directory: Path, profile_name: str, results: Sequence[VerifyResult]) -> Path: ...
+    # Writes directory / f"{profile_name}-verify-{timestamp}.json".
 ```
 
 ```python
@@ -119,7 +163,7 @@ class MidiMonitorDialog(QDialog):
         self,
         monitor: MidiMonitor,
         on_enter_diagnostic: Callable[[], None],
-        get_active_controller: Callable[[], ActiveController],
+        get_mapping_engine: Callable[[], MappingEngine],
         capture_sessions_dir: Path,
     ) -> None: ...
 
@@ -174,7 +218,7 @@ class SettingsDialog(QDialog):
 
 A second, optional mode within the same dialog — not a new top-level window — for systematically working through a controller's currently-unconfirmed controls instead of using Capture Next Input freehand for each one. Inherits diagnostic mode's suppression for free: a session can only be running while the dialog is open, and the dialog forces diagnostic mode on at open (Diagnostic Mode, above), so actuating a Record/Select/fader during a session is exactly as safe as any other probing in this dialog.
 
-- **Steps come from the active controller's own declared gaps, not a hardcoded list.** `build_capture_steps()` reads `unconfirmed_channel_controls` (expanded ×`bank_count` — `"Record 1"`..`"Record {bank_count}"`, then the next label, in declared order) and `unconfirmed_global_controls` (one step each) off whatever `get_active_controller()` returns *at the moment Start is clicked* — not cached from dialog construction, so switching the Controller Profile dropdown before starting a session targets the newly selected controller's own gaps. Both attributes are read via `getattr(..., ())`, matching `setup_hint`'s existing duck-typed, Protocol-absent precedent (`docs/llds/app-ui.md`) — a controller with neither (Intech Grid today) simply produces zero steps, and Start is disabled with an explanatory label rather than opening an empty session.
+- **Steps come from the active controller's own declared gaps, not a hardcoded list.** `build_capture_steps()` reads `unconfirmed_channel_controls` (expanded ×`bank_count` — `"Record 1"`..`"Record {bank_count}"`, then the next label, in declared order) and `unconfirmed_global_controls` (one step each) off `self._get_active_controller()` (a thin wrapper over the dialog's own `get_mapping_engine().profile`) *at the moment Start is clicked* — not cached from dialog construction, so switching the Controller Profile dropdown before starting a session targets the newly selected controller's own gaps. Both attributes are read via `getattr(..., ())`, matching `setup_hint`'s existing duck-typed, Protocol-absent precedent (`docs/llds/app-ui.md`) — a controller with neither (Intech Grid today) simply produces zero steps, and Start is disabled with an explanatory label rather than opening an empty session.
 - **"Start Guided Capture" is disabled when there are zero steps**, with a label explaining why ("No unconfirmed controls for this profile") rather than a silently-empty session.
 - **Feeding is push-based, via `MidiMonitor.on_record` - a single optional callback, not a cursor into `events`.** A numeric index into `monitor.events` would break once the ring buffer evicts older entries (every index shifts), so starting a session instead sets `monitor.on_record = session.offer`; `record()` invokes it (if set) with the just-built `MonitorEvent`, synchronously, right after appending it — before `record()` returns. This also means an event recorded a moment before Start (already visible in the ongoing log above) is never fed to the session, since the hook wasn't registered yet. Ending a session (Cancel or Save) sets `monitor.on_record = None`.
 - **`offer()` always replaces the current step's `pending` candidate, never accumulates one.** Pressing the wrong control, then the right one, before confirming simply means the right one is what's pending when Confirm is clicked — no separate "undo" is needed for a same-step mis-press.
@@ -185,8 +229,19 @@ A second, optional mode within the same dialog — not a new top-level window �
 - **`save_capture_session()` writes one JSON file per completed session**, to `~/Documents/DragonMIDI/capture_sessions/{profile_name}-{timestamp}.json` (the same `~/Documents/DragonMIDI/` root, sibling-folder convention `configurations/`/`named_controllers/`/`controllers/` already use; `profile_name` used as-is in the filename, unsanitized, matching `preset_store.py`'s existing `f"{profile_name}.json"` precedent — spaces are not a filesystem problem on macOS/Windows and this codebase has never bothered escaping them). After saving, the dialog shows the written path so the user (or a later session) can find it.
 - **The written report is read-only evidence — nothing in this codebase reads a capture-session file back in.** No code path loads one into a `ControllerProfile`, the Mapping Engine, or any other persisted state; turning a capture session's findings into an actual controller-definition change is a separate, later, human-reviewed change to `dragonmidi/controllers/*.yaml` and `docs/llds/static-mapping.md` — exactly the boundary `docs/high-level-design.md § Key Design Decisions`' "Guided Capture produces a report, never an assignment" bullet states.
 - **A session is entirely in-memory until Save; closing the dialog (or the main window) mid-session discards it with no prompt.** No "unsaved guided-capture session" warning is added — this mirrors Capture Next Input's own no-persistence-until-explicit-action behavior one level up, and keeps this feature from growing a second kind of "unsaved changes" concept alongside the existing builtin/dirty tracking (`docs/llds/app-ui.md § Save/Save As/Load UI`), which is about mapping configurations, not diagnostic sessions.
-- **The diagnostic checkbox is disabled (forced on, un-clickable) for the duration of a running session.** Today's Guided Capture scope (unconfirmed controls only) happens to be safe either way - those controls are, by definition, absent from `opinionated_map`/bank derivation (`MAP-BANK-006`'s own regression test), so no output path fires for them regardless of the checkbox. This is a forward guard, not a reaction to a live bug: if Guided Capture's scope is ever widened to include *confirmed, mapped* controls (Deferred below), disabling the checkbox during a session is what keeps that future change from quietly reopening the exact motion risk this whole feature exists to prevent. Re-enabled the instant the session ends (Cancel or Save), left checked either way - never force-unchecked.
+- **The diagnostic checkbox is disabled (forced on, un-clickable) for the duration of a running session.** Today's Guided Capture scope (unconfirmed controls only) happens to be safe either way - those controls are, by definition, absent from `opinionated_map`/bank derivation (`MAP-BANK-006`'s own regression test), so no output path fires for them regardless of the checkbox. This is a forward guard, not a reaction to a live bug: Guided Verify (below) is the concrete case this guard anticipated - its step list genuinely does include confirmed, mapped controls, and this exact mechanism (reused unchanged) is what keeps that from reopening the motion risk this whole dialog exists to prevent. Re-enabled the instant the session ends (Cancel or Save), left checked either way - never force-unchecked.
 - **Switching the Controller Profile dropdown mid-session is not a case this LLD needs to handle: it's structurally impossible.** The dropdown lives in the main window, which is blocked by `MidiMonitorDialog`'s own modality for as long as it's open (the same modal-stacking behavior every other dialog in this app already has) - a session can only run while the dialog is open, so the controller a session was built against cannot change out from under it.
+
+## Guided Verify Session
+
+A third mode in the same dialog, added once Guided Capture proved the pattern works: instead of discovering an unknown identity, Guided Verify checks a real move against an identity the running model already claims to know — "press this, and I'll tell you immediately whether what arrived is what I expected." Shares the dialog's diagnostic-mode machinery with Guided Capture (forced on at Start, checkbox disabled for the session's duration) and is mutually exclusive with it — only one guided session, of either kind, runs at a time.
+
+- **Steps are the real Controller View control list, not a separate "known controls" model.** `build_verify_steps()` takes the exact `ControlDescriptor` list `build_control_descriptors(build_fader_rows(engine), build_configuration_rows(engine), engine.profile)` already produces (the same call `ControllerView`/`control_grouping.py` make) and turns each descriptor directly into a `VerifyStep(label, expected_key=descriptor.key)`. This is why Guided Verify needs `get_mapping_engine()`, not just `get_active_controller()` as Guided Capture does — building the real descriptor list needs a real `MappingEngine`, not just its `profile`.
+- **An offered event's "actual identity" is its resolved logical key when one exists, otherwise its own raw `(type, number)`** (`actual_key()` in `capture_session.py`) — one formula that is correct for both controller families without a branch: a Korg profile's controls are declared *by* raw CC (no resolution layer exists, `resolved` is always `None`), so the raw fallback already *is* that profile's real identity; a Grid control's `expected_key` is itself a logical key (`("grid_fader", 3)`, never a raw CC — Grid resolution happens before the Mapping Engine ever sees an event), so comparing against `resolved` is the only way to verify it correctly regardless of the chain's current physical arrangement.
+- **A match auto-passes and auto-advances with no click** — `_update_verify_ui()` checks `session.pending_passed` on every `refresh()` tick (the same version-gated cadence as everything else in this dialog) and, while it's `True`, logs the result and calls `session.advance()` immediately. This is the one deliberate behavioral difference from Guided Capture's explicit-confirm default: verifying an already-expected value has no "wrong control, try again before locking it in" risk the way discovering an *unknown* one does, so there is nothing to protect by making the user click.
+- **A mismatch never auto-advances.** `pending_passed is False` stops the loop, shows "expected X, got Y," and enables exactly two controls: **Retry** (discard the pending candidate, same step, same expected identity — the escape for "I pressed the wrong thing") and **Next** (record the mismatch as a failure anyway and move on — the escape for "I see the problem, I'll deal with it later, let me keep going"). Both are real, logged outcomes; Retry produces no result at all (as if nothing had been offered), Next produces a `passed=False` `VerifyResult`.
+- **Finishing shows a pass/fail count and reveals Save Report**, writing `~/Documents/DragonMIDI/capture_sessions/{profile_name}-verify-{timestamp}.json` — the `-verify-` infix (`save_verify_session()`) keeps a verify report from colliding with, or being confused for, a Guided Capture report sharing the same folder and profile name. Same read-only-evidence property as Guided Capture: nothing reads this file back in; a confirmed mismatch is a signal for a human to go investigate (the model is wrong, the hardware is wrong, or the topology changed), not something this dialog acts on.
+- **Mutual exclusion is enforced in both `_update_guided_ui()` and `_update_verify_ui()`, not by a single shared "session" slot.** The two session classes (`GuidedCaptureSession`/`GuidedVerifySession`) differ enough (confirm/skip vs. pass/fail/retry) to stay separate attributes (`_guided_session`/`_verify_session`); each Start button checks the *other* attribute and disables itself with an explanatory status line ("Guided Capture is running.") when it's set, rather than the dialog tracking one generic "a session is active" boolean that would need to remember which kind.
 
 ## Decisions & Alternatives
 
@@ -208,22 +263,30 @@ A second, optional mode within the same dialog — not a new top-level window �
 | Session persistence on close | None - discarded with no prompt if the dialog closes before Save | Warn before discarding, like the builtin/dirty mapping-configuration tracking | Keeps this a second, independent "unsaved state" concept out of a feature whose own existing precedent (Capture Next Input) already has no persistence until an explicit action |
 | Feeding events to a running session | Push-based `MidiMonitor.on_record` callback, invoked synchronously inside `record()` | A numeric cursor/index into `monitor.events` | A ring-buffer index breaks the moment eviction shifts every index; found during this LLD's own edge-case probe before implementation, not after a bug report |
 | Diagnostic checkbox during a session | Disabled (forced on) for the session's duration | Leave it clickable, same as outside a session | Today's unconfirmed-only scope happens to be safe unchecked too (those controls are unmapped by construction), but this is a forward guard against a future scope widening to mapped controls reopening real motion risk |
+| Guided Verify's step source | The real `ControlDescriptor` list (`build_control_descriptors()`) | A separate "known controls" list maintained for Verify specifically | Zero new data model; the Controller View's own existing list already *is* "every control the running model knows about with its real expected key" - building a second one risks the two drifting apart |
+| Guided Verify advance (pass case) | Auto-advance instantly, no click | Require an explicit confirm, like Guided Capture | Verifying an *already-expected* value has no "which control did I actually just press" ambiguity the way discovering an unknown one does - nothing is protected by a click, and the user explicitly asked for "quickly and automatically" |
+| Guided Verify advance (fail case) | Never auto-advances; Retry/Next are both explicit, logged actions | Auto-advance regardless, log the mismatch silently | A mismatch is exactly the signal this tool exists to surface - silently sailing past it would defeat the purpose |
+| Guided Verify's "actual identity" formula | One function (`actual_key()`): resolved key if present, else raw `(type, number)` | A per-controller-family branch (Grid vs. static) | The same fallback already matches both cases without conditionals - a static profile's `resolved` is always `None` by construction, so the raw fallback already *is* that profile's real identity |
+| Guided Verify vs. Guided Capture scope widening | A third, separate mode and session class, not an extension of Guided Capture's own scope | Add a "verify known controls too" toggle to Guided Capture itself | Confirm-vs-pass/fail and explicit-vs-auto-advance are different enough interaction models that one session class covering both would need a mode flag threaded through most of its methods; two small classes stayed simpler |
+| Mutual exclusion mechanism | Each session type's own Start button checks the *other* type's attribute | One shared "a session is active" flag plus a separate "which kind" enum | Two attributes (`_guided_session`/`_verify_session`), each `None` or not, already encode exactly this with no additional state to keep in sync |
 
 ## Open Questions & Future Decisions
 
 ### Resolved
 
 1. Guided Capture's scope (unconfirmed-only), advance behavior (explicit confirm), and save location (fixed app folder) were resolved directly by the user before this section was drafted - see the Decisions & Alternatives rows above for the rationale each carries.
+2. Guided Verify was added directly in response to the user asking for something that "lets me make a move and it validates against the actual value... quickly and automatically" - its auto-pass/auto-advance behavior, its reuse of the real Controller Descriptor list as the step source, and its mutual exclusion with Guided Capture are all captured in the Decisions & Alternatives rows above.
 
 ### Deferred
 
 1. Table order (oldest-first vs. newest-first/auto-scroll) is a presentation detail left to implementation and can be adjusted without an EARS change, since no spec in this LLD commits to a direction.
-2. Exporting the *ongoing event log* (as opposed to a completed Guided Capture session) to a file remains deferred — Guided Capture's `save_capture_session()` covers the specific, requested "save the test" need; a general "export whatever's currently in the table" action is a different, broader feature not asked for here.
+2. Exporting the *ongoing event log* (as opposed to a completed Guided Capture/Verify session) to a file remains deferred — the two sessions' own save actions cover the specific, requested "save the test" need; a general "export whatever's currently in the table" action is a different, broader feature not asked for here.
 3. A dedicated Status UI indicator for "diagnostic mode is currently on" (beyond the dialog's own checkbox, visible only while the dialog is open) is not requested; if diagnostic mode needs to be visible from the main window, this is the natural place to add it later.
 4. Distinguishing *why* an event shows no Module/Resolved identity (Grid not active, controller stale, or a genuine address-table miss) is not surfaced — all three render identically as `"-"`. The task asks only that identification be shown "when the current discovery data provides it," not that failure reasons be diagnosed; revisit only if hardware validation work finds this ambiguity actually slows someone down.
-5. Walking *every* control (confirmed or not) rather than only the currently-unconfirmed ones is deferred — the user's explicit choice scoped this to unconfirmed controls only (see Decisions & Alternatives); revisit if full-inventory re-validation turns out to be wanted later.
-6. Reordering or re-visiting an already-confirmed/skipped step within a session (without restarting it) is not supported — `GuidedCaptureSession` only ever advances forward; Cancel-and-restart is the only way to redo an earlier step once a later one has been confirmed.
-7. Nothing reads a saved capture-session JSON file back into the app (no "resume a session," no "load evidence into the Controller Profile editor") — see Guided Capture Session's own "read-only evidence" bullet above. Turning a session's findings into a real controller-definition change stays a separate, later, human-driven edit to `dragonmidi/controllers/*.yaml`.
+5. **Resolved by Guided Verify** — Guided Capture itself still walks only the currently-unconfirmed controls (user's explicit choice, unchanged); walking *every* control for cross-checking against the model is now Guided Verify's distinct purpose, not a widening of Capture's own scope.
+6. Reordering or re-visiting an already-confirmed/skipped (or passed/failed) step within a session (without restarting it) is not supported by either session class — both only ever advance forward; Cancel-and-restart is the only way to redo an earlier step once a later one has been resolved.
+7. Nothing reads a saved capture or verify session JSON file back into the app (no "resume a session," no "load evidence into the Controller Profile editor") — see each session's own "read-only evidence" property above. Turning a session's findings into a real controller-definition change, or acting on a confirmed Guided Verify mismatch, stays a separate, later, human-driven edit.
+8. Guided Verify's log (`_verify_log`) is an in-memory, unbounded-for-the-session `QPlainTextEdit` - fine for a session scoped to one controller's control count (tens, not thousands, of steps), but not designed for anything larger; revisit only if that assumption stops holding.
 
 ## References
 

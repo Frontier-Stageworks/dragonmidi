@@ -54,6 +54,21 @@ Traces to `docs/llds/midi-monitor.md`.
 - [ ] **MON-GUIDE-012**: The system shall not write a captured or skipped result to the Mapping Engine, the Preset Store, or any controller definition file, under any Guided Capture action.
 - [ ] **MON-GUIDE-013**: The system shall not read a previously saved capture-session file back into the application.
 
+## Guided Verify
+
+Distinct from Guided Capture above: Capture has no expected answer yet (its purpose is discovering one); Verify does — every step's expected identity is a real key the active controller's own control-descriptor list already carries.
+
+- [ ] **MON-VERIFY-001**: The system shall provide a Guided Verify mode within the MIDI Input Monitor dialog, building its sequence of steps from the active controller's full control-descriptor list (the same list the Controller View renders), one step per descriptor, each step's expected identity being that descriptor's own key, in that list's order.
+- [ ] **MON-VERIFY-002**: If the active controller's control-descriptor list is empty, the system shall disable Start Guided Verify and state that no known controls exist for this profile, rather than starting an empty session.
+- [ ] **MON-VERIFY-003**: When Guided Verify starts, the system shall register to receive every subsequently recorded MIDI event and shall not retroactively consider any event recorded before that point; a MIDI event offered after every step has been resolved shall be a no-op.
+- [ ] **MON-VERIFY-004**: The system shall compare an offered event's resolved logical identity, when one exists, against the current step's expected identity; when no resolved identity exists, it shall compare the event's own raw message type and number instead.
+- [ ] **MON-VERIFY-005**: When an offered event's identity (per `MON-VERIFY-004`) matches the current step's expected identity, the system shall automatically record a passing result, log it, and advance to the next step without requiring a user action.
+- [ ] **MON-VERIFY-006**: When an offered event's identity does not match the current step's expected identity, the system shall report the mismatch (expected versus actual identity) and shall not automatically advance; a Next control shall be available to record the result as a failure and advance anyway.
+- [ ] **MON-VERIFY-007**: While a mismatched event is pending, the system shall provide a Retry control that discards the pending candidate without recording a result, leaving the current step unchanged so a different physical control can be tried.
+- [ ] **MON-VERIFY-008**: When every step has been resolved (passed or accepted as failed), the system shall show a summary count of passed versus failed steps, enable a Save Report control, and no longer accept Retry or Next activation.
+- [ ] **MON-VERIFY-009**: When Save Report is activated, the system shall write one JSON file recording the active controller's name, a timestamp, and every step's label, expected identity, actual identity, and pass/fail outcome, to a fixed, auto-named path under `~/Documents/DragonMIDI/capture_sessions/` distinguishable from a Guided Capture report in the same folder, and shall display the written path. The system shall not write a result to the Mapping Engine, the Preset Store, or any controller definition file, under any Guided Verify action, and shall not read a previously saved report back into the application.
+- [ ] **MON-VERIFY-010**: The system shall disable the diagnostic-mode checkbox for the duration of a running Guided Verify session, and shall not allow Guided Capture and Guided Verify to run simultaneously — starting one shall be unavailable while the other is active.
+
 ## References
 
 - `docs/llds/midi-monitor.md`
